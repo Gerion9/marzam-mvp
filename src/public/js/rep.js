@@ -632,10 +632,14 @@ async function checkInAndVisit(stopId, pharmacyId, name) {
   document.getElementById('v-pharmacy-id').value = pharmacyId;
   document.getElementById('v-stop-id').value = stopId;
   document.getElementById('visit-pharmacy-name').textContent = name;
-  document.getElementById('visit-sheet').dataset.snap = 'full';
+  document.getElementById('visit-sheet').classList.remove('hidden');
+  document.getElementById('fab-new').classList.add('hidden');
 }
 
-function closeVisitSheet() { document.getElementById('visit-sheet').dataset.snap = 'hidden'; }
+function closeVisitSheet() {
+  document.getElementById('visit-sheet').classList.add('hidden');
+  document.getElementById('fab-new').classList.remove('hidden');
+}
 
 function onOutcomeChange() {
   const o = document.getElementById('v-outcome').value;
@@ -700,9 +704,13 @@ function openSkipSheet(stopId, pharmacyId, name) {
   document.getElementById('skip-stop-id').value = stopId;
   document.getElementById('skip-pharmacy-id').value = pharmacyId;
   document.getElementById('skip-pharmacy-name').textContent = name;
-  document.getElementById('skip-sheet').dataset.snap = 'full';
+  document.getElementById('skip-sheet').classList.remove('hidden');
+  document.getElementById('fab-new').classList.add('hidden');
 }
-function closeSkipSheet() { document.getElementById('skip-sheet').dataset.snap = 'hidden'; }
+function closeSkipSheet() {
+  document.getElementById('skip-sheet').classList.add('hidden');
+  document.getElementById('fab-new').classList.remove('hidden');
+}
 
 async function submitSkip(e) {
   e.preventDefault();
@@ -741,8 +749,14 @@ async function submitSkip(e) {
 }
 
 /* ─── New Pharmacy ────────────────────────────────────────────── */
-function openNewSheet() { document.getElementById('new-pharmacy-sheet').dataset.snap = 'full'; }
-function closeNewSheet() { document.getElementById('new-pharmacy-sheet').dataset.snap = 'hidden'; }
+function openNewSheet() {
+  document.getElementById('new-pharmacy-sheet').classList.remove('hidden');
+  document.getElementById('fab-new').classList.add('hidden');
+}
+function closeNewSheet() {
+  document.getElementById('new-pharmacy-sheet').classList.add('hidden');
+  document.getElementById('fab-new').classList.remove('hidden');
+}
 
 async function submitNewPharmacy(e) {
   e.preventDefault();

@@ -51,124 +51,130 @@
     </div>
   </div>
 
-  <div id="visit-sheet" class="snap-sheet glass" data-snap="hidden" style="z-index:calc(var(--z-sheet, 40) + 1)">
-    <div class="sheet-handle"></div>
-    <div class="px-4 pt-1 pb-2 flex items-center justify-between border-b border-slate-200/50">
-      <h3 class="font-semibold">Reporte de Visita</h3>
-      <button onclick="closeVisitSheet()" class="btn btn-ghost text-slate-400 p-2">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
-      </button>
-    </div>
-    <div class="px-4 py-3 overflow-y-auto" style="max-height:70vh">
-      <p id="visit-pharmacy-name" class="text-sm text-slate-500 mb-3"></p>
-      <form id="visit-form" class="space-y-3">
-        <input type="hidden" id="v-pharmacy-id">
-        <input type="hidden" id="v-stop-id">
+  <!-- VISIT MODAL -->
+  <div id="visit-sheet" class="form-modal hidden">
+    <div class="form-modal-inner">
+      <div class="px-4 pt-4 pb-2 flex items-center justify-between border-b border-slate-200/50 sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Reporte de Visita</h3>
+        <button onclick="closeVisitSheet()" class="btn btn-ghost text-slate-400 p-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="px-4 py-3 overflow-y-auto flex-1">
+        <p id="visit-pharmacy-name" class="text-sm text-slate-500 mb-3"></p>
+        <form id="visit-form" class="space-y-3 pb-6">
+          <input type="hidden" id="v-pharmacy-id">
+          <input type="hidden" id="v-stop-id">
 
-        <div class="form-field"><label class="form-label">Resultado *</label>
-          <select id="v-outcome" required class="form-input form-select">
-            <option value="">Seleccionar...</option>
-            <option value="visited">Visitado</option>
-            <option value="contact_made">Contacto realizado</option>
-            <option value="interested">Interesado</option>
-            <option value="not_interested">No interesado</option>
-            <option value="needs_follow_up">Requiere seguimiento</option>
-            <option value="closed">Cerrado</option>
-            <option value="invalid">Inválido</option>
-            <option value="duplicate">Duplicado</option>
-            <option value="moved">Se mudó</option>
-            <option value="wrong_category">Categoría incorrecta</option>
-            <option value="chain_not_independent">Cadena / No independiente</option>
-          </select></div>
+          <div class="form-field"><label class="form-label">Resultado *</label>
+            <select id="v-outcome" required class="form-input form-select">
+              <option value="">Seleccionar...</option>
+              <option value="visited">Visitado</option>
+              <option value="contact_made">Contacto realizado</option>
+              <option value="interested">Interesado</option>
+              <option value="not_interested">No interesado</option>
+              <option value="needs_follow_up">Requiere seguimiento</option>
+              <option value="closed">Cerrado</option>
+              <option value="invalid">Inválido</option>
+              <option value="duplicate">Duplicado</option>
+              <option value="moved">Se mudó</option>
+              <option value="wrong_category">Categoría incorrecta</option>
+              <option value="chain_not_independent">Cadena / No independiente</option>
+            </select></div>
 
-        <div class="form-field"><label class="form-label">Notas *</label>
-          <textarea id="v-notes" required rows="2" class="form-input" placeholder="Observaciones..."></textarea></div>
+          <div class="form-field"><label class="form-label">Notas *</label>
+            <textarea id="v-notes" required rows="2" class="form-input" placeholder="Observaciones..."></textarea></div>
 
-        <div class="form-field"><label class="form-label">Potencial de Pedido ($)</label>
-          <input id="v-potential" type="number" step="0.01" class="form-input" placeholder="Demanda estimada"></div>
+          <div class="form-field"><label class="form-label">Potencial de Pedido ($)</label>
+            <input id="v-potential" type="number" step="0.01" class="form-input" placeholder="Demanda estimada"></div>
 
-        <div class="form-field"><label class="form-label">Productos de Competencia</label>
-          <input id="v-competitors" type="text" class="form-input" placeholder="Marcas vistas en anaquel"></div>
+          <div class="form-field"><label class="form-label">Productos de Competencia</label>
+            <input id="v-competitors" type="text" class="form-input" placeholder="Marcas vistas en anaquel"></div>
 
-        <div class="form-field"><label class="form-label">Observaciones de Inventario</label>
-          <input id="v-stock" type="text" class="form-input" placeholder="Niveles de stock, espacio en anaquel..."></div>
+          <div class="form-field"><label class="form-label">Observaciones de Inventario</label>
+            <input id="v-stock" type="text" class="form-input" placeholder="Niveles de stock, espacio en anaquel..."></div>
 
-        <div id="v-followup-fields" class="hidden space-y-3">
-          <div class="form-field"><label class="form-label">Fecha de Seguimiento *</label><input id="v-followup-date" type="date" class="form-input"></div>
-          <div class="form-field"><label class="form-label">Motivo del Seguimiento *</label><input id="v-followup-reason" type="text" class="form-input"></div>
-        </div>
-        <div id="v-flag-fields" class="hidden">
-          <div class="form-field"><label class="form-label">Motivo de la Bandera *</label><input id="v-flag-reason" type="text" class="form-input" placeholder="Describe el problema..."></div>
-        </div>
+          <div id="v-followup-fields" class="hidden space-y-3">
+            <div class="form-field"><label class="form-label">Fecha de Seguimiento *</label><input id="v-followup-date" type="date" class="form-input"></div>
+            <div class="form-field"><label class="form-label">Motivo del Seguimiento *</label><input id="v-followup-reason" type="text" class="form-input"></div>
+          </div>
+          <div id="v-flag-fields" class="hidden">
+            <div class="form-field"><label class="form-label">Motivo de la Bandera *</label><input id="v-flag-reason" type="text" class="form-input" placeholder="Describe el problema..."></div>
+          </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div class="form-field"><label class="form-label">Contacto</label><input id="v-contact" type="text" class="form-input"></div>
-          <div class="form-field"><label class="form-label">Teléfono</label><input id="v-phone" type="tel" class="form-input"></div>
-        </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="form-field"><label class="form-label">Contacto</label><input id="v-contact" type="text" class="form-input"></div>
+            <div class="form-field"><label class="form-label">Teléfono</label><input id="v-phone" type="tel" class="form-input"></div>
+          </div>
 
-        <div class="form-field"><label class="form-label">Foto de Evidencia *</label>
-          <input id="v-photo" type="file" accept="image/*" capture="environment" required class="form-input" style="padding:8px"></div>
+          <div class="form-field"><label class="form-label">Foto de Evidencia *</label>
+            <input id="v-photo" type="file" accept="image/*" capture="environment" required class="form-input" style="padding:8px"></div>
 
-        <button type="submit" id="btn-submit-visit" class="btn btn-primary w-full py-2.5">Enviar Visita</button>
-      </form>
-    </div>
-  </div>
-
-  <div id="skip-sheet" class="snap-sheet glass" data-snap="hidden" style="z-index:calc(var(--z-sheet, 40) + 1)">
-    <div class="sheet-handle"></div>
-    <div class="px-4 pt-1 pb-2 flex items-center justify-between border-b border-slate-200/50">
-      <h3 class="font-semibold">Omitir Parada</h3>
-      <button onclick="closeSkipSheet()" class="btn btn-ghost text-slate-400 p-2">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
-      </button>
-    </div>
-    <div class="px-4 py-3">
-      <p id="skip-pharmacy-name" class="text-sm text-slate-500 mb-3"></p>
-      <form id="skip-form" class="space-y-3">
-        <input type="hidden" id="skip-stop-id">
-        <input type="hidden" id="skip-pharmacy-id">
-        <div class="form-field"><label class="form-label">Motivo para omitir *</label>
-          <select id="skip-reason" required class="form-input form-select">
-            <option value="">Seleccionar motivo...</option>
-            <option value="closed">Cerrado/Clausurado</option>
-            <option value="inaccessible">No se puede acceder</option>
-            <option value="safety">Problema de seguridad</option>
-            <option value="other">Otro</option>
-          </select></div>
-        <div class="form-field"><label class="form-label">Notas</label>
-          <textarea id="skip-notes" rows="2" class="form-input" placeholder="Detalles..."></textarea></div>
-        <div class="form-field"><label class="form-label">Foto de Evidencia</label>
-          <input id="skip-photo" type="file" accept="image/*" capture="environment" class="form-input" style="padding:8px"></div>
-        <button type="submit" class="btn btn-danger w-full py-2.5">Confirmar Omisión</button>
-      </form>
+          <button type="submit" id="btn-submit-visit" class="btn btn-primary w-full py-2.5">Enviar Visita</button>
+        </form>
+      </div>
     </div>
   </div>
 
-  <div id="new-pharmacy-sheet" class="snap-sheet glass" data-snap="hidden" style="z-index:calc(var(--z-sheet, 40) + 1)">
-    <div class="sheet-handle"></div>
-    <div class="px-4 pt-1 pb-2 flex items-center justify-between border-b border-slate-200/50">
-      <h3 class="font-semibold">Nueva Farmacia</h3>
-      <button onclick="closeNewSheet()" class="btn btn-ghost text-slate-400 p-2">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
-      </button>
+  <!-- SKIP MODAL -->
+  <div id="skip-sheet" class="form-modal hidden">
+    <div class="form-modal-inner form-modal-short">
+      <div class="px-4 pt-4 pb-2 flex items-center justify-between border-b border-slate-200/50 sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Omitir Parada</h3>
+        <button onclick="closeSkipSheet()" class="btn btn-ghost text-slate-400 p-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="px-4 py-3 overflow-y-auto flex-1">
+        <p id="skip-pharmacy-name" class="text-sm text-slate-500 mb-3"></p>
+        <form id="skip-form" class="space-y-3 pb-6">
+          <input type="hidden" id="skip-stop-id">
+          <input type="hidden" id="skip-pharmacy-id">
+          <div class="form-field"><label class="form-label">Motivo para omitir *</label>
+            <select id="skip-reason" required class="form-input form-select">
+              <option value="">Seleccionar motivo...</option>
+              <option value="closed">Cerrado/Clausurado</option>
+              <option value="inaccessible">No se puede acceder</option>
+              <option value="safety">Problema de seguridad</option>
+              <option value="other">Otro</option>
+            </select></div>
+          <div class="form-field"><label class="form-label">Notas</label>
+            <textarea id="skip-notes" rows="2" class="form-input" placeholder="Detalles..."></textarea></div>
+          <div class="form-field"><label class="form-label">Foto de Evidencia</label>
+            <input id="skip-photo" type="file" accept="image/*" capture="environment" class="form-input" style="padding:8px"></div>
+          <button type="submit" class="btn btn-danger w-full py-2.5">Confirmar Omisión</button>
+        </form>
+      </div>
     </div>
-    <div class="px-4 py-3">
-      <form id="new-pharmacy-form" class="space-y-3">
-        <div class="form-field"><label class="form-label">Nombre *</label><input id="np-name" required class="form-input"></div>
-        <div class="form-field"><label class="form-label">Dirección</label><input id="np-address" class="form-input"></div>
-        <div class="form-field"><label class="form-label">Persona de Contacto</label><input id="np-contact" class="form-input"></div>
-        <div class="form-field"><label class="form-label">Teléfono</label><input id="np-phone" type="tel" class="form-input"></div>
-        <div class="form-field"><label class="form-label">Tipo</label>
-          <select id="np-independent" class="form-input form-select">
-            <option value="true">Independiente</option>
-            <option value="false">Cadena</option>
-          </select></div>
-        <div class="form-field"><label class="form-label">Foto *</label>
-          <input id="np-photo" type="file" accept="image/*" capture="environment" required class="form-input" style="padding:8px"></div>
-        <div class="form-field"><label class="form-label">Notas</label><textarea id="np-notes" rows="2" class="form-input"></textarea></div>
-        <p class="text-xs text-slate-400">Ubicación capturada automáticamente por GPS.</p>
-        <button type="submit" class="btn btn-success w-full py-2.5">Enviar para Revisión</button>
-      </form>
+  </div>
+
+  <!-- NEW PHARMACY MODAL -->
+  <div id="new-pharmacy-sheet" class="form-modal hidden">
+    <div class="form-modal-inner">
+      <div class="px-4 pt-4 pb-2 flex items-center justify-between border-b border-slate-200/50 sticky top-0 bg-white z-10">
+        <h3 class="font-semibold">Nueva Farmacia</h3>
+        <button onclick="closeNewSheet()" class="btn btn-ghost text-slate-400 p-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="px-4 py-3 overflow-y-auto flex-1">
+        <form id="new-pharmacy-form" class="space-y-3 pb-6">
+          <div class="form-field"><label class="form-label">Nombre *</label><input id="np-name" required class="form-input"></div>
+          <div class="form-field"><label class="form-label">Dirección</label><input id="np-address" class="form-input"></div>
+          <div class="form-field"><label class="form-label">Persona de Contacto</label><input id="np-contact" class="form-input"></div>
+          <div class="form-field"><label class="form-label">Teléfono</label><input id="np-phone" type="tel" class="form-input"></div>
+          <div class="form-field"><label class="form-label">Tipo</label>
+            <select id="np-independent" class="form-input form-select">
+              <option value="true">Independiente</option>
+              <option value="false">Cadena</option>
+            </select></div>
+          <div class="form-field"><label class="form-label">Foto *</label>
+            <input id="np-photo" type="file" accept="image/*" capture="environment" required class="form-input" style="padding:8px"></div>
+          <div class="form-field"><label class="form-label">Notas</label><textarea id="np-notes" rows="2" class="form-input"></textarea></div>
+          <p class="text-xs text-slate-400">Ubicación capturada automáticamente por GPS.</p>
+          <button type="submit" class="btn btn-success w-full py-2.5">Enviar para Revisión</button>
+        </form>
+      </div>
     </div>
   </div>
 
