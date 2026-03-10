@@ -937,6 +937,26 @@ async function submitAssignForm() {
   } catch (err) { showToast(err.error || 'Error al crear asignación', 'error'); }
 }
 
+async function exportAllRepRoutes() {
+  try {
+    showToast('Generando Excel con todas las rutas...', 'info');
+    await API.download('/reporting/export/all-rep-routes', 'rutas_todos_reps.xlsx');
+    showToast('Excel descargado', 'success');
+  } catch (err) {
+    showToast(err.error || 'Error al exportar rutas', 'error');
+  }
+}
+
+async function exportRepRoute(repId, repName) {
+  try {
+    const safeName = (repName || repId).replace(/[^a-zA-Z0-9_ ]/g, '').replace(/\s+/g, '_');
+    await API.download(`/reporting/export/rep-route/${encodeURIComponent(repId)}`, `ruta_${safeName}.xlsx`);
+    showToast('Excel descargado', 'success');
+  } catch (err) {
+    showToast(err.error || 'Error al exportar ruta', 'error');
+  }
+}
+
 async function resetAllAssignments() {
   if (!confirm('¿Estás seguro? Esto eliminará TODAS las asignaciones y visitas del piloto. Los reps perderán sus rutas actuales.')) return;
   const summary = document.getElementById('wave-summary');
@@ -1301,6 +1321,7 @@ async function loadRepsList() {
           <button onclick="focusRepRoute('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-sky-50 text-sky-600 hover:bg-sky-100 px-2 py-1.5 rounded-lg transition">Ver Ruta</button>
           <button onclick="loadBreadcrumbs('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-orange-50 text-orange-600 hover:bg-orange-100 px-2 py-1.5 rounded-lg transition">Recorrido</button>
           <button onclick="openRepEvidence('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-2 py-1.5 rounded-lg transition">Evidencia</button>
+          <button onclick="exportRepRoute('${r.rep_id}','${esc(r.rep_name)}')" class="flex-1 text-[10px] font-bold bg-amber-50 text-amber-600 hover:bg-amber-100 px-2 py-1.5 rounded-lg transition">Excel</button>
           <button onclick="impersonateUser('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-violet-50 text-violet-600 hover:bg-violet-100 px-2 py-1.5 rounded-lg transition">Ver como Rep</button>
         </div>
       </div>`).join('') : '<p class="text-sm text-slate-400">No hay representantes activos.</p>';

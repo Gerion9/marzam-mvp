@@ -376,6 +376,38 @@ async function exportPharmacies(filters = {}) {
   }));
 }
 
+async function getRepAssignmentsForExport() {
+  if (!isExternalDataMode()) return [];
+
+  const assignmentService = require('../assignments/assignments.service');
+  const assignments = await assignmentService.list({});
+  const reps = accessDirectory.listFieldReps();
+  const repMap = new Map(reps.map((r) => [String(r.id), r]));
+  const poiRows = await externalPoiRepository.list({ limit: 6000 });
+  const poiById = new Map(poiRows.map((p) => [String(p.id), p]));
+
+  return assignments
+    .filter((a) => a.rep_id && a.status !== 'completed' && a.status !== 'cancelled')
+    .map((a) => {
+      const rep = repMap.get(String(a.rep_id));
+      const stops = (a.stops || []).map((s) => {
+        const poi = poiById.get(String(s.pharmacy_id));
+        return {
+          ...s,
+          municipality: poi?.municipality || null,
+        };
+      });
+      return {
+        repId: a.rep_id,
+        repName: rep?.full_name || a.rep_name || a.rep_id,
+        repEmail: rep?.email || `${a.rep_id}@marzam.mx`,
+        waveId: a.wave_id || null,
+        campaignObjective: a.campaign_objective || null,
+        stops,
+      };
+    });
+}
+
 module.exports = {
   refreshViews,
   getPharmacyFunnel,
@@ -385,4 +417,5 @@ module.exports = {
   getPotentialSales,
   getDashboard,
   exportPharmacies,
+  getRepAssignmentsForExport,
 };

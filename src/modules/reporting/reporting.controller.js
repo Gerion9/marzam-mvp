@@ -67,4 +67,37 @@ async function exportPharmacies(req, res, next) {
   }
 }
 
-module.exports = { dashboard, repProductivity, coverageByMunicipality, assignmentProgress, refreshViews, exportPharmacies };
+async function exportRepRoute(req, res, next) {
+  try {
+    const { buildRepWorkbook } = require('../../utils/repExcelExporter');
+    const repsData = await reportingService.getRepAssignmentsForExport();
+    const repId = req.params.repId;
+    const rep = repsData.find((r) => r.repId === repId);
+    if (!rep) return res.status(404).json({ error: 'Rep no encontrado o sin asignación activa' });
+
+    const buffer = buildRepWorkbook(rep.repName, rep.repEmail, rep.stops, rep.waveId, rep.campaignObjective);
+    const safeName = rep.repName.replace(/[^a-zA-Z0-9_ ]/g, '').replace(/\s+/g, '_');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=ruta_${safeName}.xlsx`);
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function exportAllRepRoutes(req, res, next) {
+  try {
+    const { buildAllRepsWorkbook } = require('../../utils/repExcelExporter');
+    const repsData = await reportingService.getRepAssignmentsForExport();
+    if (!repsData.length) return res.status(404).json({ error: 'No hay asignaciones activas' });
+
+    const buffer = buildAllRepsWorkbook(repsData);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=rutas_todos_reps.xlsx');
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { dashboard, repProductivity, coverageByMunicipality, assignmentProgress, refreshViews, exportPharmacies, exportRepRoute, exportAllRepRoutes };
