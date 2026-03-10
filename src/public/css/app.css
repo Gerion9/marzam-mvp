@@ -172,8 +172,8 @@ body {
 }
 .snap-sheet[data-snap="hidden"] { transform: translateY(100%); }
 .snap-sheet[data-snap="peek"] { transform: translateY(calc(100% - 110px)); }
-.snap-sheet[data-snap="half"] { transform: translateY(55%); }
-.snap-sheet[data-snap="full"] { transform: translateY(0%); }
+.snap-sheet[data-snap="half"] { transform: translateY(40%); }
+.snap-sheet[data-snap="full"] { transform: translateY(80px); }
 
 @media (min-width: 768px) {
   .snap-sheet {
@@ -189,10 +189,20 @@ body {
 .sheet-handle {
   width: 48px;
   height: 6px;
-  background: #e2e8f0;
+  background: #cbd5e1;
   border-radius: var(--radius-full);
-  margin: 12px auto;
+  margin: 10px auto;
   cursor: grab;
+  padding: 0;
+  position: relative;
+}
+.sheet-handle::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: -60px;
+  right: -60px;
+  bottom: -12px;
 }
 .sheet-handle:active { cursor: grabbing; }
 
@@ -211,22 +221,24 @@ body {
 
 /* ─── Stop Cards ──────────────────────────────────────────────── */
 .stop-card {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
   background: white;
   border: 1px solid #f1f5f9;
-  border-radius: var(--radius-md);
-  margin-bottom: 8px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 4px;
   box-shadow: var(--shadow-card);
   transition: all 0.2s;
+  cursor: pointer;
 }
-.stop-card:hover { border-color: #cbd5e1; }
-.stop-card.completed { opacity: 0.55; filter: grayscale(0.8); }
+.stop-card:hover { border-color: #cbd5e1; background: #f8fafc; }
+.stop-card:active { background: #f1f5f9; }
+.stop-card.completed { opacity: 0.45; filter: grayscale(0.8); }
 .stop-num {
-  width: 28px; height: 28px;
+  width: 24px; height: 24px;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 12px;
+  font-weight: 700; font-size: 11px;
   flex-shrink: 0;
 }
 

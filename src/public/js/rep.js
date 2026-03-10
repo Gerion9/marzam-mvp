@@ -8,7 +8,7 @@ let stops = [];
 let trackingOn = false;
 let trackingTimer = null;
 let lastPosition = null;
-const GOOGLE_MAPS_MAX_POINTS = 25;
+const GOOGLE_MAPS_MAX_POINTS = 10;
 let routeMotionFrame = null;
 let demoDatasetHydration = null;
 let gpsPingIntervalMs = 30000;
@@ -556,40 +556,53 @@ async function openOptimizedGoogleMapsRoute(e) {
   window.open(urls[0], '_blank', 'noopener,noreferrer');
 
   if (urls.length > 1) {
-    showToast(`Segmento 1/${urls.length} abierto. Las paradas restantes exceden el límite de URL de Google Maps.`, 'info');
+    showToast(`Ruta 1 de ${urls.length} abierta (${GOOGLE_MAPS_MAX_POINTS} paradas máx. por ruta en Google Maps). Usa el botón de nuevo para el siguiente tramo.`, 'info');
     return;
   }
 
-  showToast(`Abriendo ruta optimizada con ${pendingCount} parada(s) pendiente(s).`, 'success');
+  showToast(`Ruta abierta con ${pendingCount} parada(s) pendiente(s).`, 'success');
 }
 
 function renderStopList() {
   const el = document.getElementById('stop-list');
   document.getElementById('stop-empty')?.classList.add('hidden');
 
-  el.innerHTML = stops.map((s, i) => {
+  const pending = stops.filter(s => s.stop_status !== 'completed' && s.stop_status !== 'skipped').length;
+  const done = stops.filter(s => s.stop_status === 'completed').length;
+
+  el.innerHTML = `<div class="flex items-center justify-between mb-2 px-1">
+    <p class="text-xs font-bold text-slate-500">${stops.length} paradas total</p>
+    <div class="flex gap-2 text-[10px]">
+      <span class="text-emerald-600 font-bold">${done} completadas</span>
+      <span class="text-slate-500 font-bold">${pending} pendientes</span>
+    </div>
+  </div>` + stops.map((s, i) => {
     const done = s.stop_status === 'completed';
     const skipped = s.stop_status === 'skipped';
-    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`;
+    const hasCoords = Number.isFinite(Number(s.lat)) && Number.isFinite(Number(s.lng));
+    const mapsUrl = hasCoords ? `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}` : '#';
     return `
-    <div class="stop-card ${done ? 'completed' : ''} ${skipped ? 'completed' : ''} animate-in" style="animation-delay:${i * 30}ms">
+    <div class="stop-card ${done ? 'completed' : ''} ${skipped ? 'completed' : ''}" onclick="focusStop(${s.lng},${s.lat},'${esc(s.name)}')">
       <div class="stop-num ${done ? 'bg-emerald-100 text-emerald-700' : skipped ? 'bg-rose-100 text-rose-700' : 'bg-[#1b365d]/10 text-[#1b365d]'}">${s.route_order}</div>
       <div class="flex-1 min-w-0">
         <p class="font-medium text-sm truncate">${esc(s.name)}</p>
         <p class="text-xs text-slate-400 truncate">${esc(s.address || '')}</p>
       </div>
-      <div class="flex items-center gap-1.5 flex-shrink-0">
+      <div class="flex items-center gap-1 flex-shrink-0">
         ${done ? '<span class="badge badge-green" style="font-size:10px">Hecho</span>'
           : skipped ? '<span class="badge badge-red" style="font-size:10px">Omitido</span>'
-          : `<a href="${mapsUrl}" target="_blank" class="text-blue-600 hover:text-blue-800" title="Open in Maps">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-            </a>
-            <button onclick="event.stopPropagation(); checkInAndVisit('${s.id}','${s.pharmacy_id}','${esc(s.name)}')" class="btn btn-sm btn-primary" style="font-size:11px">Visitar</button>
-            <button onclick="event.stopPropagation(); openSkipSheet('${s.id}','${s.pharmacy_id}','${esc(s.name)}')" class="btn btn-sm btn-ghost text-rose-500 border border-rose-200" style="font-size:10px">Omitir</button>`
+          : `<button onclick="event.stopPropagation(); checkInAndVisit('${s.id}','${s.pharmacy_id}','${esc(s.name)}')" class="btn btn-sm btn-primary" style="font-size:10px;padding:4px 8px">Visitar</button>
+            <button onclick="event.stopPropagation(); openSkipSheet('${s.id}','${s.pharmacy_id}','${esc(s.name)}')" class="btn btn-sm btn-ghost text-rose-500 border border-rose-200" style="font-size:9px;padding:4px 6px">Omitir</button>`
         }
       </div>
     </div>`;
   }).join('');
+}
+
+function focusStop(lng, lat, name) {
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+  setSheetSnap('peek');
+  map.flyTo({ center: [lng, lat], zoom: 17, duration: 600 });
 }
 
 function clearRoute() {
