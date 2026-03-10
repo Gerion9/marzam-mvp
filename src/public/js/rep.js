@@ -170,9 +170,9 @@ function onStopClick(e) {
       <div class="peek-card">
         <h4 class="font-bold text-sm mb-2">${esc(p.name)}</h4>
         <div class="flex gap-1.5">
-          <button class="btn btn-sm btn-primary flex-1" onclick="checkInAndVisit('${p.id}','${p.pharmacy_id}','${esc(p.name)}')">Visit</button>
-          <button class="btn btn-sm btn-danger flex-1" onclick="openSkipSheet('${p.id}','${p.pharmacy_id}','${esc(p.name)}')">Skip</button>
-          <a href="${mapsUrl}" target="_blank" class="btn btn-sm btn-ghost border border-slate-200 flex-1">Maps</a>
+          <button class="btn btn-sm btn-primary flex-1" onclick="checkInAndVisit('${p.id}','${p.pharmacy_id}','${esc(p.name)}')">Visitar</button>
+          <button class="btn btn-sm btn-danger flex-1" onclick="openSkipSheet('${p.id}','${p.pharmacy_id}','${esc(p.name)}')">Omitir</button>
+          <a href="${mapsUrl}" target="_blank" class="btn btn-sm btn-ghost border border-slate-200 flex-1">Mapa</a>
         </div>
       </div>`)
     .addTo(map);
@@ -181,13 +181,43 @@ function onStopClick(e) {
 function setupSheetDrag() {
   const sheet = document.getElementById('main-sheet');
   const handle = document.getElementById('sheet-handle');
+
   handle.addEventListener('click', () => {
     const current = sheet.dataset.snap;
-    sheet.dataset.snap = current === 'peek' ? 'half' : current === 'half' ? 'full' : 'peek';
+    if (current === 'peek') sheet.dataset.snap = 'half';
+    else if (current === 'half') sheet.dataset.snap = 'full';
+    else sheet.dataset.snap = 'half';
   });
+
+  let startY = 0;
+  let startSnap = '';
+
+  handle.addEventListener('touchstart', (e) => {
+    startY = e.touches[0].clientY;
+    startSnap = sheet.dataset.snap;
+    sheet.style.transition = 'none';
+  }, { passive: true });
+
+  handle.addEventListener('touchend', (e) => {
+    sheet.style.transition = '';
+    const dy = (e.changedTouches[0]?.clientY || startY) - startY;
+    if (Math.abs(dy) < 30) return;
+
+    if (dy > 0) {
+      sheet.dataset.snap = startSnap === 'full' ? 'half' : 'peek';
+    } else {
+      sheet.dataset.snap = startSnap === 'peek' ? 'half' : 'full';
+    }
+  }, { passive: true });
 }
 
 function setSheetSnap(snap) { document.getElementById('main-sheet').dataset.snap = snap; }
+
+function toggleMainSheet() {
+  const sheet = document.getElementById('main-sheet');
+  const current = sheet.dataset.snap;
+  sheet.dataset.snap = (current === 'half' || current === 'full') ? 'peek' : 'half';
+}
 
 /* ─── Assignments ─────────────────────────────────────────────── */
 async function loadAssignments() {

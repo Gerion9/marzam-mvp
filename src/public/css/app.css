@@ -160,6 +160,7 @@ body {
   position: absolute;
   left: 0; right: 0;
   bottom: 0;
+  height: 85vh;
   background: white;
   border-top-left-radius: var(--radius-xl);
   border-top-right-radius: var(--radius-xl);
@@ -170,9 +171,20 @@ body {
   flex-direction: column;
 }
 .snap-sheet[data-snap="hidden"] { transform: translateY(100%); }
-.snap-sheet[data-snap="peek"] { transform: translateY(calc(100% - 120px)); }
-.snap-sheet[data-snap="half"] { transform: translateY(50%); }
-.snap-sheet[data-snap="full"] { transform: translateY(10%); height: 90vh; }
+.snap-sheet[data-snap="peek"] { transform: translateY(calc(100% - 110px)); }
+.snap-sheet[data-snap="half"] { transform: translateY(55%); }
+.snap-sheet[data-snap="full"] { transform: translateY(0%); }
+
+@media (min-width: 768px) {
+  .snap-sheet {
+    left: auto;
+    right: 16px;
+    width: 400px;
+    height: 80vh;
+    border-top-right-radius: var(--radius-xl);
+    border-top-left-radius: var(--radius-xl);
+  }
+}
 
 .sheet-handle {
   width: 48px;
