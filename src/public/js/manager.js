@@ -269,8 +269,8 @@ function setupTabs() {
       map.setLayoutProperty('breadcrumb-dots', 'visibility', tabId === 'reps' ? 'visible' : 'none');
       map.setLayoutProperty('rep-assignment-links', 'visibility', tabId === 'reps' ? 'visible' : 'none');
       map.setLayoutProperty('rep-assignment-routes', 'visibility', tabId === 'reps' ? 'visible' : 'none');
-      map.setLayoutProperty('rep-motion-ring', 'visibility', tabId === 'reps' ? 'visible' : 'none');
-      map.setLayoutProperty('rep-motion-dot', 'visibility', tabId === 'reps' ? 'visible' : 'none');
+      map.setLayoutProperty('rep-motion-ring', 'visibility', 'none');
+      map.setLayoutProperty('rep-motion-dot', 'visibility', 'none');
       map.setLayoutProperty('assignment-fill', 'visibility', tabId === 'assignments' ? 'visible' : 'none');
       map.setLayoutProperty('assignment-outline', 'visibility', tabId === 'assignments' ? 'visible' : 'none');
       if (tabId !== 'reps') {
@@ -1228,7 +1228,7 @@ async function loadRepRouteVisuals(positions = null) {
 
     map.getSource('rep-assignment-links')?.setData({ type: 'FeatureCollection', features: linkFeatures });
     map.getSource('rep-assignment-routes')?.setData({ type: 'FeatureCollection', features: routeFeatures });
-    startRepMotionAnimation(motionRoutes);
+    /* startRepMotionAnimation(motionRoutes); — disabled for production; enable for demos */
 
     if (routeBounds.length) {
       map.fitBounds(boundsFromCoords(routeBounds), { padding: 70, maxZoom: 13.8, duration: 800 });

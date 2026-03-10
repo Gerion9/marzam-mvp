@@ -138,12 +138,12 @@ function initMap() {
     }});
 
     map.addSource('sim-rep', { type: 'geojson', data: emptyFC() });
-    map.addLayer({ id: 'sim-rep-ring', type: 'circle', source: 'sim-rep', paint: {
+    map.addLayer({ id: 'sim-rep-ring', type: 'circle', source: 'sim-rep', layout: { visibility: 'none' }, paint: {
       'circle-radius': 16,
       'circle-color': '#f97316',
       'circle-opacity': 0.16,
     }});
-    map.addLayer({ id: 'sim-rep-dot', type: 'circle', source: 'sim-rep', paint: {
+    map.addLayer({ id: 'sim-rep-dot', type: 'circle', source: 'sim-rep', layout: { visibility: 'none' }, paint: {
       'circle-radius': 6,
       'circle-color': '#f97316',
       'circle-stroke-width': 2,
@@ -409,7 +409,6 @@ async function renderRoute() {
 
   if (visualRoute.length > 1) {
     map.getSource('route-line')?.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: visualRoute } }] });
-    startRouteSimulation(visualRoute);
   } else {
     map.getSource('route-line')?.setData(emptyFC());
     stopRouteSimulation(true);
