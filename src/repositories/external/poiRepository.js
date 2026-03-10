@@ -144,8 +144,13 @@ async function list(filters = {}) {
       || String(row.address || '').toLowerCase().includes(search));
   }
   if (filters.bbox) {
-    const [west, south, east, north] = filters.bbox.map(Number);
-    rows = rows.filter((row) => row.lng >= west && row.lng <= east && row.lat >= south && row.lat <= north);
+    const parts = Array.isArray(filters.bbox)
+      ? filters.bbox
+      : String(filters.bbox).split(',');
+    const [west, south, east, north] = parts.map(Number);
+    if ([west, south, east, north].every(Number.isFinite)) {
+      rows = rows.filter((row) => row.lng >= west && row.lng <= east && row.lat >= south && row.lat <= north);
+    }
   }
   if (filters.polygon) {
     const bounds = polygonBounds(filters.polygon);

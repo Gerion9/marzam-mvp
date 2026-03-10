@@ -58,14 +58,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!isDemo) await loadRuntimeConfig();
 
   const impersonating = user?.impersonated_by || localStorage.getItem('marzam_impersonating');
-  document.getElementById('rep-name').textContent = (user?.full_name || 'Demo Rep') + (isDemo ? ' (Demo)' : '');
+  document.getElementById('rep-name').textContent = (user?.full_name || 'Rep Demo') + (isDemo ? ' (Demo)' : '');
   document.getElementById('btn-logout').onclick = isDemo
     ? () => { localStorage.clear(); location.href = '/'; }
     : API.logout;
 
   if (impersonating) {
     const banner = document.getElementById('demo-banner');
-    banner.textContent = `Viewing as ${user?.full_name || 'Rep'} — Click to return to Manager`;
+    banner.textContent = `Viendo como ${user?.full_name || 'Rep'} — Haz clic para volver al Gerente`;
     banner.classList.remove('hidden');
     banner.style.cursor = 'pointer';
     banner.onclick = async () => {
@@ -194,7 +194,7 @@ async function loadAssignments() {
   try {
     let user = API.user();
     const sel = document.getElementById('sel-assignment');
-    sel.innerHTML = '<option value="">Select assignment...</option>';
+    sel.innerHTML = '<option value="">Seleccionar asignación...</option>';
 
     let list;
     if (DEMO.active && user) {
@@ -241,7 +241,7 @@ async function onAssignmentChange() {
     if (currentAssignment.status === 'assigned') {
       await API.patch(`/assignments/${id}/status`, { status: 'in_progress' }).catch(() => {});
     }
-  } catch (err) { showToast(err.error || 'Could not load assignment', 'error'); }
+  } catch (err) { showToast(err.error || 'No se pudo cargar la asignación', 'error'); }
 }
 
 async function resolveRouteOrigin() {
@@ -346,14 +346,15 @@ async function renderRoute() {
 
   const originCoord = await resolveRouteOrigin();
 
-  const features = stops.map(s => ({
+  const validStops = stops.filter(s => Number.isFinite(Number(s.lng)) && Number.isFinite(Number(s.lat)));
+  const features = validStops.map(s => ({
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [Number(s.lng), Number(s.lat)] },
     properties: { id: s.id, name: s.name, order: String(s.route_order), status: s.stop_status, pharmacy_id: s.pharmacy_id },
   }));
   map.getSource('stops')?.setData({ type: 'FeatureCollection', features });
 
-  const routeCoords = stops.map(s => [Number(s.lng), Number(s.lat)]);
+  const routeCoords = validStops.map(s => [Number(s.lng), Number(s.lat)]);
   const visualRoute = originCoord ? [originCoord, ...routeCoords] : routeCoords;
 
   if (visualRoute.length > 1) {
@@ -481,7 +482,7 @@ function updateGoogleMapsLink() {
 async function openOptimizedGoogleMapsRoute(e) {
   e.preventDefault();
   if (!currentAssignment) {
-    showToast('Select an assignment first', 'error');
+    showToast('Selecciona una asignación primero', 'error');
     return;
   }
 
@@ -498,7 +499,7 @@ async function openOptimizedGoogleMapsRoute(e) {
 
   const { urls, pendingCount } = getOptimizedPendingRoute(origin);
   if (!urls.length) {
-    showToast('No pending stops to navigate', 'info');
+    showToast('No hay paradas pendientes para navegar', 'info');
     return;
   }
 
@@ -506,11 +507,11 @@ async function openOptimizedGoogleMapsRoute(e) {
   window.open(urls[0], '_blank', 'noopener,noreferrer');
 
   if (urls.length > 1) {
-    showToast(`Opened segment 1/${urls.length}. Remaining stops exceed Google Maps URL limit.`, 'info');
+    showToast(`Segmento 1/${urls.length} abierto. Las paradas restantes exceden el límite de URL de Google Maps.`, 'info');
     return;
   }
 
-  showToast(`Opening optimized route with ${pendingCount} pending stop(s).`, 'success');
+  showToast(`Abriendo ruta optimizada con ${pendingCount} parada(s) pendiente(s).`, 'success');
 }
 
 function renderStopList() {
@@ -529,13 +530,13 @@ function renderStopList() {
         <p class="text-xs text-slate-400 truncate">${esc(s.address || '')}</p>
       </div>
       <div class="flex items-center gap-1.5 flex-shrink-0">
-        ${done ? '<span class="badge badge-green" style="font-size:10px">Done</span>'
-          : skipped ? '<span class="badge badge-red" style="font-size:10px">Skipped</span>'
+        ${done ? '<span class="badge badge-green" style="font-size:10px">Hecho</span>'
+          : skipped ? '<span class="badge badge-red" style="font-size:10px">Omitido</span>'
           : `<a href="${mapsUrl}" target="_blank" class="text-blue-600 hover:text-blue-800" title="Open in Maps">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
             </a>
-            <button onclick="event.stopPropagation(); checkInAndVisit('${s.id}','${s.pharmacy_id}','${esc(s.name)}')" class="btn btn-sm btn-primary" style="font-size:11px">Visit</button>
-            <button onclick="event.stopPropagation(); openSkipSheet('${s.id}','${s.pharmacy_id}','${esc(s.name)}')" class="btn btn-sm btn-ghost text-rose-500 border border-rose-200" style="font-size:10px">Skip</button>`
+            <button onclick="event.stopPropagation(); checkInAndVisit('${s.id}','${s.pharmacy_id}','${esc(s.name)}')" class="btn btn-sm btn-primary" style="font-size:11px">Visitar</button>
+            <button onclick="event.stopPropagation(); openSkipSheet('${s.id}','${s.pharmacy_id}','${esc(s.name)}')" class="btn btn-sm btn-ghost text-rose-500 border border-rose-200" style="font-size:10px">Omitir</button>`
         }
       </div>
     </div>`;
@@ -563,7 +564,7 @@ async function checkInAndVisit(stopId, pharmacyId, name) {
     updateMyPosition(pos);
     if (checkinResult.distance_warning) {
       const dist = Math.round(checkinResult.distance_to_pharmacy_m || 500);
-      showToast(`Warning: You are ${dist}m from the pharmacy (>500m)`, 'error');
+      showToast(`Advertencia: Estás a ${dist}m de la farmacia (>500m)`, 'error');
     }
   } catch {}
   document.getElementById('v-pharmacy-id').value = pharmacyId;
@@ -587,11 +588,11 @@ async function submitVisit(e) {
   const outcome = document.getElementById('v-outcome').value;
   const stopId = document.getElementById('v-stop-id').value;
   if (!photoInput.files[0] && !DEMO.active && !['closed','invalid','duplicate','moved','wrong_category','chain_not_independent','not_interested'].includes(outcome)) {
-    showToast('Photo evidence is required', 'error');
+    showToast('La foto de evidencia es obligatoria', 'error');
     return;
   }
   const btn = document.getElementById('btn-submit-visit');
-  btn.disabled = true; btn.textContent = 'Submitting...';
+  btn.disabled = true; btn.textContent = 'Enviando...';
   const pos = lastPosition || {};
 
   try {
@@ -619,16 +620,16 @@ async function submitVisit(e) {
 
     closeVisitSheet();
     document.getElementById('visit-form').reset();
-    showToast('Visit submitted', 'success');
+    showToast('Visita enviada', 'success');
 
     const flagOutcomes = ['closed','invalid','duplicate','moved','wrong_category','chain_not_independent'];
     const stop = stops.find(s => s.id === stopId);
     if (stop) stop.stop_status = flagOutcomes.includes(outcome) ? 'skipped' : 'completed';
     if (currentAssignment) renderRoute();
   } catch (err) {
-    showToast(err.error || err.errors?.join(', ') || 'Failed to submit', 'error');
+    showToast(err.error || err.errors?.join(', ') || 'Error al enviar', 'error');
   } finally {
-    btn.disabled = false; btn.textContent = 'Submit Visit';
+    btn.disabled = false; btn.textContent = 'Enviar Visita';
   }
 }
 
@@ -648,7 +649,7 @@ async function submitSkip(e) {
   const notes = document.getElementById('skip-notes').value;
   const photoInput = document.getElementById('skip-photo');
 
-  if (!reason) { showToast('Please select a reason', 'error'); return; }
+  if (!reason) { showToast('Selecciona un motivo', 'error'); return; }
 
   try {
     const visit = await API.post('/visits', {
@@ -670,10 +671,10 @@ async function submitSkip(e) {
     
     closeSkipSheet();
     document.getElementById('skip-form').reset();
-    showToast('Stop skipped with reason', 'success');
+    showToast('Parada omitida', 'success');
     if (currentAssignment) renderRoute();
   } catch (err) {
-    showToast(err.error || 'Failed', 'error');
+    showToast(err.error || 'Error al omitir', 'error');
   }
 }
 
@@ -696,8 +697,8 @@ async function submitNewPharmacy(e) {
     });
     closeNewSheet();
     document.getElementById('new-pharmacy-form').reset();
-    showToast('Submitted for review', 'success');
-  } catch (err) { showToast(err.error || 'Failed', 'error'); }
+    showToast('Enviado para revisión', 'success');
+  } catch (err) { showToast(err.error || 'Error', 'error'); }
 }
 
 /* ─── GPS Tracking ────────────────────────────────────────────── */

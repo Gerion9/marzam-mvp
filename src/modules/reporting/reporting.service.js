@@ -89,6 +89,25 @@ async function getRepProductivity() {
     const { currentRows, repNameMap } = await getExternalDashboardData();
     const byRep = new Map();
 
+    const allReps = accessDirectory.listFieldReps();
+    for (const rep of allReps) {
+      byRep.set(String(rep.id), {
+        rep_id: String(rep.id),
+        rep_name: rep.full_name,
+        total_visits: 0,
+        unique_pharmacies_visited: 0,
+        interested_count: 0,
+        follow_up_count: 0,
+        assigned_total: 0,
+        completed_total: 0,
+        with_photo_total: 0,
+        with_comment_total: 0,
+        regularization_follow_up_total: 0,
+        first_visit: null,
+        last_visit: null,
+      });
+    }
+
     for (const row of currentRows) {
       if (!row.rep_id) continue;
       if (!byRep.has(row.rep_id)) {
@@ -126,7 +145,7 @@ async function getRepProductivity() {
     }
 
     return Array.from(byRep.values())
-      .sort((a, b) => Number(b.total_visits || 0) - Number(a.total_visits || 0));
+      .sort((a, b) => Number(b.total_visits || 0) - Number(a.total_visits || 0) || String(a.rep_name || '').localeCompare(String(b.rep_name || '')));
   }
 
   const visitAgg = db('visit_reports')

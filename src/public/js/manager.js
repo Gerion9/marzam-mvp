@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!isDemo) await loadAuthUsers();
 
   const impersonating = user?.impersonated_by || localStorage.getItem('marzam_impersonating');
-  document.getElementById('user-label').textContent = (user?.full_name || 'Demo Manager') + (isDemo ? ' (Demo)' : '');
+  document.getElementById('user-label').textContent = (user?.full_name || 'Gerente Demo') + (isDemo ? ' (Demo)' : '');
 
   if (isDemo) {
     DEMO.patchAPI();
@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (impersonating) {
     const banner = document.getElementById('demo-banner');
-    banner.textContent = `Impersonating: ${user?.full_name || 'Unknown'} (${user?.role}) — Click to return`;
+    banner.textContent = `Viendo como: ${user?.full_name || 'Desconocido'} (${user?.role}) — Haz clic para volver`;
     banner.classList.remove('hidden');
     banner.style.cursor = 'pointer';
     banner.onclick = () => stopImpersonation();
@@ -462,10 +462,10 @@ async function loadKPIs() {
     const data = await API.get('/reporting/dashboard');
     const f = data.funnel || {};
     const chips = [
-      { label: 'Total Locations', value: f.total_pharmacies },
-      { label: 'Visited', value: f.visited },
-      { label: 'Interested', value: f.interested },
-      { label: 'Coverage', value: f.coverage_pct, suffix: '%' },
+      { label: 'Total Ubicaciones', value: f.total_pharmacies },
+      { label: 'Visitadas', value: f.visited },
+      { label: 'Interesados', value: f.interested },
+      { label: 'Cobertura', value: f.coverage_pct, suffix: '%' },
     ];
     document.getElementById('kpi-grid').innerHTML = chips.map(c => `
       <div class="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
@@ -473,7 +473,7 @@ async function loadKPIs() {
         <p class="text-xl font-bold text-slate-800 mt-0.5">${num(c.value)}${c.suffix || ''}</p>
       </div>`).join('');
   } catch {
-    document.getElementById('kpi-grid').innerHTML = '<div class="text-slate-400 text-xs p-2">Failed to load KPIs</div>';
+    document.getElementById('kpi-grid').innerHTML = '<div class="text-slate-400 text-xs p-2">Error al cargar indicadores</div>';
   }
 }
 
@@ -522,16 +522,18 @@ async function loadPharmaciesInView() {
       properties: { id: p.id, name: p.name, status: p.status }
     }));
     map.getSource('pharmacies')?.setData({ type: 'FeatureCollection', features });
-    document.getElementById('pharmacy-count').textContent = `${pharmacyCache.length} found`;
+    document.getElementById('pharmacy-count').textContent = `${pharmacyCache.length} encontradas`;
     renderPharmacyList();
-  } catch {}
+  } catch (err) {
+    console.error('Failed to load pharmacies:', err);
+  }
 }
 
 function renderPharmacyList() {
   const btnBulk = document.getElementById('btn-bulk-assign');
   if (bulkSelectedIds.size > 0) {
     btnBulk.classList.remove('hidden');
-    btnBulk.textContent = `Assign ${bulkSelectedIds.size} selected`;
+    btnBulk.textContent = `Asignar ${bulkSelectedIds.size} seleccionadas`;
     btnBulk.onclick = () => bulkAssign();
   } else btnBulk.classList.add('hidden');
 
@@ -549,7 +551,7 @@ function renderPharmacyList() {
           <span>${esc(r.municipality || '')}</span>
           <div class="flex items-center gap-3">
             ${r.last_visit_outcome ? `<span class="badge ${badgeColor(r.last_visit_outcome)}">${r.last_visit_outcome}</span>` : ''}
-            <span>Pot: ${r.potential_score || r.order_potential || '—'}</span>
+            <span>Pot.: ${r.potential_score || r.order_potential || '—'}</span>
           </div>
         </div>
         ${r.contact_person ? `<p class="text-[10px] text-slate-400 mt-1 truncate">${esc(r.contact_person)} ${r.contact_phone ? '| '+r.contact_phone : ''}</p>` : ''}
@@ -592,7 +594,7 @@ async function openPharmacyDrawer(id) {
       if (leads.length) {
         const nextStatus = { interested: ['follow_up_required','lost'], follow_up_required: ['contact_captured','lost'], contact_captured: ['converted','lost'], converted: [], lost: ['interested'] };
         leadsHtml = `
-          <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 mt-6">Commercial Leads</h4>
+          <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 mt-6">Oportunidades Comerciales</h4>
           ${leads.map(l => {
             const transitions = nextStatus[l.status] || [];
             const btns = transitions.map(s => `<button onclick="advanceLead('${l.id}','${s}')" class="text-[10px] px-2 py-1 rounded-md font-bold ${s==='lost'?'bg-rose-50 text-rose-600':'bg-blue-50 text-blue-600'} hover:opacity-80">${s.replace(/_/g,' ')}</button>`).join('');
@@ -602,7 +604,7 @@ async function openPharmacyDrawer(id) {
                 <span class="badge badge-green">${l.status}</span>
                 <span class="text-xs text-slate-400">${l.created_at ? new Date(l.created_at).toLocaleDateString() : ''}</span>
               </div>
-              <p class="text-sm font-bold text-emerald-700">$${num(l.potential_sales || 0)} potential</p>
+              <p class="text-sm font-bold text-emerald-700">$${num(l.potential_sales || 0)} potencial</p>
               <p class="text-xs text-slate-600 mt-1">${esc(l.notes || '')}</p>
               ${btns ? `<div class="flex gap-1 mt-2 flex-wrap">${btns}</div>` : ''}
             </div>`;
@@ -615,26 +617,26 @@ async function openPharmacyDrawer(id) {
       <div class="mb-6">
         <span class="badge ${badgeColor(p.status)} mb-2">${p.status}</span>
         ${p.verification_status ? `<span class="badge ${p.verification_status === 'verified' ? 'badge-green' : 'badge-yellow'} ml-1">${p.verification_status}</span>` : ''}
-        <p class="text-sm text-slate-600 mt-2">${esc(p.address || 'No address provided')}</p>
+        <p class="text-sm text-slate-600 mt-2">${esc(p.address || 'Sin dirección')}</p>
       </div>
 
-      <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Details</h4>
+      <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Detalles</h4>
       <div class="grid grid-cols-2 gap-3 mb-6">
         <div class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-          <p class="text-[10px] text-slate-400 font-bold uppercase">Municipality</p>
+          <p class="text-[10px] text-slate-400 font-bold uppercase">Municipio</p>
           <p class="text-sm font-medium text-slate-800 mt-0.5">${esc(p.municipality || '—')}</p>
         </div>
         <div class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-          <p class="text-[10px] text-slate-400 font-bold uppercase">Potential</p>
+          <p class="text-[10px] text-slate-400 font-bold uppercase">Potencial</p>
           <p class="text-sm font-medium text-emerald-600 mt-0.5">${p.potential_score || p.order_potential || '—'}</p>
         </div>
         <div class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-          <p class="text-[10px] text-slate-400 font-bold uppercase">Contact</p>
+          <p class="text-[10px] text-slate-400 font-bold uppercase">Contacto</p>
           <p class="text-sm font-medium text-slate-800 mt-0.5">${esc(p.contact_person || '—')}</p>
           ${p.contact_phone ? `<p class="text-xs text-slate-500">${p.contact_phone}</p>` : ''}
         </div>
         <div class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-          <p class="text-[10px] text-slate-400 font-bold uppercase">Last Visit</p>
+          <p class="text-[10px] text-slate-400 font-bold uppercase">Última Visita</p>
           <p class="text-sm font-medium text-slate-800 mt-0.5">${p.last_visited_at ? new Date(p.last_visited_at).toLocaleDateString() : '—'}</p>
           ${p.last_visit_outcome ? `<span class="badge ${badgeColor(p.last_visit_outcome)} mt-0.5">${p.last_visit_outcome}</span>` : ''}
         </div>
@@ -642,7 +644,7 @@ async function openPharmacyDrawer(id) {
 
       ${leadsHtml}
 
-      <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 mt-6">Verification History</h4>
+      <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 mt-6">Historial de Verificación</h4>
       <div class="space-y-3">
         ${verifications.length ? verifications.map(v => `
           <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
@@ -654,23 +656,23 @@ async function openPharmacyDrawer(id) {
               </div>
               <span class="text-xs text-slate-400">${new Date(v.visited_at || v.assigned_at || v.created_at).toLocaleDateString()}</span>
             </div>
-            <p class="text-[11px] text-slate-500 mb-2">Rep: ${esc(v.rep_name || 'Unknown')} ${v.route_order ? `| Stop ${v.route_order}` : ''}</p>
-            <p class="text-sm text-slate-600">${esc(v.comment || 'No comment recorded.')}</p>
-            ${v.order_potential ? `<p class="text-xs text-emerald-600 mt-1 font-medium">Potential: $${num(v.order_potential)}</p>` : ''}
-            ${v.contact_name ? `<p class="text-[10px] text-slate-400 mt-1">Contact: ${esc(v.contact_name)} ${v.contact_phone ? `| ${esc(v.contact_phone)}` : ''}</p>` : ''}
-            ${v.distance_to_pharmacy_m != null ? `<p class="text-[10px] ${Number(v.distance_to_pharmacy_m) > 500 ? 'text-rose-500' : 'text-slate-400'} mt-1">Check-in distance: ${Math.round(Number(v.distance_to_pharmacy_m))}m</p>` : ''}
+            <p class="text-[11px] text-slate-500 mb-2">Rep: ${esc(v.rep_name || 'Desconocido')} ${v.route_order ? `| Parada ${v.route_order}` : ''}</p>
+            <p class="text-sm text-slate-600">${esc(v.comment || 'Sin comentarios registrados.')}</p>
+            ${v.order_potential ? `<p class="text-xs text-emerald-600 mt-1 font-medium">Potencial: $${num(v.order_potential)}</p>` : ''}
+            ${v.contact_name ? `<p class="text-[10px] text-slate-400 mt-1">Contacto: ${esc(v.contact_name)} ${v.contact_phone ? `| ${esc(v.contact_phone)}` : ''}</p>` : ''}
+            ${v.distance_to_pharmacy_m != null ? `<p class="text-[10px] ${Number(v.distance_to_pharmacy_m) > 500 ? 'text-rose-500' : 'text-slate-400'} mt-1">Distancia check-in: ${Math.round(Number(v.distance_to_pharmacy_m))}m</p>` : ''}
             ${v.photo_url ? `
               <a href="${v.photo_url}" target="_blank" rel="noopener noreferrer" class="block mt-3">
-                <img src="${v.photo_url}" alt="Evidence photo" class="w-full h-40 object-cover rounded-xl border border-slate-100">
-              </a>` : '<p class="text-[10px] text-amber-600 mt-2 font-medium">No photo evidence uploaded.</p>'}
-          </div>`).join('') : '<p class="text-sm text-slate-400 italic">No verification history.</p>'}
+                <img src="${v.photo_url}" alt="Foto de evidencia" class="w-full h-40 object-cover rounded-xl border border-slate-100">
+              </a>` : '<p class="text-[10px] text-amber-600 mt-2 font-medium">Sin foto de evidencia.</p>'}
+          </div>`).join('') : '<p class="text-sm text-slate-400 italic">Sin historial de verificación.</p>'}
       </div>
 
-      ${p.notes ? `<div class="mt-6"><h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Notes</h4><p class="text-sm text-slate-600 bg-white p-3 rounded-xl border border-slate-100">${esc(p.notes)}</p></div>` : ''}
+      ${p.notes ? `<div class="mt-6"><h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Notas</h4><p class="text-sm text-slate-600 bg-white p-3 rounded-xl border border-slate-100">${esc(p.notes)}</p></div>` : ''}
     `;
     
     document.getElementById('context-drawer').classList.add('open');
-  } catch { showToast('Could not load pharmacy details', 'error'); }
+  } catch { showToast('No se pudieron cargar los detalles de la farmacia', 'error'); }
 }
 
 function closeDrawer() {
@@ -747,7 +749,7 @@ async function selectInPolygon() {
     document.getElementById('main-panel').style.transform = '';
     showAssignForm();
   } catch {
-    showToast('Failed to select area', 'error');
+    showToast('Error al seleccionar área', 'error');
     cancelAssign();
   }
 }
@@ -762,8 +764,8 @@ function showAssignForm() {
   
   document.getElementById('tab-assignments').innerHTML = `
     <div class="animate-in">
-      <h3 class="font-bold text-lg mb-1">New Territory</h3>
-      <p class="text-sm text-emerald-600 font-medium mb-4">${selectedInPolygon.length} pharmacies selected</p>
+      <h3 class="font-bold text-lg mb-1">Nuevo Territorio</h3>
+      <p class="text-sm text-emerald-600 font-medium mb-4">${selectedInPolygon.length} farmacias seleccionadas</p>
       
       <div id="deselect-list" class="max-h-32 overflow-y-auto mb-4 space-y-1">
         ${selectedInPolygon.map(p => `
@@ -774,9 +776,9 @@ function showAssignForm() {
       </div>
 
       <div class="space-y-3">
-        <div><label class="block text-xs font-bold text-slate-400 mb-1">Objective</label>
+        <div><label class="block text-xs font-bold text-slate-400 mb-1">Objetivo</label>
         <select id="f-obj" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm outline-none">
-          <option>Prospecting</option><option>Follow-up</option><option>Validation</option>
+          <option>Prospección</option><option>Seguimiento</option><option>Validación</option>
         </select></div>
         
         <div><label class="block text-xs font-bold text-slate-400 mb-1">Assign to Rep</label>
@@ -785,20 +787,20 @@ function showAssignForm() {
         </select></div>
 
         <div class="grid grid-cols-2 gap-3">
-          <div><label class="block text-xs font-bold text-slate-400 mb-1">Priority</label>
+          <div><label class="block text-xs font-bold text-slate-400 mb-1">Prioridad</label>
           <select id="f-priority" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm outline-none">
             <option value="normal">Normal</option><option value="low">Low</option><option value="high">High</option><option value="urgent">Urgent</option>
           </select></div>
-          <div><label class="block text-xs font-bold text-slate-400 mb-1">Due Date</label>
+          <div><label class="block text-xs font-bold text-slate-400 mb-1">Fecha Límite</label>
           <input id="f-due" type="date" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm outline-none"></div>
         </div>
         
-        <div><label class="block text-xs font-bold text-slate-400 mb-1">Visit Goal</label>
-        <input id="f-goal" type="number" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm outline-none" placeholder="Number of visits expected" value="${selectedInPolygon.length}"></div>
+        <div><label class="block text-xs font-bold text-slate-400 mb-1">Meta de Visitas</label>
+        <input id="f-goal" type="number" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm outline-none" placeholder="Número de visitas esperadas" value="${selectedInPolygon.length}"></div>
         
         <div class="flex gap-2 pt-2">
-          <button onclick="cancelAssignForm()" class="flex-1 btn btn-ghost border border-slate-200 text-sm py-2">Cancel</button>
-          <button onclick="submitAssignForm()" class="flex-1 btn btn-primary text-sm py-2">Create Assignment</button>
+          <button onclick="cancelAssignForm()" class="flex-1 btn btn-ghost border border-slate-200 text-sm py-2">Cancelar</button>
+          <button onclick="submitAssignForm()" class="flex-1 btn btn-primary text-sm py-2">Crear Asignación</button>
         </div>
       </div>
     </div>`;
@@ -826,11 +828,11 @@ function cancelAssignForm() {
     <div class="flex gap-2 mb-5">
       <button onclick="startAssignMode()" class="flex-1 bg-[#1b365d] hover:bg-[#152845] text-white font-medium text-sm py-2.5 rounded-xl shadow-sm transition flex items-center justify-center gap-2">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 20l-5-3V4l5 3 5-3 5 3v13l-5-3-5 3z"/></svg>
-        Draw Area
+        Dibujar Área
       </button>
       <button onclick="startClickSelectMode()" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm py-2.5 rounded-xl shadow-sm transition flex items-center justify-center gap-2">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4m10-10h-4M6 12H2"/></svg>
-        Select Points
+        Seleccionar Puntos
       </button>
     </div>
     <div id="assignments-list" class="space-y-3"></div>`;
@@ -870,7 +872,7 @@ function updateClickSelectionMap() {
 
 function finishClickSelect() {
   if (!clickSelectedPharmacies.length) {
-    showToast('Select at least one pharmacy', 'error');
+    showToast('Selecciona al menos una farmacia', 'error');
     return;
   }
   clickSelectMode = false;
@@ -914,7 +916,7 @@ async function submitAssignForm() {
   const checked = document.querySelectorAll('.deselect-cb:checked');
   const selectedIds = [...checked].map(cb => cb.dataset.id);
   
-  if (!selectedIds.length) { showToast('Select at least one pharmacy', 'error'); return; }
+  if (!selectedIds.length) { showToast('Selecciona al menos una farmacia', 'error'); return; }
 
   const ring = polygonPoints.length >= 3 ? [...polygonPoints, polygonPoints[0]] : null;
   
@@ -928,11 +930,11 @@ async function submitAssignForm() {
       visit_goal: Number(document.getElementById('f-goal').value) || selectedIds.length,
       rep_id: document.getElementById('f-rep').value || null,
     });
-    showToast('Assignment created', 'success');
+    showToast('Asignación creada', 'success');
     cancelAssignForm();
     loadAssignmentPolygons();
     loadAssignments();
-  } catch (err) { showToast(err.error || 'Error creating assignment', 'error'); }
+  } catch (err) { showToast(err.error || 'Error al crear asignación', 'error'); }
 }
 
 async function submitWaveDistribution() {
@@ -950,16 +952,16 @@ async function submitWaveDistribution() {
   }
 
   try {
-    summary.textContent = 'Distributing pharmacies across active reps...';
+    summary.textContent = 'Distribuyendo farmacias entre representantes activos...';
     const result = await API.post('/assignments/distribute', payload);
-    summary.textContent = `Wave ${result.wave_id}: ${result.pharmacy_count} pharmacies across ${result.assignments_created} assignments.`;
-    showToast('Wave distributed successfully', 'success');
+    summary.textContent = `Oleada ${result.wave_id}: ${result.pharmacy_count} farmacias en ${result.assignments_created} asignaciones.`;
+    showToast('Distribución completada', 'success');
     loadAssignmentPolygons();
     loadAssignments();
     loadKPIs();
   } catch (err) {
-    summary.textContent = err.error || 'Distribution failed.';
-    showToast(err.error || 'Distribution failed', 'error');
+    summary.textContent = err.error || 'La distribución falló.';
+    showToast(err.error || 'La distribución falló', 'error');
   }
 }
 
@@ -986,17 +988,17 @@ async function loadAssignments() {
           <span class="badge ${badgeColor(a.status)}">${a.status}</span>
         </div>
         <div class="flex items-center justify-between text-xs text-slate-500 mb-3">
-          <span>${esc(a.rep_name || 'Unassigned')}</span>
+          <span>${esc(a.rep_name || 'Sin asignar')}</span>
           <div class="flex items-center gap-2">
             ${a.priority && a.priority !== 'normal' ? `<span class="badge ${a.priority==='high'||a.priority==='urgent'?'badge-red':'badge-gray'}">${a.priority}</span>` : ''}
-            ${a.due_date ? `<span>Due: ${new Date(a.due_date).toLocaleDateString()}</span>` : ''}
+            ${a.due_date ? `<span>Vence: ${new Date(a.due_date).toLocaleDateString()}</span>` : ''}
           </div>
         </div>
         <div class="w-full bg-slate-100 rounded-full h-1.5 mb-1.5 overflow-hidden">
           <div class="bg-[#1b365d] h-1.5 rounded-full transition-all" style="width: ${a.total_stops||a.pharmacy_count ? ((a.completed_stops||0)/(a.total_stops||a.pharmacy_count)*100) : 0}%"></div>
         </div>
-        <p class="text-[10px] text-slate-400 text-right uppercase tracking-wider">${a.completed_stops||0} / ${a.total_stops||a.pharmacy_count||0} visited</p>
-      </div>`).join('') : '<p class="text-sm text-slate-400">No territories assigned yet.</p>';
+        <p class="text-[10px] text-slate-400 text-right uppercase tracking-wider">${a.completed_stops||0} / ${a.total_stops||a.pharmacy_count||0} visitadas</p>
+      </div>`).join('') : '<p class="text-sm text-slate-400">No hay territorios asignados aún.</p>';
   } catch {}
 }
 
@@ -1030,8 +1032,8 @@ function onReviewMarkerClick(e) {
       <h4 class="font-bold text-sm text-slate-800 mb-1">${esc(p.name)}</h4>
       <span class="badge badge-yellow mb-3">${p.flag_type}</span>
       <div class="flex gap-2 mt-2">
-        <button class="flex-1 btn btn-sm btn-success" onclick="resolveReview('${p.id}','approved')">Approve</button>
-        <button class="flex-1 btn btn-sm btn-danger" onclick="resolveReview('${p.id}','rejected')">Reject</button>
+        <button class="flex-1 btn btn-sm btn-success" onclick="resolveReview('${p.id}','approved')">Aprobar</button>
+        <button class="flex-1 btn btn-sm btn-danger" onclick="resolveReview('${p.id}','rejected')">Rechazar</button>
       </div></div>`)
     .addTo(map);
 }
@@ -1043,11 +1045,11 @@ async function loadReviewList() {
     const batchBar = items.length ? `
       <div class="flex items-center justify-between mb-4 bg-slate-50 p-2 rounded-lg border border-slate-100">
         <label class="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
-          <input type="checkbox" id="review-select-all" onchange="toggleAllReview(this.checked)" class="rounded border-slate-300"> Select all
+          <input type="checkbox" id="review-select-all" onchange="toggleAllReview(this.checked)" class="rounded border-slate-300"> Seleccionar todo
         </label>
         <div class="flex gap-1.5" id="batch-review-btns" style="display:none">
-          <button onclick="batchResolveReview('approved')" class="text-[10px] px-2 py-1 font-bold bg-emerald-100 text-emerald-700 rounded-md">Batch Approve</button>
-          <button onclick="batchResolveReview('rejected')" class="text-[10px] px-2 py-1 font-bold bg-rose-100 text-rose-700 rounded-md">Batch Reject</button>
+          <button onclick="batchResolveReview('approved')" class="text-[10px] px-2 py-1 font-bold bg-emerald-100 text-emerald-700 rounded-md">Aprobar Lote</button>
+          <button onclick="batchResolveReview('rejected')" class="text-[10px] px-2 py-1 font-bold bg-rose-100 text-rose-700 rounded-md">Rechazar Lote</button>
         </div>
       </div>` : '';
     document.getElementById('review-list').innerHTML = batchBar + (items.length ? items.map(i => `
@@ -1057,15 +1059,15 @@ async function loadReviewList() {
           <div class="flex-1">
             <span class="badge badge-yellow mb-1">${i.flag_type || 'Candidate'}</span>
             <h4 class="font-semibold text-sm text-slate-800">${esc(i.pharmacy_name)}</h4>
-            <p class="text-xs text-slate-500 mt-0.5">By ${esc(i.rep_name||i.submitted_by_name||'Unknown')}</p>
+            <p class="text-xs text-slate-500 mt-0.5">Por ${esc(i.rep_name||i.submitted_by_name||'Desconocido')}</p>
             ${i.reason ? `<p class="text-xs text-slate-400 mt-1 italic">"${esc(i.reason)}"</p>` : ''}
           </div>
         </div>
         <div class="flex gap-2">
-          <button onclick="resolveReview('${i.id}','approved')" class="flex-1 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg transition">APPROVE</button>
-          <button onclick="resolveReview('${i.id}','rejected')" class="flex-1 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-lg transition">REJECT</button>
+          <button onclick="resolveReview('${i.id}','approved')" class="flex-1 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg transition">APROBAR</button>
+          <button onclick="resolveReview('${i.id}','rejected')" class="flex-1 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-lg transition">RECHAZAR</button>
         </div>
-      </div>`).join('') : '<p class="text-sm text-slate-400">Queue is empty.</p>');
+      </div>`).join('') : '<p class="text-sm text-slate-400">La cola está vacía.</p>');
   } catch {}
 }
 
@@ -1075,8 +1077,8 @@ async function resolveReview(id, decision) {
     document.getElementById(`rv-${id}`)?.remove();
     loadReviewBadge();
     loadReviewMarkers();
-    showToast(decision === 'approved' ? 'Approved' : 'Rejected', 'success');
-  } catch (err) { showToast(err.error || 'Failed', 'error'); }
+    showToast(decision === 'approved' ? 'Aprobado' : 'Rechazado', 'success');
+  } catch (err) { showToast(err.error || 'Error', 'error'); }
 }
 
 /* ─── Reps ────────────────────────────────────────────────────── */
@@ -1206,7 +1208,7 @@ async function loadRepRouteVisuals(positions = null) {
 function focusRepRoute(repId) {
   const coords = repRouteCache.get(repId);
   if (!coords?.length) {
-    showToast('No active route for this rep', 'info');
+    showToast('No hay ruta activa para este representante', 'info');
     return;
   }
   map.fitBounds(boundsFromCoords(coords), { padding: 70, maxZoom: 14.5, duration: 800 });
@@ -1236,22 +1238,22 @@ async function loadRepsList() {
             <p class="text-xs text-slate-500 mt-0.5">${r.total_visits || 0} visits | ${r.unique_pharmacies_visited || 0} unique | ${r.assigned_total || 0} assigned</p>
           </div>
           <div class="text-right">
-            <p class="text-sm font-bold text-emerald-600">${r.interested_count || 0} Interested</p>
-            <p class="text-[10px] text-slate-500">${r.with_photo_total || 0} photos | ${r.with_comment_total || 0} comments</p>
+            <p class="text-sm font-bold text-emerald-600">${r.interested_count || 0} Interesados</p>
+            <p class="text-[10px] text-slate-500">${r.with_photo_total || 0} fotos | ${r.with_comment_total || 0} comentarios</p>
           </div>
         </div>
         <div class="grid grid-cols-3 gap-2 mb-2 text-[10px]">
-          <div class="bg-slate-50 rounded-lg px-2 py-1.5 text-slate-600">Completed <span class="font-bold text-slate-800">${r.completed_total || 0}</span></div>
-          <div class="bg-slate-50 rounded-lg px-2 py-1.5 text-slate-600">With Photo <span class="font-bold text-slate-800">${r.with_photo_total || 0}</span></div>
-          <div class="bg-slate-50 rounded-lg px-2 py-1.5 text-slate-600">Follow-up <span class="font-bold text-slate-800">${r.regularization_follow_up_total || 0}</span></div>
+          <div class="bg-slate-50 rounded-lg px-2 py-1.5 text-slate-600">Completadas <span class="font-bold text-slate-800">${r.completed_total || 0}</span></div>
+          <div class="bg-slate-50 rounded-lg px-2 py-1.5 text-slate-600">Con Foto <span class="font-bold text-slate-800">${r.with_photo_total || 0}</span></div>
+          <div class="bg-slate-50 rounded-lg px-2 py-1.5 text-slate-600">Seguimiento <span class="font-bold text-slate-800">${r.regularization_follow_up_total || 0}</span></div>
         </div>
         <div class="flex gap-1.5">
-          <button onclick="focusRepRoute('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-sky-50 text-sky-600 hover:bg-sky-100 px-2 py-1.5 rounded-lg transition">Focus Route</button>
-          <button onclick="loadBreadcrumbs('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-orange-50 text-orange-600 hover:bg-orange-100 px-2 py-1.5 rounded-lg transition">Show Trail</button>
-          <button onclick="openRepEvidence('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-2 py-1.5 rounded-lg transition">Evidence</button>
-          <button onclick="impersonateUser('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-violet-50 text-violet-600 hover:bg-violet-100 px-2 py-1.5 rounded-lg transition">View as Rep</button>
+          <button onclick="focusRepRoute('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-sky-50 text-sky-600 hover:bg-sky-100 px-2 py-1.5 rounded-lg transition">Ver Ruta</button>
+          <button onclick="loadBreadcrumbs('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-orange-50 text-orange-600 hover:bg-orange-100 px-2 py-1.5 rounded-lg transition">Recorrido</button>
+          <button onclick="openRepEvidence('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-2 py-1.5 rounded-lg transition">Evidencia</button>
+          <button onclick="impersonateUser('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-violet-50 text-violet-600 hover:bg-violet-100 px-2 py-1.5 rounded-lg transition">Ver como Rep</button>
         </div>
-      </div>`).join('') : '<p class="text-sm text-slate-400">No active reps.</p>';
+      </div>`).join('') : '<p class="text-sm text-slate-400">No hay representantes activos.</p>';
   } catch {}
 }
 
@@ -1259,7 +1261,7 @@ async function openRepEvidence(repId) {
   try {
     const summary = await API.get(`/verifications/reps/${encodeURIComponent(repId)}/summary`).catch(() => null);
     const items = await API.get(`/verifications/evidence?rep_id=${encodeURIComponent(repId)}&limit=12`);
-    document.getElementById('drawer-title').textContent = `Evidence — ${summary?.rep_name || repId}`;
+    document.getElementById('drawer-title').textContent = `Evidencia — ${summary?.rep_name || repId}`;
     document.getElementById('drawer-body').innerHTML = items.length ? items.map(item => `
       <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm mb-3">
         <div class="flex items-start justify-between gap-3 mb-2">
@@ -1272,23 +1274,23 @@ async function openRepEvidence(repId) {
             ${item.regularization_status ? `<div class="text-[10px] text-slate-400 mt-1">${item.regularization_status}</div>` : ''}
           </div>
         </div>
-        <p class="text-sm text-slate-600">${esc(item.comment || 'No comment recorded.')}</p>
-        ${item.photo_url ? `<a href="${item.photo_url}" target="_blank" rel="noopener noreferrer" class="block mt-3"><img src="${item.photo_url}" alt="Evidence photo" class="w-full h-40 object-cover rounded-xl border border-slate-100"></a>` : '<p class="text-[10px] text-amber-600 mt-2 font-medium">No photo evidence.</p>'}
+        <p class="text-sm text-slate-600">${esc(item.comment || 'Sin comentarios.')}</p>
+        ${item.photo_url ? `<a href="${item.photo_url}" target="_blank" rel="noopener noreferrer" class="block mt-3"><img src="${item.photo_url}" alt="Foto de evidencia" class="w-full h-40 object-cover rounded-xl border border-slate-100"></a>` : '<p class="text-[10px] text-amber-600 mt-2 font-medium">Sin foto de evidencia.</p>'}
         <div class="flex items-center justify-between mt-2 text-[10px] text-slate-400">
-          <span>${item.visited_at ? new Date(item.visited_at).toLocaleString() : 'Not visited yet'}</span>
+          <span>${item.visited_at ? new Date(item.visited_at).toLocaleString() : 'Aún no visitada'}</span>
           ${item.distance_to_pharmacy_m != null ? `<span>${Math.round(Number(item.distance_to_pharmacy_m))}m check-in</span>` : ''}
         </div>
-      </div>`).join('') : '<p class="text-sm text-slate-400">No evidence found for this rep.</p>';
+      </div>`).join('') : '<p class="text-sm text-slate-400">No se encontró evidencia para este representante.</p>';
     document.getElementById('context-drawer').classList.add('open');
   } catch (err) {
-    showToast(err.error || 'Could not load evidence', 'error');
+    showToast(err.error || 'No se pudo cargar la evidencia', 'error');
   }
 }
 
 async function loadBreadcrumbs(repId) {
   try {
     const pings = await API.get(`/tracking/breadcrumbs/${repId}`);
-    if (!pings.length) { showToast('No trail data for this rep', 'info'); return; }
+    if (!pings.length) { showToast('No hay datos de recorrido para este representante', 'info'); return; }
     const coords = pings.map(p => [Number(p.lng), Number(p.lat)]);
     const pointFeatures = pings.map(p => ({
       type: 'Feature', geometry: { type: 'Point', coordinates: [Number(p.lng), Number(p.lat)] },
@@ -1301,8 +1303,8 @@ async function loadBreadcrumbs(repId) {
     const bounds = new maplibregl.LngLatBounds();
     coords.forEach(c => bounds.extend(c));
     map.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 800 });
-    showToast(`Showing trail for rep (${pings.length} points)`, 'success');
-  } catch { showToast('Could not load trail', 'error'); }
+    showToast(`Mostrando recorrido del representante (${pings.length} puntos)`, 'success');
+  } catch { showToast('No se pudo cargar el recorrido', 'error'); }
 }
 
 /* ─── Reporting ────────────────────────────────────────────────── */
@@ -1311,16 +1313,16 @@ async function loadReporting() {
     const data = await API.get('/reporting/dashboard');
     const f = data.funnel || {};
     const extKpis = [
-      { label: 'Total Pharmacies', value: f.total_pharmacies },
-      { label: 'Assigned', value: f.assigned_pharmacies || f.assigned },
-      { label: 'Visited', value: f.visited },
-      { label: 'Interested', value: f.interested },
-      { label: 'Follow-up', value: f.needs_follow_up },
-      { label: 'Invalid/Closed', value: f.invalid_closed },
-      { label: 'Coverage', value: f.coverage_pct, suffix: '%' },
-      { label: 'Total Leads', value: data.sales?.total_leads || f.total_leads },
-      { label: 'Sales Potential', value: data.sales?.total_potential || f.total_potential, prefix: '$' },
-      { label: 'Active Reps', value: (data.reps||[]).filter(r => (r.total_visits||0) > 0).length },
+      { label: 'Total Farmacias', value: f.total_pharmacies },
+      { label: 'Asignadas', value: f.assigned_pharmacies || f.assigned },
+      { label: 'Visitadas', value: f.visited },
+      { label: 'Interesados', value: f.interested },
+      { label: 'Seguimiento', value: f.needs_follow_up },
+      { label: 'Inválidas/Cerradas', value: f.invalid_closed },
+      { label: 'Cobertura', value: f.coverage_pct, suffix: '%' },
+      { label: 'Total Oportunidades', value: data.sales?.total_leads || f.total_leads },
+      { label: 'Potencial de Venta', value: data.sales?.total_potential || f.total_potential, prefix: '$' },
+      { label: 'Reps Activos', value: (data.reps||[]).filter(r => (r.total_visits||0) > 0).length },
     ];
     document.getElementById('reporting-kpis').innerHTML = extKpis.map(c => `
       <div class="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
@@ -1329,24 +1331,24 @@ async function loadReporting() {
       </div>`).join('');
 
     const coverage = data.coverage || [];
-    document.getElementById('coverage-list').innerHTML = coverage.length ? coverage.map(c => `
+    document.getElementById('coverage-list').innerHTML = coverage.length ? coverage.map(c => /* municipio */ `
       <div class="bg-white border border-slate-100 p-2.5 rounded-lg shadow-sm flex justify-between items-center">
         <span class="text-sm font-medium text-slate-700">${esc(c.municipality)}</span>
         <div class="flex items-center gap-3">
           <div class="w-20 bg-slate-100 rounded-full h-1.5"><div class="bg-[#1b365d] h-1.5 rounded-full" style="width:${c.visit_pct||0}%"></div></div>
           <span class="text-xs text-slate-500 w-16 text-right">${c.visited||0}/${c.total||0}</span>
         </div>
-      </div>`).join('') : '<p class="text-xs text-slate-400">No coverage data.</p>';
+      </div>`).join('') : '<p class="text-xs text-slate-400">Sin datos de cobertura.</p>';
 
     const reps = data.reps || [];
     document.getElementById('rep-productivity-list').innerHTML = reps.length ? reps.map(r => `
       <div class="bg-white border border-slate-100 p-2.5 rounded-lg shadow-sm flex justify-between items-center">
         <span class="text-sm font-medium text-slate-700">${esc(r.rep_name)}</span>
         <div class="text-right">
-          <span class="text-xs text-slate-600">${r.total_visits||0} visits</span>
-          <span class="text-xs text-emerald-600 ml-2">${r.interested_count||0} hits</span>
+          <span class="text-xs text-slate-600">${r.total_visits||0} visitas</span>
+          <span class="text-xs text-emerald-600 ml-2">${r.interested_count||0} interesados</span>
         </div>
-      </div>`).join('') : '<p class="text-xs text-slate-400">No rep data.</p>';
+      </div>`).join('') : '<p class="text-xs text-slate-400">Sin datos de representantes.</p>';
 
     try {
       const assignments = await API.get('/reporting/assignments');
@@ -1357,8 +1359,8 @@ async function loadReporting() {
             <span class="badge ${badgeColor(a.assignment_status)}">${a.assignment_status}</span>
           </div>
           <div class="w-full bg-slate-100 rounded-full h-1.5"><div class="bg-[#1b365d] h-1.5 rounded-full" style="width:${a.completion_pct||0}%"></div></div>
-          <p class="text-[10px] text-slate-400 mt-1">${a.rep_name||'Unassigned'} | ${a.completed_stops||0}/${a.total_stops||0}</p>
-        </div>`).join('') : '<p class="text-xs text-slate-400">No assignments.</p>';
+          <p class="text-[10px] text-slate-400 mt-1">${a.rep_name||'Sin asignar'} | ${a.completed_stops||0}/${a.total_stops||0}</p>
+        </div>`).join('') : '<p class="text-xs text-slate-400">Sin asignaciones.</p>';
     } catch {}
   } catch {}
 }
@@ -1375,7 +1377,7 @@ async function loadAudit() {
           <p class="text-xs text-slate-500 mt-0.5">${esc(e.user_name||'System')} | ${e.entity_type ? e.entity_type + ' ' + (e.entity_id||'') : ''}</p>
           <p class="text-[10px] text-slate-400 mt-0.5">${new Date(e.created_at).toLocaleString()}</p>
         </div>
-      </div>`).join('') : '<p class="text-sm text-slate-400">No activity recorded.</p>';
+      </div>`).join('') : '<p class="text-sm text-slate-400">Sin actividad registrada.</p>';
   } catch {}
 }
 
@@ -1388,7 +1390,7 @@ async function impersonateUser(targetUserId) {
     localStorage.setItem('marzam_impersonating', '1');
     const dest = result.user.role === 'field_rep' ? '/rep.html' : '/manager.html';
     location.href = dest;
-  } catch (err) { showToast(err.error || 'Impersonation failed', 'error'); }
+  } catch (err) { showToast(err.error || 'Error al cambiar de usuario', 'error'); }
 }
 
 async function stopImpersonation() {
@@ -1423,26 +1425,26 @@ async function batchResolveReview(decision) {
   if (!ids.length) return;
   try {
     await API.post('/review/batch-resolve', { ids, decision });
-    showToast(`${ids.length} items ${decision}`, 'success');
+    showToast(`${ids.length} elementos ${decision === 'approved' ? 'aprobados' : 'rechazados'}`, 'success');
     loadReviewList();
     loadReviewBadge();
     loadReviewMarkers();
-  } catch (err) { showToast(err.error || 'Batch operation failed', 'error'); }
+  } catch (err) { showToast(err.error || 'Operación por lote falló', 'error'); }
 }
 
 /* ─── Lead Lifecycle ───────────────────────────────────────────── */
 async function advanceLead(leadId, newStatus) {
   try {
     await API.patch(`/commercial-leads/${leadId}`, { status: newStatus });
-    showToast(`Lead updated to ${newStatus.replace(/_/g, ' ')}`, 'success');
-  } catch (err) { showToast(err.error || 'Failed to update lead', 'error'); }
+    showToast(`Oportunidad actualizada a ${newStatus.replace(/_/g, ' ')}`, 'success');
+  } catch (err) { showToast(err.error || 'Error al actualizar oportunidad', 'error'); }
 }
 
 /* ─── Export ────────────────────────────────────────────────────── */
 async function exportData(format) {
   if (DEMO.active) {
     const rows = DEMO.STORE.pharmacies;
-    if (!rows.length) { showToast('No data to export', 'error'); return; }
+    if (!rows.length) { showToast('No hay datos para exportar', 'error'); return; }
     const headers = ['name','address','municipality','status','contact_person','contact_phone','last_visit_outcome','potential_score','order_potential','source','verification_status'];
     const csv = [headers.join(','), ...rows.map(r => headers.map(h => `"${(r[h]||'').toString().replace(/"/g,'""')}"`).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -1450,7 +1452,7 @@ async function exportData(format) {
     a.href = URL.createObjectURL(blob);
     a.download = 'marzam_pharmacies_enriched.csv';
     a.click();
-    showToast('Exported enriched CSV', 'success');
+    showToast('CSV exportado', 'success');
     return;
   }
   try {
@@ -1463,8 +1465,8 @@ async function exportData(format) {
     if (status) qs.set('status', status);
     const ext = fmt === 'xlsx' ? 'xlsx' : 'csv';
     await API.download(`/reporting/export/pharmacies?${qs}`, `pharmacies_export.${ext}`);
-    showToast(`Exported ${ext.toUpperCase()}`, 'success');
+    showToast(`Exportado ${ext.toUpperCase()}`, 'success');
   } catch (err) {
-    showToast(err.error || 'Export failed', 'error');
+    showToast(err.error || 'Error al exportar', 'error');
   }
 }
