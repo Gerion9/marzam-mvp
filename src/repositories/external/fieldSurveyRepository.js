@@ -196,8 +196,18 @@ async function insertEvents(events) {
   return events;
 }
 
+async function cancelByRepNamePattern(pattern) {
+  const db = getExternalDatabase();
+  const result = await db.raw(
+    `UPDATE ${config.externalData.fieldSurveyTable} SET ${FLEX.assignmentStatus} = 'cancelled', updated_at = NOW() WHERE ${FLEX.repName} LIKE ? AND ${FLEX.assignmentStatus} != 'cancelled' RETURNING id`,
+    [pattern],
+  );
+  return (result.rows || []).length;
+}
+
 module.exports = {
   listHistory,
   listCurrentState,
   insertEvents,
+  cancelByRepNamePattern,
 };

@@ -937,6 +937,23 @@ async function submitAssignForm() {
   } catch (err) { showToast(err.error || 'Error al crear asignación', 'error'); }
 }
 
+async function resetAllAssignments() {
+  if (!confirm('¿Estás seguro? Esto eliminará TODAS las asignaciones y visitas del piloto. Los reps perderán sus rutas actuales.')) return;
+  const summary = document.getElementById('wave-summary');
+  try {
+    summary.textContent = 'Eliminando asignaciones...';
+    const result = await API.post('/assignments/reset', {});
+    summary.textContent = result.message || `${result.deleted} asignaciones eliminadas.`;
+    showToast(result.message || 'Asignaciones eliminadas', 'success');
+    document.getElementById('wave-preview-result')?.classList.add('hidden');
+    loadAssignments();
+    loadKPIs();
+  } catch (err) {
+    summary.textContent = err.error || 'Error al desasignar.';
+    showToast(err.error || 'Error al desasignar', 'error');
+  }
+}
+
 async function previewWaveDistribution() {
   const summary = document.getElementById('wave-summary');
   const previewEl = document.getElementById('wave-preview-result');

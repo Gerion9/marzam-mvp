@@ -70,4 +70,11 @@ router.post(
   controller.checkOverlap,
 );
 
+router.post(
+  '/reset',
+  authenticate,
+  authorize('manager'),
+  controller.resetAll,
+);
+
 module.exports = router;

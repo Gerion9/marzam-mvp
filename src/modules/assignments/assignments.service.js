@@ -33,6 +33,7 @@ async function listExternalCurrentAssignments(filters = {}) {
   const grouped = new Map();
 
   for (const row of currentRows) {
+    if (row.assignment_status === 'cancelled') continue;
     if (filters.status && row.assignment_status !== filters.status) continue;
     const groupId = row.assignment_id || buildAssignmentId({ wave_id: row.wave_id, rep_id: row.rep_id });
     if (!grouped.has(groupId)) {
@@ -654,6 +655,17 @@ async function distributeWave({
   });
 }
 
+async function resetAllAssignments() {
+  if (!isExternalDataMode()) {
+    const err = new Error('Reset is only available in external data mode');
+    err.status = 501;
+    throw err;
+  }
+
+  const cancelled = await externalFieldSurveyRepository.cancelByRepNamePattern('Pilot Rep%');
+  return { cancelled, message: `${cancelled} asignaciones desasignadas` };
+}
+
 module.exports = {
   create,
   list,
@@ -662,4 +674,5 @@ module.exports = {
   checkOverlap,
   reassign,
   distributeWave,
+  resetAllAssignments,
 };

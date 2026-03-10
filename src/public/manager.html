@@ -184,8 +184,8 @@
               <input id="wave-id" class="form-input" placeholder="ecatepec-oleada-2026-03-05">
             </div>
             <div class="form-field">
-              <label class="form-label">Municipio</label>
-              <input id="wave-municipality" class="form-input" value="Ecatepec de Morelos">
+              <label class="form-label">Municipio (opcional)</label>
+              <input id="wave-municipality" class="form-input" placeholder="Dejar vacío para incluir todos">
             </div>
             <div class="form-field">
               <label class="form-label">Objetivo</label>
@@ -213,6 +213,7 @@
           <div class="flex items-center justify-between gap-3 mt-3">
             <p id="wave-summary" class="text-xs text-slate-500">Usa todos los representantes activos por defecto.</p>
             <div class="flex gap-2">
+              <button onclick="resetAllAssignments()" class="btn btn-ghost border border-rose-200 text-rose-600 text-sm py-2 px-4">Desasignar Todo</button>
               <button onclick="previewWaveDistribution()" class="btn btn-ghost border border-slate-200 text-sm py-2 px-4">Vista Previa</button>
               <button id="btn-wave-distribute" onclick="submitWaveDistribution()" class="btn btn-primary text-sm py-2 px-4">Distribuir</button>
             </div>

@@ -96,6 +96,15 @@ async function distributeWave(req, res, next) {
   }
 }
 
+async function resetAll(req, res, next) {
+  try {
+    const result = await assignmentService.resetAllAssignments();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   create,
   list,
@@ -104,4 +113,5 @@ module.exports = {
   checkOverlap,
   reassign,
   distributeWave,
+  resetAll,
 };
