@@ -220,12 +220,32 @@ async function loadAssignments() {
       list = await API.get('/assignments');
     }
 
-    list.filter(a => a.status !== 'completed').forEach(a => {
+    const pending = list.filter(a => a.status !== 'completed');
+    const completed = list.filter(a => a.status === 'completed');
+
+    pending.forEach(a => {
       const opt = document.createElement('option');
       opt.value = a.id;
       opt.textContent = `${a.campaign_objective} — ${a.status} (${a.completed_stops || 0}/${a.total_stops || a.pharmacy_count || 0})`;
       sel.appendChild(opt);
     });
+
+    if (completed.length) {
+      const group = document.createElement('optgroup');
+      group.label = 'Completadas';
+      completed.forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = `${a.campaign_objective} (${a.completed_stops || 0}/${a.total_stops || a.pharmacy_count || 0})`;
+        group.appendChild(opt);
+      });
+      sel.appendChild(group);
+    }
+
+    if (pending.length === 1) {
+      sel.value = pending[0].id;
+      await onAssignmentChange();
+    }
   } catch {}
 }
 
