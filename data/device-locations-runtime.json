@@ -1,0 +1,22 @@
+[
+  {
+    "rep_id": "rep001",
+    "rep_name": "Pilot Rep 001",
+    "assignment_id": "smoke-1773104404957::rep001",
+    "verification_id": null,
+    "lat": 19.5916,
+    "lng": -99.0315,
+    "accuracy_meters": 5,
+    "recorded_at": "2026-03-10T01:00:05.189Z"
+  },
+  {
+    "rep_id": "rep001",
+    "rep_name": "Pilot Rep 001",
+    "assignment_id": "smoke-1773104542375::rep001",
+    "verification_id": null,
+    "lat": 19.5916,
+    "lng": -99.0315,
+    "accuracy_meters": 5,
+    "recorded_at": "2026-03-10T01:02:22.616Z"
+  }
+]

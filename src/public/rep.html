@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Marzam — Field Rep</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="h-screen w-screen overflow-hidden bg-slate-50">
+
+  <!-- DEMO BANNER -->
+  <div id="demo-banner" class="hidden absolute top-0 left-0 right-0 z-[9999] bg-gradient-to-r from-violet-600 to-blue-600 text-white text-center text-[11px] font-bold py-1 tracking-wide">
+    Demo Mode — Synthetic Data (No Database)
+  </div>
+
+  <div id="map" class="absolute inset-0 z-0"></div>
+
+  <!-- ROUTE STRIP -->
+  <div id="route-strip" class="absolute top-4 left-4 right-4 z-50 flex items-center justify-between bg-white/95 backdrop-blur-md shadow-lg shadow-slate-200/50 rounded-2xl px-4 py-3 border border-slate-100 transition-transform hidden">
+    <div class="flex items-center gap-3">
+      <span id="strip-progress" class="bg-[#1b365d] text-white font-bold text-xs px-2 py-1 rounded-md"></span>
+      <span id="strip-objective" class="text-slate-800 font-bold text-sm"></span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="btn-tracking" class="text-[10px] font-bold uppercase tracking-wide bg-slate-100 text-slate-500 px-2 py-1 rounded-md">GPS Off</button>
+      <a id="btn-gmaps" href="#" target="_blank" class="text-[10px] font-bold uppercase tracking-wide bg-blue-50 text-blue-600 px-2 py-1 rounded-md">Google Maps</a>
+    </div>
+  </div>
+
+  <!-- HEADER BAR -->
+  <div id="header-bar" class="absolute top-4 left-4 right-4 z-50 flex items-center justify-between bg-white/95 backdrop-blur-md shadow-lg shadow-slate-200/50 rounded-2xl px-4 py-3 border border-slate-100 transition-transform">
+    <div class="flex items-center gap-3">
+      <img src="/images/logo_marzam.svg" alt="Marzam" class="h-6 w-auto select-none">
+      <span id="rep-name" class="text-slate-500 font-medium text-xs"></span>
+    </div>
+    <button id="btn-logout" class="text-rose-600 text-xs font-bold uppercase tracking-wide">Logout</button>
+  </div>
+
+  <!-- SNAP BOTTOM SHEET -->
+  <div id="main-sheet" class="snap-sheet glass" data-snap="peek">
+    <div class="sheet-handle" id="sheet-handle"></div>
+    <div class="px-4 pb-3 border-b border-slate-200/50">
+      <select id="sel-assignment" class="form-input form-select text-sm">
+        <option value="">Select assignment...</option>
+      </select>
+    </div>
+    <div id="stop-list" class="flex-1 overflow-y-auto px-4 py-3">
+      <p id="stop-empty" class="text-center text-slate-400 text-sm py-6">Select an assignment to start your route.</p>
+    </div>
+  </div>
+
+  <!-- VISIT BOTTOM SHEET -->
+  <div id="visit-sheet" class="snap-sheet glass" data-snap="hidden" style="z-index:calc(var(--z-sheet, 40) + 1)">
+    <div class="sheet-handle"></div>
+    <div class="px-4 pt-1 pb-2 flex items-center justify-between border-b border-slate-200/50">
+      <h3 class="font-semibold">Visit Report</h3>
+      <button onclick="closeVisitSheet()" class="btn btn-ghost text-slate-400 p-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="px-4 py-3 overflow-y-auto" style="max-height:70vh">
+      <p id="visit-pharmacy-name" class="text-sm text-slate-500 mb-3"></p>
+      <form id="visit-form" class="space-y-3">
+        <input type="hidden" id="v-pharmacy-id">
+        <input type="hidden" id="v-stop-id">
+
+        <div class="form-field"><label class="form-label">Outcome *</label>
+          <select id="v-outcome" required class="form-input form-select">
+            <option value="">Select...</option>
+            <option value="visited">Visited</option>
+            <option value="contact_made">Contact Made</option>
+            <option value="interested">Interested</option>
+            <option value="not_interested">Not Interested</option>
+            <option value="needs_follow_up">Needs Follow-up</option>
+            <option value="closed">Closed</option>
+            <option value="invalid">Invalid</option>
+            <option value="duplicate">Duplicate</option>
+            <option value="moved">Moved</option>
+            <option value="wrong_category">Wrong Category</option>
+            <option value="chain_not_independent">Chain / Not Independent</option>
+          </select></div>
+
+        <div class="form-field"><label class="form-label">Notes *</label>
+          <textarea id="v-notes" required rows="2" class="form-input" placeholder="Observations..."></textarea></div>
+
+        <div class="form-field"><label class="form-label">Order Potential ($)</label>
+          <input id="v-potential" type="number" step="0.01" class="form-input" placeholder="Estimated demand"></div>
+
+        <div class="form-field"><label class="form-label">Competitor Products</label>
+          <input id="v-competitors" type="text" class="form-input" placeholder="Brands seen on shelves"></div>
+
+        <div class="form-field"><label class="form-label">Stock Observations</label>
+          <input id="v-stock" type="text" class="form-input" placeholder="Stock levels, shelf space..."></div>
+
+        <div id="v-followup-fields" class="hidden space-y-3">
+          <div class="form-field"><label class="form-label">Follow-up Date *</label><input id="v-followup-date" type="date" class="form-input"></div>
+          <div class="form-field"><label class="form-label">Follow-up Reason *</label><input id="v-followup-reason" type="text" class="form-input"></div>
+        </div>
+        <div id="v-flag-fields" class="hidden">
+          <div class="form-field"><label class="form-label">Flag Reason *</label><input id="v-flag-reason" type="text" class="form-input" placeholder="Describe issue..."></div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="form-field"><label class="form-label">Contact</label><input id="v-contact" type="text" class="form-input"></div>
+          <div class="form-field"><label class="form-label">Phone</label><input id="v-phone" type="tel" class="form-input"></div>
+        </div>
+
+        <div class="form-field"><label class="form-label">Photo Evidence *</label>
+          <input id="v-photo" type="file" accept="image/*" capture="environment" required class="form-input" style="padding:8px"></div>
+
+        <button type="submit" id="btn-submit-visit" class="btn btn-primary w-full py-2.5">Submit Visit</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- SKIP STOP SHEET -->
+  <div id="skip-sheet" class="snap-sheet glass" data-snap="hidden" style="z-index:calc(var(--z-sheet, 40) + 1)">
+    <div class="sheet-handle"></div>
+    <div class="px-4 pt-1 pb-2 flex items-center justify-between border-b border-slate-200/50">
+      <h3 class="font-semibold">Skip Stop</h3>
+      <button onclick="closeSkipSheet()" class="btn btn-ghost text-slate-400 p-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="px-4 py-3">
+      <p id="skip-pharmacy-name" class="text-sm text-slate-500 mb-3"></p>
+      <form id="skip-form" class="space-y-3">
+        <input type="hidden" id="skip-stop-id">
+        <input type="hidden" id="skip-pharmacy-id">
+        <div class="form-field"><label class="form-label">Reason for skipping *</label>
+          <select id="skip-reason" required class="form-input form-select">
+            <option value="">Select reason...</option>
+            <option value="closed">Closed/Shut</option>
+            <option value="inaccessible">Cannot access location</option>
+            <option value="safety">Safety concern</option>
+            <option value="other">Other</option>
+          </select></div>
+        <div class="form-field"><label class="form-label">Notes</label>
+          <textarea id="skip-notes" rows="2" class="form-input" placeholder="Details..."></textarea></div>
+        <div class="form-field"><label class="form-label">Photo Evidence</label>
+          <input id="skip-photo" type="file" accept="image/*" capture="environment" class="form-input" style="padding:8px"></div>
+        <button type="submit" class="btn btn-danger w-full py-2.5">Confirm Skip</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- NEW PHARMACY SHEET -->
+  <div id="new-pharmacy-sheet" class="snap-sheet glass" data-snap="hidden" style="z-index:calc(var(--z-sheet, 40) + 1)">
+    <div class="sheet-handle"></div>
+    <div class="px-4 pt-1 pb-2 flex items-center justify-between border-b border-slate-200/50">
+      <h3 class="font-semibold">New Pharmacy</h3>
+      <button onclick="closeNewSheet()" class="btn btn-ghost text-slate-400 p-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="px-4 py-3">
+      <form id="new-pharmacy-form" class="space-y-3">
+        <div class="form-field"><label class="form-label">Name *</label><input id="np-name" required class="form-input"></div>
+        <div class="form-field"><label class="form-label">Address</label><input id="np-address" class="form-input"></div>
+        <div class="form-field"><label class="form-label">Contact Person</label><input id="np-contact" class="form-input"></div>
+        <div class="form-field"><label class="form-label">Phone</label><input id="np-phone" type="tel" class="form-input"></div>
+        <div class="form-field"><label class="form-label">Type</label>
+          <select id="np-independent" class="form-input form-select">
+            <option value="true">Independent</option>
+            <option value="false">Chain</option>
+          </select></div>
+        <div class="form-field"><label class="form-label">Photo *</label>
+          <input id="np-photo" type="file" accept="image/*" capture="environment" required class="form-input" style="padding:8px"></div>
+        <div class="form-field"><label class="form-label">Notes</label><textarea id="np-notes" rows="2" class="form-input"></textarea></div>
+        <p class="text-xs text-slate-400">Location captured automatically from GPS.</p>
+        <button type="submit" class="btn btn-success w-full py-2.5">Submit for Review</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- FAB -->
+  <button id="fab-new" onclick="openNewSheet()" class="fab bg-[#e5730a] hover:bg-[#c96205] text-white" style="bottom:160px;right:16px" title="Add Pharmacy">
+    <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14m-7-7h14"/></svg>
+  </button>
+
+  <script src="/js/api.js?v=ecatepec-1"></script>
+  <script src="/js/demo.js?v=ecatepec-1"></script>
+  <script src="/js/rep.js?v=ecatepec-1"></script>
+</body>
+</html>

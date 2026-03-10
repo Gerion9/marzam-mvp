@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Marzam — Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
+
+  <!-- DEMO BANNER -->
+  <div id="demo-banner" class="hidden absolute top-0 left-0 right-0 z-[9999] bg-gradient-to-r from-violet-600 to-blue-600 text-white text-center text-[11px] font-bold py-1 tracking-wide">
+    Demo Mode — Synthetic Data (No Database)
+  </div>
+
+  <!-- FULL-VIEWPORT MAP -->
+  <div id="map" class="absolute inset-0 z-0"></div>
+
+  <!-- FLOATING TOP BAR -->
+  <div id="top-bar" class="absolute top-4 left-4 right-4 md:left-[104px] md:w-[460px] xl:w-[500px] z-[45] flex items-center gap-3 transition-all duration-500 ease-spring">
+    <div class="flex-1 bg-white/90 backdrop-blur-xl shadow-xl shadow-slate-200/50 rounded-2xl flex items-center px-4 py-3 border border-white/60 ring-1 ring-slate-200/50">
+      <img src="/images/logo_marzam.svg" alt="Marzam" class="h-6 w-auto mr-4 select-none">
+      <svg class="w-4 h-4 text-slate-400 mr-2 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="search-input" type="text" class="bg-transparent w-full outline-none text-sm placeholder-slate-400" placeholder="Search pharmacies..." autocomplete="off">
+    </div>
+    <div class="relative group">
+      <button class="w-12 h-12 bg-white/90 backdrop-blur-xl shadow-xl shadow-slate-200/50 rounded-full flex items-center justify-center border border-white/60 ring-1 ring-slate-200/50 flex-shrink-0 text-slate-700 hover:text-[#e5730a] hover:scale-105 transition-all duration-300">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </button>
+      <div class="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 py-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
+        <div class="px-4 py-2 border-b border-slate-100 mb-1">
+          <p id="user-label" class="text-sm font-semibold text-slate-800 truncate"></p>
+        </div>
+        <button id="btn-logout" class="w-full text-left px-4 py-2 text-sm text-rose-600 hover:bg-slate-50">Logout</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FIXED TOGGLE BUTTON (DESKTOP) -->
+  <button id="btn-open-panel" onclick="togglePanel()" class="hidden md:flex fixed top-28 left-[84px] z-[30] w-10 h-14 bg-white/95 backdrop-blur-md shadow-lg shadow-slate-200/50 border border-slate-200 border-l-0 rounded-r-2xl items-center justify-center text-slate-500 hover:text-[#e5730a] transition-all duration-500 ease-spring -translate-x-[150%]">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+  </button>
+
+  <!-- NAVIGATION DOCK (SIDEBAR ON DESKTOP, BOTTOM BAR ON MOBILE) -->
+  <nav id="side-nav" class="absolute z-[60] bg-white/90 backdrop-blur-3xl shadow-2xl transition-all duration-500 ease-spring border border-white/40 ring-1 ring-slate-200/50 flex
+       md:flex-col md:top-24 md:left-6 md:bottom-8 md:w-[68px] md:hover:w-[200px] md:rounded-3xl md:py-4 md:px-2 md:gap-1 group/sidebar overflow-hidden
+       max-md:bottom-4 max-md:left-4 max-md:right-4 max-md:h-[72px] max-md:rounded-2xl max-md:flex-row max-md:justify-around max-md:items-center max-md:px-2">
+    
+    <div class="hidden md:flex items-center px-1 mb-4 flex-shrink-0">
+       <div class="w-10 h-10 rounded-[12px] bg-gradient-to-br from-[#e5730a] to-orange-400 flex items-center justify-center flex-shrink-0 shadow-md shadow-[#e5730a]/20">
+          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+       </div>
+       <span class="ml-3 font-black text-lg text-slate-800 opacity-0 w-0 overflow-hidden group-hover/sidebar:opacity-100 group-hover/sidebar:w-[120px] transition-all duration-300 whitespace-nowrap tracking-tight">Manager</span>
+    </div>
+
+    <button class="nav-tab active" data-tab="pharmacies">
+      <div class="nav-icon-box">
+        <svg class="w-[20px] h-[20px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      </div>
+      <div class="tab-text-wrapper"><span class="tab-text-inner">Pharmacies</span></div>
+    </button>
+    <button class="nav-tab" data-tab="assignments">
+      <div class="nav-icon-box">
+        <svg class="w-[20px] h-[20px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M9 20l-5-3V4l5 3 5-3 5 3v13l-5-3-5 3z"/><path d="M9 4v13"/><path d="M14 7v13"/></svg>
+      </div>
+      <div class="tab-text-wrapper"><span class="tab-text-inner">Assignments</span></div>
+    </button>
+    <button class="nav-tab" data-tab="review">
+      <div class="nav-icon-box relative">
+        <svg class="w-[20px] h-[20px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>
+        <span id="review-badge" class="absolute -top-1.5 -right-1.5 px-1.5 py-[2px] bg-rose-500 text-white rounded-full text-[9px] font-bold hidden shadow-sm border-[1.5px] border-white leading-none z-10">0</span>
+      </div>
+      <div class="tab-text-wrapper"><span class="tab-text-inner">Review</span></div>
+    </button>
+    <button class="nav-tab" data-tab="reps">
+      <div class="nav-icon-box">
+        <svg class="w-[20px] h-[20px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </div>
+      <div class="tab-text-wrapper"><span class="tab-text-inner">Reps</span></div>
+    </button>
+    
+    <div class="hidden md:block flex-1"></div> <!-- Spacer -->
+    <div class="hidden md:block w-8 h-px bg-slate-200/80 my-1 mx-auto group-hover/sidebar:w-[80%] transition-all duration-300"></div>
+
+    <button class="nav-tab" data-tab="reporting">
+      <div class="nav-icon-box">
+        <svg class="w-[20px] h-[20px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/></svg>
+      </div>
+      <div class="tab-text-wrapper"><span class="tab-text-inner">Reporting</span></div>
+    </button>
+    <button class="nav-tab" data-tab="audit">
+      <div class="nav-icon-box">
+        <svg class="w-[20px] h-[20px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      </div>
+      <div class="tab-text-wrapper"><span class="tab-text-inner">Activity</span></div>
+    </button>
+  </nav>
+
+  <!-- MAIN PANEL -->
+  <div id="main-panel" class="absolute z-40 bg-white/95 backdrop-blur-3xl shadow-2xl flex flex-col transition-all duration-500 ease-spring
+       md:translate-y-0 md:top-24 md:left-[104px] md:bottom-8 md:w-[460px] xl:w-[500px] md:h-[calc(100vh-8rem)] md:rounded-3xl border border-white/40 ring-1 ring-slate-200/50
+       bottom-0 left-0 right-0 max-md:h-[calc(100vh-90px)] rounded-t-3xl max-md:pb-[88px] max-md:translate-y-[45vh]">
+    
+    <!-- Desktop Collapse Button -->
+    <button id="btn-collapse-panel" onclick="togglePanel()" class="hidden md:flex absolute top-6 -right-5 w-10 h-10 bg-white shadow-lg border border-slate-100 rounded-full items-center justify-center text-slate-500 hover:text-[#e5730a] z-50 transition-all hover:scale-110">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></svg>
+    </button>
+    
+    <div id="panel-handle" class="w-full flex justify-center py-4 md:hidden cursor-grab active:cursor-grabbing touch-none select-none">
+      <div class="w-12 h-1.5 bg-slate-300 rounded-full pointer-events-none"></div>
+    </div>
+
+    <!-- CONTENT AREA -->
+    <div class="flex-1 overflow-y-auto relative no-scrollbar bg-slate-50/50 p-4 max-md:pb-24">
+      
+      <!-- Pharmacies Tab -->
+      <div id="tab-pharmacies" class="tab-content">
+        <div id="kpi-grid" class="grid grid-cols-2 gap-3 mb-5"></div>
+
+        <!-- Advanced Filters -->
+        <div id="filters-bar" class="flex flex-wrap gap-2 mb-4">
+          <select id="filter-status" class="custom-select-raw">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="pending_review">Pending Review</option>
+            <option value="closed">Closed</option>
+          </select>
+          <select id="filter-municipality" class="custom-select-raw">
+            <option value="">All municipalities</option>
+          </select>
+          <select id="filter-outcome" class="custom-select-raw">
+            <option value="">All outcomes</option>
+            <option value="interested">Interested</option>
+            <option value="contact_made">Contact Made</option>
+            <option value="needs_follow_up">Follow-up</option>
+            <option value="not_interested">Not Interested</option>
+            <option value="visited">Visited</option>
+          </select>
+          <select id="filter-contact" class="custom-select-raw">
+            <option value="">Contact info</option>
+            <option value="true">Has contact</option>
+            <option value="false">No contact</option>
+          </select>
+          <select id="filter-sort" class="custom-select-raw">
+            <option value="name">Sort: Name</option>
+            <option value="potential_score">Sort: Potential</option>
+            <option value="last_visited_at">Sort: Last Visit</option>
+            <option value="municipality">Sort: Municipality</option>
+          </select>
+        </div>
+
+        <div class="flex justify-between items-center mb-3">
+          <div class="flex items-center gap-2">
+            <label class="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
+              <input type="checkbox" id="bulk-select-all" class="rounded border-slate-300">
+              Select all
+            </label>
+            <button id="btn-bulk-assign" class="hidden text-xs font-medium text-[#1b365d] hover:text-[#152845] transition px-2 py-1 bg-blue-50 rounded-md">Assign selected</button>
+          </div>
+          <div class="flex items-center gap-2">
+            <span id="pharmacy-count" class="text-xs text-slate-400"></span>
+            <button id="btn-export" class="text-xs font-medium text-[#1b365d] hover:text-[#152845] transition">Export</button>
+          </div>
+        </div>
+
+        <div id="pharmacy-list" class="space-y-2.5"></div>
+      </div>
+
+      <!-- Assignments Tab -->
+      <div id="tab-assignments" class="tab-content hidden">
+        <div class="flex gap-2 mb-5">
+          <button onclick="startAssignMode()" class="flex-1 bg-[#1b365d] hover:bg-[#152845] text-white font-medium text-sm py-2.5 rounded-xl shadow-sm transition flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 20l-5-3V4l5 3 5-3 5 3v13l-5-3-5 3z"/></svg>
+            Draw Area
+          </button>
+          <button onclick="startClickSelectMode()" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm py-2.5 rounded-xl shadow-sm transition flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4m10-10h-4M6 12H2"/></svg>
+            Select Points
+          </button>
+        </div>
+        <div class="bg-white border border-slate-200 p-4 rounded-xl shadow-sm mb-4">
+          <div class="flex items-start justify-between gap-3 mb-3">
+            <div>
+              <h4 class="font-bold text-sm text-slate-800">Auto Distribute Wave</h4>
+              <p class="text-xs text-slate-500 mt-1">Split active Ecatepec pharmacies evenly across active reps and create one assignment block per rep.</p>
+            </div>
+            <span class="badge badge-blue">50-rep pilot</span>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="form-field">
+              <label class="form-label">Wave ID</label>
+              <input id="wave-id" class="form-input" placeholder="ecatepec-wave-2026-03-05">
+            </div>
+            <div class="form-field">
+              <label class="form-label">Municipality</label>
+              <input id="wave-municipality" class="form-input" value="Ecatepec de Morelos">
+            </div>
+            <div class="form-field">
+              <label class="form-label">Objective</label>
+              <input id="wave-objective" class="form-input" value="Prospecting">
+            </div>
+            <div class="form-field">
+              <label class="form-label">Priority</label>
+              <select id="wave-priority" class="form-input form-select">
+                <option value="normal">Normal</option>
+                <option value="high" selected>High</option>
+                <option value="urgent">Urgent</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label class="form-label">Due Date</label>
+              <input id="wave-due-date" type="date" class="form-input">
+            </div>
+            <div class="form-field">
+              <label class="form-label">Max Pharmacies / Rep</label>
+              <input id="wave-max-per-rep" type="number" min="1" class="form-input" placeholder="Optional">
+            </div>
+          </div>
+          <div class="flex items-center justify-between gap-3 mt-3">
+            <p id="wave-summary" class="text-xs text-slate-500">Uses all active `field_rep` users by default.</p>
+            <button onclick="submitWaveDistribution()" class="btn btn-primary text-sm py-2 px-4">Auto Distribute Active Reps</button>
+          </div>
+        </div>
+        <div id="assignments-list" class="space-y-3"></div>
+      </div>
+
+      <!-- Review Tab -->
+      <div id="tab-review" class="tab-content hidden">
+        <p class="text-xs text-slate-500 mb-4">Pending locations requiring approval before syncing to main database.</p>
+        <div id="review-list" class="space-y-3"></div>
+      </div>
+
+      <!-- Reps Tab -->
+      <div id="tab-reps" class="tab-content hidden">
+        <div id="reps-list" class="space-y-3"></div>
+      </div>
+
+      <!-- Reporting Tab -->
+      <div id="tab-reporting" class="tab-content hidden">
+        <h3 class="text-sm font-bold text-slate-700 mb-4">Coverage & Productivity</h3>
+        <div id="reporting-kpis" class="grid grid-cols-2 gap-3 mb-5"></div>
+        <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Coverage by Municipality</h4>
+        <div id="coverage-list" class="space-y-2 mb-5"></div>
+        <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Rep Productivity</h4>
+        <div id="rep-productivity-list" class="space-y-2 mb-5"></div>
+        <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Assignment Progress</h4>
+        <div id="assignment-progress-list" class="space-y-2 mb-5"></div>
+        <div class="flex gap-2 pt-3 border-t border-slate-100">
+          <button onclick="exportData('csv')" class="flex-1 btn btn-sm btn-ghost border border-slate-200">Export CSV</button>
+          <button onclick="exportData('xlsx')" class="flex-1 btn btn-sm btn-ghost border border-slate-200">Export XLSX</button>
+        </div>
+      </div>
+
+      <!-- Audit/Activity Tab -->
+      <div id="tab-audit" class="tab-content hidden">
+        <h3 class="text-sm font-bold text-slate-700 mb-4">Activity Timeline</h3>
+        <div id="audit-list" class="space-y-2"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- INLINE ASSIGN DRAWING TOOLBAR -->
+  <div id="assign-toolbar" class="hidden absolute bottom-8 max-md:bottom-28 left-1/2 -translate-x-1/2 z-[70] bg-white/95 backdrop-blur-md shadow-2xl rounded-full px-5 py-3 border border-slate-200 flex items-center gap-4 animate-in w-[90vw] md:w-auto justify-center">
+    <div class="flex items-center gap-2">
+      <div class="w-2 h-2 rounded-full bg-[#e5730a] animate-pulse"></div>
+      <span class="text-sm font-medium text-slate-700">Click map to draw polygon. Dbl-click to finish.</span>
+    </div>
+    <div class="h-6 w-px bg-slate-200"></div>
+    <button onclick="cancelAssign()" class="text-sm font-semibold text-rose-600 hover:text-rose-700">Cancel</button>
+  </div>
+
+  <!-- CLICK SELECT TOOLBAR -->
+  <div id="click-select-toolbar" class="hidden absolute bottom-8 max-md:bottom-28 left-1/2 -translate-x-1/2 z-[70] bg-white/95 backdrop-blur-md shadow-2xl rounded-full px-5 py-3 border border-slate-200 flex items-center gap-4 animate-in w-[90vw] md:w-auto justify-center">
+    <div class="flex items-center gap-2">
+      <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+      <span class="text-sm font-medium text-slate-700">Click points to select. <span id="click-select-count" class="font-bold text-emerald-600">0</span> selected</span>
+    </div>
+    <div class="h-6 w-px bg-slate-200"></div>
+    <button onclick="finishClickSelect()" class="text-sm font-semibold text-emerald-600 hover:text-emerald-700 transition">Done</button>
+    <button onclick="cancelClickSelect()" class="text-sm font-semibold text-rose-600 hover:text-rose-700 transition">Cancel</button>
+  </div>
+
+  <!-- OVERLAP WARNING MODAL -->
+  <div id="overlap-modal" class="hidden fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm">
+    <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-sm mx-4 animate-in">
+      <h3 class="font-bold text-lg text-slate-800 mb-2">Territory Overlap Detected</h3>
+      <p class="text-sm text-slate-600 mb-1">The drawn area overlaps with <span id="overlap-count" class="font-bold text-amber-600">0</span> existing assignment(s).</p>
+      <p class="text-xs text-slate-400 mb-5">You can proceed, but pharmacies may appear in multiple campaigns.</p>
+      <div class="flex gap-2">
+        <button onclick="cancelOverlap()" class="flex-1 btn btn-ghost border border-slate-200 text-sm py-2">Cancel</button>
+        <button onclick="proceedAfterOverlap()" class="flex-1 btn btn-primary text-sm py-2">Proceed Anyway</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONTEXT DRAWER (Pharmacy Details) -->
+  <div id="context-drawer">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+      <h3 id="drawer-title" class="font-bold text-lg text-slate-800 truncate pr-4"></h3>
+      <button onclick="closeDrawer()" class="p-2 -mr-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="drawer-body" class="flex-1 overflow-y-auto p-6 bg-slate-50"></div>
+  </div>
+
+  <script src="/js/api.js?v=ecatepec-1"></script>
+  <script src="/js/demo.js?v=ecatepec-1"></script>
+  <script src="/js/manager.js?v=ecatepec-1"></script>
+</body>
+</html>
