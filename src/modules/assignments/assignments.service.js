@@ -1,6 +1,7 @@
 const db = require('../../config/database');
 const { assertTransition } = require('./assignments.stateMachine');
 const { orderStops } = require('../../utils/routeOrdering');
+const { balancedSpatialClusters, clusterStats } = require('../../utils/spatialDistribution');
 const { buildDirectionsUrl } = require('../../utils/googleMaps');
 const verificationService = require('../verifications/verifications.service');
 const externalPoiRepository = require('../../repositories/external/poiRepository');
@@ -230,6 +231,7 @@ async function distributeWaveExternal({
   created_by,
   wave_id,
   max_pharmacies_per_rep,
+  dry_run,
 }) {
   let targetRepIds = rep_ids;
   if (!Array.isArray(targetRepIds) || !targetRepIds.length) {
@@ -255,18 +257,33 @@ async function distributeWaveExternal({
     throw err;
   }
 
-  const ordered = orderStops(pharmacies);
-  const defaultChunkSize = Math.ceil(ordered.length / targetRepIds.length);
-  const chunkSize = Math.max(1, Number(max_pharmacies_per_rep) || defaultChunkSize);
-  const pharmacyChunks = chunkRows(ordered, chunkSize);
   const resolvedWaveId = wave_id || `ecatepec-wave-${new Date().toISOString().slice(0, 10)}`;
+  const k = Math.min(targetRepIds.length, pharmacies.length);
+  const clusters = balancedSpatialClusters(pharmacies, k);
+
+  if (dry_run) {
+    const stats = clusterStats(clusters);
+    return {
+      dry_run: true,
+      wave_id: resolvedWaveId,
+      rep_count: targetRepIds.length,
+      pharmacy_count: pharmacies.length,
+      clusters_created: clusters.length,
+      ...stats,
+      cluster_sizes: clusters.map((c, i) => ({
+        rep_id: targetRepIds[i % targetRepIds.length],
+        size: c.length,
+      })),
+    };
+  }
 
   const assignments = [];
-  for (let index = 0; index < pharmacyChunks.length; index += 1) {
-    const chunk = pharmacyChunks[index];
-    if (!chunk.length) continue;
+  for (let index = 0; index < clusters.length; index += 1) {
+    const cluster = clusters[index];
+    if (!cluster.length) continue;
+    const orderedStops = orderStops(cluster);
     const assignment = await createExternal({
-      pharmacy_ids: chunk.map((row) => row.id),
+      pharmacy_ids: orderedStops.map((row) => row.id),
       rep_id: targetRepIds[index % targetRepIds.length],
       campaign_objective,
       priority,
@@ -280,7 +297,7 @@ async function distributeWaveExternal({
   return {
     wave_id: resolvedWaveId,
     rep_count: targetRepIds.length,
-    pharmacy_count: ordered.length,
+    pharmacy_count: pharmacies.length,
     assignments_created: assignments.length,
     assignments,
   };
@@ -544,6 +561,7 @@ async function distributeWave({
   created_by,
   wave_id,
   max_pharmacies_per_rep,
+  dry_run,
 }) {
   if (isExternalDataMode()) {
     return distributeWaveExternal({
@@ -555,6 +573,7 @@ async function distributeWave({
       created_by,
       wave_id,
       max_pharmacies_per_rep,
+      dry_run,
     });
   }
 

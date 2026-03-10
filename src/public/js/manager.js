@@ -937,6 +937,39 @@ async function submitAssignForm() {
   } catch (err) { showToast(err.error || 'Error al crear asignación', 'error'); }
 }
 
+async function previewWaveDistribution() {
+  const summary = document.getElementById('wave-summary');
+  const previewEl = document.getElementById('wave-preview-result');
+  const payload = {
+    wave_id: document.getElementById('wave-id').value || undefined,
+    municipality: document.getElementById('wave-municipality').value || undefined,
+    campaign_objective: document.getElementById('wave-objective').value || 'Prospección',
+    priority: document.getElementById('wave-priority').value || 'high',
+    dry_run: true,
+  };
+
+  try {
+    summary.textContent = 'Calculando distribución...';
+    const result = await API.post('/assignments/distribute', payload);
+    const sizes = (result.cluster_sizes || []).map(c => c.size);
+    previewEl.innerHTML = `
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <div><span class="font-bold text-slate-800">Farmacias libres:</span> ${result.pharmacy_count}</div>
+        <div><span class="font-bold text-slate-800">Representantes:</span> ${result.rep_count}</div>
+        <div><span class="font-bold text-slate-800">Zonas creadas:</span> ${result.clusters_created}</div>
+        <div><span class="font-bold text-slate-800">Promedio/rep:</span> ${result.avg_size}</div>
+        <div><span class="font-bold text-slate-800">Mín/Máx:</span> ${result.min_size} / ${result.max_size}</div>
+        <div><span class="font-bold text-slate-800">Dispersión máx:</span> ${result.max_dispersion_km} km</div>
+      </div>
+      <p class="text-[10px] text-slate-400">Haz clic en "Distribuir" para confirmar y crear las asignaciones.</p>`;
+    previewEl.classList.remove('hidden');
+    summary.textContent = `Vista previa: ${result.pharmacy_count} farmacias en ${result.clusters_created} zonas.`;
+  } catch (err) {
+    summary.textContent = err.error || 'Error al calcular vista previa.';
+    previewEl.classList.add('hidden');
+  }
+}
+
 async function submitWaveDistribution() {
   const summary = document.getElementById('wave-summary');
   const payload = {

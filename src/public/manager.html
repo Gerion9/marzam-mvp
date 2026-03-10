@@ -209,9 +209,13 @@
               <input id="wave-max-per-rep" type="number" min="1" class="form-input" placeholder="Opcional">
             </div>
           </div>
+          <div id="wave-preview-result" class="hidden bg-slate-50 border border-slate-200 rounded-lg p-3 mt-3 text-xs text-slate-600"></div>
           <div class="flex items-center justify-between gap-3 mt-3">
             <p id="wave-summary" class="text-xs text-slate-500">Usa todos los representantes activos por defecto.</p>
-            <button onclick="submitWaveDistribution()" class="btn btn-primary text-sm py-2 px-4">Distribuir Automáticamente</button>
+            <div class="flex gap-2">
+              <button onclick="previewWaveDistribution()" class="btn btn-ghost border border-slate-200 text-sm py-2 px-4">Vista Previa</button>
+              <button id="btn-wave-distribute" onclick="submitWaveDistribution()" class="btn btn-primary text-sm py-2 px-4">Distribuir</button>
+            </div>
           </div>
         </div>
         <div id="assignments-list" class="space-y-3"></div>

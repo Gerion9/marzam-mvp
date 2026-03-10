@@ -34,6 +34,7 @@ router.post(
     due_date: { type: 'string' },
     wave_id: { type: 'string' },
     max_pharmacies_per_rep: { type: 'number' },
+    dry_run: { type: 'boolean' },
   }),
   auditLog('assignment.wave_created'),
   controller.distributeWave,
