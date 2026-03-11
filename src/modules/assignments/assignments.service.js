@@ -42,7 +42,7 @@ async function listExternalCurrentAssignments(filters = {}) {
         rep_id: row.rep_id,
         rep_name: row.rep_name || repNameMap.get(String(row.rep_id)) || null,
         wave_id: row.wave_id,
-        campaign_objective: row.campaign_objective || 'Prospecting',
+        campaign_objective: row.campaign_objective || 'Prospección',
         priority: row.priority || 'normal',
         due_date: row.due_at || null,
         status: row.assignment_status || 'assigned',

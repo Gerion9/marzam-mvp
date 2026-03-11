@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (impersonating) {
     const banner = document.getElementById('demo-banner');
-    banner.textContent = `Viendo como: ${user?.full_name || 'Desconocido'} (${user?.role}) — Haz clic para volver`;
+    banner.textContent = `Viendo como: ${user?.full_name || 'Desconocido'} (${statusEs(user?.role)}) — Haz clic para volver`;
     banner.classList.remove('hidden');
     banner.style.cursor = 'pointer';
     banner.onclick = () => stopImpersonation();
@@ -545,12 +545,12 @@ function renderPharmacyList() {
       <div class="flex-1 min-w-0">
         <div class="flex justify-between items-start mb-1.5">
           <h4 class="font-semibold text-sm text-slate-800 group-hover:text-blue-600 transition-colors truncate">${esc(r.name)}</h4>
-          <span class="badge ${badgeColor(r.status)} ml-2 flex-shrink-0">${r.status}</span>
+          <span class="badge ${badgeColor(r.status)} ml-2 flex-shrink-0">${statusEs(r.status)}</span>
         </div>
         <div class="flex justify-between items-center text-xs text-slate-500">
           <span>${esc(r.municipality || '')}</span>
           <div class="flex items-center gap-3">
-            ${r.last_visit_outcome ? `<span class="badge ${badgeColor(r.last_visit_outcome)}">${r.last_visit_outcome}</span>` : ''}
+            ${r.last_visit_outcome ? `<span class="badge ${badgeColor(r.last_visit_outcome)}">${statusEs(r.last_visit_outcome)}</span>` : ''}
             <span>Pot.: ${r.potential_score || r.order_potential || '—'}</span>
           </div>
         </div>
@@ -597,11 +597,11 @@ async function openPharmacyDrawer(id) {
           <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 mt-6">Oportunidades Comerciales</h4>
           ${leads.map(l => {
             const transitions = nextStatus[l.status] || [];
-            const btns = transitions.map(s => `<button onclick="advanceLead('${l.id}','${s}')" class="text-[10px] px-2 py-1 rounded-md font-bold ${s==='lost'?'bg-rose-50 text-rose-600':'bg-blue-50 text-blue-600'} hover:opacity-80">${s.replace(/_/g,' ')}</button>`).join('');
+            const btns = transitions.map(s => `<button onclick="advanceLead('${l.id}','${s}')" class="text-[10px] px-2 py-1 rounded-md font-bold ${s==='lost'?'bg-rose-50 text-rose-600':'bg-blue-50 text-blue-600'} hover:opacity-80">${statusEs(s)}</button>`).join('');
             return `
             <div class="bg-emerald-50 border border-emerald-200 p-3 rounded-xl mb-2">
               <div class="flex items-center justify-between mb-1">
-                <span class="badge badge-green">${l.status}</span>
+                <span class="badge badge-green">${statusEs(l.status)}</span>
                 <span class="text-xs text-slate-400">${l.created_at ? new Date(l.created_at).toLocaleDateString() : ''}</span>
               </div>
               <p class="text-sm font-bold text-emerald-700">$${num(l.potential_sales || 0)} potencial</p>
@@ -615,8 +615,8 @@ async function openPharmacyDrawer(id) {
     document.getElementById('drawer-title').textContent = p.name;
     document.getElementById('drawer-body').innerHTML = `
       <div class="mb-6">
-        <span class="badge ${badgeColor(p.status)} mb-2">${p.status}</span>
-        ${p.verification_status ? `<span class="badge ${p.verification_status === 'verified' ? 'badge-green' : 'badge-yellow'} ml-1">${p.verification_status}</span>` : ''}
+        <span class="badge ${badgeColor(p.status)} mb-2">${statusEs(p.status)}</span>
+        ${p.verification_status ? `<span class="badge ${p.verification_status === 'verified' ? 'badge-green' : 'badge-yellow'} ml-1">${statusEs(p.verification_status)}</span>` : ''}
         <p class="text-sm text-slate-600 mt-2">${esc(p.address || 'Sin dirección')}</p>
       </div>
 
@@ -638,7 +638,7 @@ async function openPharmacyDrawer(id) {
         <div class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
           <p class="text-[10px] text-slate-400 font-bold uppercase">Última Visita</p>
           <p class="text-sm font-medium text-slate-800 mt-0.5">${p.last_visited_at ? new Date(p.last_visited_at).toLocaleDateString() : '—'}</p>
-          ${p.last_visit_outcome ? `<span class="badge ${badgeColor(p.last_visit_outcome)} mt-0.5">${p.last_visit_outcome}</span>` : ''}
+          ${p.last_visit_outcome ? `<span class="badge ${badgeColor(p.last_visit_outcome)} mt-0.5">${statusEs(p.last_visit_outcome)}</span>` : ''}
         </div>
       </div>
 
@@ -650,9 +650,9 @@ async function openPharmacyDrawer(id) {
           <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
             <div class="flex items-center justify-between mb-2">
               <div class="flex items-center gap-1.5 flex-wrap">
-                <span class="badge ${badgeColor(v.visit_status)}">${v.visit_status}</span>
-                <span class="badge ${badgeColor(v.assignment_status)}">${v.assignment_status}</span>
-                ${v.regularization_status ? `<span class="badge ${v.regularization_status === 'verified' ? 'badge-green' : v.regularization_status === 'requires_follow_up' ? 'badge-yellow' : 'badge-red'}">${v.regularization_status}</span>` : ''}
+                <span class="badge ${badgeColor(v.visit_status)}">${statusEs(v.visit_status)}</span>
+                <span class="badge ${badgeColor(v.assignment_status)}">${statusEs(v.assignment_status)}</span>
+                ${v.regularization_status ? `<span class="badge ${v.regularization_status === 'verified' ? 'badge-green' : v.regularization_status === 'requires_follow_up' ? 'badge-yellow' : 'badge-red'}">${statusEs(v.regularization_status)}</span>` : ''}
               </div>
               <span class="text-xs text-slate-400">${new Date(v.visited_at || v.assigned_at || v.created_at).toLocaleDateString()}</span>
             </div>
@@ -781,15 +781,15 @@ function showAssignForm() {
           <option>Prospección</option><option>Seguimiento</option><option>Validación</option>
         </select></div>
         
-        <div><label class="block text-xs font-bold text-slate-400 mb-1">Assign to Rep</label>
+        <div><label class="block text-xs font-bold text-slate-400 mb-1">Asignar a Representante</label>
         <select id="f-rep" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm outline-none">
-          <option value="">Unassigned</option>${repsOptions}
+          <option value="">Sin asignar</option>${repsOptions}
         </select></div>
 
         <div class="grid grid-cols-2 gap-3">
           <div><label class="block text-xs font-bold text-slate-400 mb-1">Prioridad</label>
           <select id="f-priority" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm outline-none">
-            <option value="normal">Normal</option><option value="low">Low</option><option value="high">High</option><option value="urgent">Urgent</option>
+            <option value="normal">Normal</option><option value="low">Baja</option><option value="high">Alta</option><option value="urgent">Urgente</option>
           </select></div>
           <div><label class="block text-xs font-bold text-slate-400 mb-1">Fecha Límite</label>
           <input id="f-due" type="date" class="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm outline-none"></div>
@@ -1012,7 +1012,7 @@ async function submitWaveDistribution() {
   const payload = {
     wave_id: document.getElementById('wave-id').value || undefined,
     municipality: document.getElementById('wave-municipality').value || undefined,
-    campaign_objective: document.getElementById('wave-objective').value || 'Prospecting',
+    campaign_objective: document.getElementById('wave-objective').value || 'Prospección',
     priority: document.getElementById('wave-priority').value || 'high',
     due_date: document.getElementById('wave-due-date').value || undefined,
   };
@@ -1055,12 +1055,12 @@ async function loadAssignments() {
       <div class="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
         <div class="flex items-center justify-between mb-2">
           <h4 class="font-bold text-sm text-slate-800">${esc(a.campaign_objective)}</h4>
-          <span class="badge ${badgeColor(a.status)}">${a.status}</span>
+          <span class="badge ${badgeColor(a.status)}">${statusEs(a.status)}</span>
         </div>
         <div class="flex items-center justify-between text-xs text-slate-500 mb-3">
           <span>${esc(a.rep_name || 'Sin asignar')}</span>
           <div class="flex items-center gap-2">
-            ${a.priority && a.priority !== 'normal' ? `<span class="badge ${a.priority==='high'||a.priority==='urgent'?'badge-red':'badge-gray'}">${a.priority}</span>` : ''}
+            ${a.priority && a.priority !== 'normal' ? `<span class="badge ${a.priority==='high'||a.priority==='urgent'?'badge-red':'badge-gray'}">${statusEs(a.priority)}</span>` : ''}
             ${a.due_date ? `<span>Vence: ${new Date(a.due_date).toLocaleDateString()}</span>` : ''}
           </div>
         </div>
@@ -1100,7 +1100,7 @@ function onReviewMarkerClick(e) {
     .setLngLat(e.lngLat)
     .setHTML(`<div class="p-2 min-w-[200px]">
       <h4 class="font-bold text-sm text-slate-800 mb-1">${esc(p.name)}</h4>
-      <span class="badge badge-yellow mb-3">${p.flag_type}</span>
+      <span class="badge badge-yellow mb-3">${statusEs(p.flag_type)}</span>
       <div class="flex gap-2 mt-2">
         <button class="flex-1 btn btn-sm btn-success" onclick="resolveReview('${p.id}','approved')">Aprobar</button>
         <button class="flex-1 btn btn-sm btn-danger" onclick="resolveReview('${p.id}','rejected')">Rechazar</button>
@@ -1127,7 +1127,7 @@ async function loadReviewList() {
         <div class="flex items-start gap-2 mb-2">
           <input type="checkbox" class="rv-cb rounded border-slate-300 mt-0.5" data-id="${i.id}" onchange="toggleReviewItem('${i.id}',this.checked)">
           <div class="flex-1">
-            <span class="badge badge-yellow mb-1">${i.flag_type || 'Candidate'}</span>
+            <span class="badge badge-yellow mb-1">${statusEs(i.flag_type) || 'Candidato'}</span>
             <h4 class="font-semibold text-sm text-slate-800">${esc(i.pharmacy_name)}</h4>
             <p class="text-xs text-slate-500 mt-0.5">Por ${esc(i.rep_name||i.submitted_by_name||'Desconocido')}</p>
             ${i.reason ? `<p class="text-xs text-slate-400 mt-1 italic">"${esc(i.reason)}"</p>` : ''}
@@ -1305,7 +1305,7 @@ async function loadRepsList() {
         <div class="flex justify-between items-center mb-2">
           <div>
             <h4 class="font-bold text-sm text-slate-800">${esc(r.rep_name)}</h4>
-            <p class="text-xs text-slate-500 mt-0.5">${r.total_visits || 0} visits | ${r.unique_pharmacies_visited || 0} unique | ${r.assigned_total || 0} assigned</p>
+            <p class="text-xs text-slate-500 mt-0.5">${r.total_visits || 0} visitas | ${r.unique_pharmacies_visited || 0} únicas | ${r.assigned_total || 0} asignadas</p>
           </div>
           <div class="text-right">
             <p class="text-sm font-bold text-emerald-600">${r.interested_count || 0} Interesados</p>
@@ -1322,7 +1322,7 @@ async function loadRepsList() {
           <button onclick="loadBreadcrumbs('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-orange-50 text-orange-600 hover:bg-orange-100 px-2 py-1.5 rounded-lg transition">Recorrido</button>
           <button onclick="openRepEvidence('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-2 py-1.5 rounded-lg transition">Evidencia</button>
           <button onclick="exportRepRoute('${r.rep_id}','${esc(r.rep_name)}')" class="flex-1 text-[10px] font-bold bg-amber-50 text-amber-600 hover:bg-amber-100 px-2 py-1.5 rounded-lg transition">Excel</button>
-          <button onclick="impersonateUser('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-violet-50 text-violet-600 hover:bg-violet-100 px-2 py-1.5 rounded-lg transition">Ver como Rep</button>
+          <button onclick="impersonateUser('${r.rep_id}')" class="flex-1 text-[10px] font-bold bg-violet-50 text-violet-600 hover:bg-violet-100 px-2 py-1.5 rounded-lg transition">Ver como Representante</button>
         </div>
       </div>`).join('') : '<p class="text-sm text-slate-400">No hay representantes activos.</p>';
   } catch {}
@@ -1341,8 +1341,8 @@ async function openRepEvidence(repId) {
             <p class="text-[10px] text-slate-500 mt-0.5">${esc(item.municipality || '')}</p>
           </div>
           <div class="text-right">
-            <span class="badge ${badgeColor(item.visit_status)}">${item.visit_status}</span>
-            ${item.regularization_status ? `<div class="text-[10px] text-slate-400 mt-1">${item.regularization_status}</div>` : ''}
+            <span class="badge ${badgeColor(item.visit_status)}">${statusEs(item.visit_status)}</span>
+            ${item.regularization_status ? `<div class="text-[10px] text-slate-400 mt-1">${statusEs(item.regularization_status)}</div>` : ''}
           </div>
         </div>
         <p class="text-sm text-slate-600">${esc(item.comment || 'Sin comentarios.')}</p>
@@ -1427,7 +1427,7 @@ async function loadReporting() {
         <div class="bg-white border border-slate-100 p-2.5 rounded-lg shadow-sm">
           <div class="flex justify-between items-center mb-1">
             <span class="text-sm font-medium text-slate-700">${esc(a.campaign_objective)}</span>
-            <span class="badge ${badgeColor(a.assignment_status)}">${a.assignment_status}</span>
+            <span class="badge ${badgeColor(a.assignment_status)}">${statusEs(a.assignment_status)}</span>
           </div>
           <div class="w-full bg-slate-100 rounded-full h-1.5"><div class="bg-[#1b365d] h-1.5 rounded-full" style="width:${a.completion_pct||0}%"></div></div>
           <p class="text-[10px] text-slate-400 mt-1">${a.rep_name||'Sin asignar'} | ${a.completed_stops||0}/${a.total_stops||0}</p>
@@ -1507,7 +1507,7 @@ async function batchResolveReview(decision) {
 async function advanceLead(leadId, newStatus) {
   try {
     await API.patch(`/commercial-leads/${leadId}`, { status: newStatus });
-    showToast(`Oportunidad actualizada a ${newStatus.replace(/_/g, ' ')}`, 'success');
+    showToast(`Oportunidad actualizada a ${statusEs(newStatus)}`, 'success');
   } catch (err) { showToast(err.error || 'Error al actualizar oportunidad', 'error'); }
 }
 

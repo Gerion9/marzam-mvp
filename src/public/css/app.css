@@ -257,6 +257,73 @@ body {
 .fab:hover { transform: scale(1.05); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
 .fab:active { transform: scale(0.95); }
 
+/* ─── Segment Navigation ─────────────────────────────────────── */
+.seg-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  color: #475569;
+  flex-shrink: 0;
+  transition: all 0.2s;
+  border: none;
+  cursor: pointer;
+}
+.seg-nav-btn:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+.seg-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.seg-gmaps-btn {
+  font-size: 10px;
+  font-weight: 700;
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 6px 12px;
+  border-radius: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.2s;
+  border: none;
+  cursor: pointer;
+}
+.seg-gmaps-btn:hover:not(:disabled) {
+  background: #dbeafe;
+}
+.seg-gmaps-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.seg-divider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  margin: 8px 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  border-radius: 6px;
+  background: #f8fafc;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.seg-divider:first-child { margin-top: 0; }
+.seg-divider:hover { background: #f1f5f9; }
+.seg-divider-active {
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+
 /* ─── Stop Cards ──────────────────────────────────────────────── */
 .stop-card {
   display: flex; align-items: center; gap: 8px;
@@ -272,6 +339,8 @@ body {
 .stop-card:hover { border-color: #cbd5e1; background: #f8fafc; }
 .stop-card:active { background: #f1f5f9; }
 .stop-card.completed { opacity: 0.45; filter: grayscale(0.8); }
+.stop-card.in-segment { border-left: 3px solid #3b82f6; }
+.stop-card.not-in-segment:not(.completed) { opacity: 0.45; }
 .stop-num {
   width: 24px; height: 24px;
   border-radius: 50%;

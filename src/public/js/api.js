@@ -123,6 +123,25 @@ function boundsFromCoords(coords) {
   return bounds;
 }
 
+const STATUS_ES = {
+  active: 'Activa', assigned: 'Asignada', in_progress: 'En progreso',
+  completed: 'Completada', reassigned: 'Reasignada', cancelled: 'Cancelada',
+  pending: 'Pendiente', pending_review: 'En revisión', closed: 'Cerrada',
+  invalid: 'Inválida', duplicate: 'Duplicada', moved: 'Se mudó',
+  wrong_category: 'Categoría incorrecta', chain_not_independent: 'Cadena',
+  interested: 'Interesado', visited: 'Visitado', needs_follow_up: 'Seguimiento',
+  follow_up_required: 'Seguimiento requerido', requires_follow_up: 'Requiere seguimiento',
+  verified: 'Verificado', rejected: 'Rechazado',
+  contact_made: 'Contacto realizado', contact_captured: 'Contacto capturado',
+  not_interested: 'No interesado',
+  unassigned: 'Sin asignar', skipped: 'Omitida',
+  converted: 'Convertido', lost: 'Perdido',
+  candidate: 'Candidato', new_pharmacy: 'Nueva farmacia',
+  low: 'Baja', normal: 'Normal', high: 'Alta', urgent: 'Urgente',
+  manager: 'Gerente', field_rep: 'Representante',
+};
+function statusEs(s) { return STATUS_ES[s] || s || ''; }
+
 function badgeColor(s) {
   const m = {
     active:'badge-blue',

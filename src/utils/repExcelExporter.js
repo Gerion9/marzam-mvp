@@ -13,7 +13,7 @@ function buildDirectionsUrl(points) {
   const destination = `${points[points.length - 1].lat},${points[points.length - 1].lng}`;
   const waypoints = points.slice(1, -1).map((p) => `${p.lat},${p.lng}`).join('|');
   let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
-  if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`;
+  if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}&dir_action=navigate`;
   return url;
 }
 

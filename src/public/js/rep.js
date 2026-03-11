@@ -12,6 +12,8 @@ const GOOGLE_MAPS_MAX_POINTS = 10;
 let routeMotionFrame = null;
 let demoDatasetHydration = null;
 let gpsPingIntervalMs = 30000;
+let segments = [];
+let currentSegmentIdx = 0;
 
 async function ensureDemoDatasetLoaded() {
   if (!DEMO.active) return null;
@@ -58,14 +60,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!isDemo) await loadRuntimeConfig();
 
   const impersonating = user?.impersonated_by || localStorage.getItem('marzam_impersonating');
-  document.getElementById('rep-name').textContent = (user?.full_name || 'Rep Demo') + (isDemo ? ' (Demo)' : '');
+  document.getElementById('rep-name').textContent = (user?.full_name || 'Representante Demo') + (isDemo ? ' (Demo)' : '');
   document.getElementById('btn-logout').onclick = isDemo
     ? () => { localStorage.clear(); location.href = '/'; }
     : API.logout;
 
   if (impersonating) {
     const banner = document.getElementById('demo-banner');
-    banner.textContent = `Viendo como ${user?.full_name || 'Rep'} — Haz clic para volver al Gerente`;
+    banner.textContent = `Viendo como ${user?.full_name || 'Representante'} — Haz clic para volver al Gerente`;
     banner.classList.remove('hidden');
     banner.style.cursor = 'pointer';
     banner.onclick = async () => {
@@ -95,7 +97,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('sel-assignment').addEventListener('change', onAssignmentChange);
   document.getElementById('btn-tracking').addEventListener('click', toggleTracking);
-  document.getElementById('btn-gmaps').addEventListener('click', openOptimizedGoogleMapsRoute);
   document.getElementById('v-outcome').addEventListener('change', onOutcomeChange);
   document.getElementById('visit-form').addEventListener('submit', submitVisit);
   document.getElementById('new-pharmacy-form').addEventListener('submit', submitNewPharmacy);
@@ -115,13 +116,18 @@ function initMap() {
 
   map.on('load', () => {
     map.addSource('route-line', { type: 'geojson', data: emptyFC() });
-    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line', paint: { 'line-color': '#1b365d', 'line-width': 3, 'line-dasharray': [2, 2] } });
+    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line', paint: { 'line-color': '#1b365d', 'line-width': 2, 'line-opacity': 0.25, 'line-dasharray': [2, 2] } });
+
+    map.addSource('segment-line', { type: 'geojson', data: emptyFC() });
+    map.addLayer({ id: 'segment-line', type: 'line', source: 'segment-line', paint: { 'line-color': '#3b82f6', 'line-width': 4, 'line-opacity': 0.8 } });
 
     map.addSource('stops', { type: 'geojson', data: emptyFC() });
     map.addLayer({ id: 'stop-dots', type: 'circle', source: 'stops', paint: {
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 7, 16, 12],
       'circle-color': ['match', ['get', 'status'], 'completed', '#10b981', 'skipped', '#e11d48', '#1b365d'],
-      'circle-stroke-width': 2.5, 'circle-stroke-color': '#fff',
+      'circle-stroke-width': ['case', ['coalesce', ['get', 'inSegment'], true], 3, 1.5],
+      'circle-stroke-color': ['case', ['coalesce', ['get', 'inSegment'], true], '#3b82f6', '#fff'],
+      'circle-opacity': ['case', ['coalesce', ['get', 'inSegment'], true], 1, 0.5],
     }});
     map.addLayer({ id: 'stop-labels', type: 'symbol', source: 'stops', layout: { 'text-field': ['get', 'order'], 'text-size': 12 }, paint: { 'text-color': '#fff' } });
 
@@ -256,7 +262,7 @@ async function loadAssignments() {
     pending.forEach(a => {
       const opt = document.createElement('option');
       opt.value = a.id;
-      opt.textContent = `${a.campaign_objective} — ${a.status} (${a.completed_stops || 0}/${a.total_stops || a.pharmacy_count || 0})`;
+      opt.textContent = `${a.campaign_objective} — ${statusEs(a.status)} (${a.completed_stops || 0}/${a.total_stops || a.pharmacy_count || 0})`;
       sel.appendChild(opt);
     });
 
@@ -392,15 +398,19 @@ async function renderRoute() {
   const skipped = stops.filter(s => s.stop_status === 'skipped').length;
   document.getElementById('strip-progress').textContent = `${completed + skipped}/${stops.length}`;
   document.getElementById('strip-objective').textContent = currentAssignment.campaign_objective;
-  updateGoogleMapsLink();
+  rebuildSegments();
 
   const originCoord = await resolveRouteOrigin();
-
+  const seg = segments[currentSegmentIdx];
   const validStops = stops.filter(s => Number.isFinite(Number(s.lng)) && Number.isFinite(Number(s.lat)));
   const features = validStops.map(s => ({
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [Number(s.lng), Number(s.lat)] },
-    properties: { id: s.id, name: s.name, order: String(s.route_order), status: s.stop_status, pharmacy_id: s.pharmacy_id },
+    properties: {
+      id: s.id, name: s.name, order: String(s.route_order),
+      status: s.stop_status, pharmacy_id: s.pharmacy_id,
+      inSegment: seg ? seg.stopIds.has(s.id) : true,
+    },
   }));
   map.getSource('stops')?.setData({ type: 'FeatureCollection', features });
 
@@ -414,7 +424,9 @@ async function renderRoute() {
     stopRouteSimulation(true);
   }
 
-  if (visualRoute.length) {
+  if (seg && seg.coords.length) {
+    map.fitBounds(boundsFromCoords(seg.coords), { padding: { top: 80, bottom: 200, left: 40, right: 40 }, maxZoom: 16, duration: 800 });
+  } else if (visualRoute.length) {
     map.fitBounds(boundsFromCoords(visualRoute), { padding: { top: 80, bottom: 200, left: 40, right: 40 }, maxZoom: 15, duration: 800 });
   }
 
@@ -447,39 +459,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function orderPendingStopsFromOrigin(pendingStops, originPoint = null) {
-  if (!pendingStops.length) return [];
-  const ordered = [];
-  const remaining = [...pendingStops];
-
-  if (!originPoint) {
-    ordered.push(remaining.shift());
-  }
-
-  let anchor = originPoint || toPoint(ordered[0]);
-
-  while (remaining.length) {
-    let bestIdx = 0;
-    let bestDist = Infinity;
-
-    for (let i = 0; i < remaining.length; i++) {
-      const pt = toPoint(remaining[i]);
-      if (!pt) continue;
-      const d = haversineKm(anchor.lat, anchor.lng, pt.lat, pt.lng);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
-      }
-    }
-
-    const next = remaining.splice(bestIdx, 1)[0];
-    ordered.push(next);
-    anchor = toPoint(next) || anchor;
-  }
-
-  return ordered;
-}
-
 function buildGoogleMapsDirectionsUrl(points) {
   if (!points?.length) return null;
   if (points.length === 1) {
@@ -491,98 +470,213 @@ function buildGoogleMapsDirectionsUrl(points) {
   const waypoints = points.slice(1, -1).map((p) => `${p.lat},${p.lng}`).join('|');
 
   let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
-  if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`;
+  if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}&dir_action=navigate`;
   return url;
 }
 
-function buildChunkedRouteUrls(points) {
-  if (points.length <= GOOGLE_MAPS_MAX_POINTS) return [buildGoogleMapsDirectionsUrl(points)];
-  const urls = [];
-  let i = 0;
-  while (i < points.length - 1) {
-    const end = Math.min(i + GOOGLE_MAPS_MAX_POINTS, points.length);
-    const chunk = points.slice(i, end);
-    urls.push(buildGoogleMapsDirectionsUrl(chunk));
-    i = end - 1;
+/* ─── Segment Navigation ──────────────────────────────────────── */
+
+function buildSegments() {
+  const validStops = stops.filter(s =>
+    Number.isFinite(Number(s.lng)) && Number.isFinite(Number(s.lat))
+  );
+  if (!validStops.length) return [];
+
+  const max = GOOGLE_MAPS_MAX_POINTS;
+  const result = [];
+  for (let i = 0; i < validStops.length; i += max) {
+    const segStops = validStops.slice(i, i + max);
+    const pending = segStops.filter(s => !isResolvedStop(s));
+    const pts = pending.map(toPoint).filter(Boolean);
+    const url = pts.length ? buildGoogleMapsDirectionsUrl(pts) : null;
+    const coords = segStops.map(s => [Number(s.lng), Number(s.lat)]);
+
+    result.push({
+      index: result.length,
+      stops: segStops,
+      stopIds: new Set(segStops.map(s => s.id)),
+      startOrder: segStops[0]?.route_order || (i + 1),
+      endOrder: segStops[segStops.length - 1]?.route_order || (i + segStops.length),
+      pendingCount: pending.length,
+      url,
+      coords,
+    });
   }
-  return urls.filter(Boolean);
+  return result;
 }
 
-function getOptimizedPendingRoute(originPoint = null) {
-  const pending = getPendingStops();
-  if (!pending.length) return { urls: [], pendingCount: 0 };
-
-  const orderedPending = orderPendingStopsFromOrigin(pending, originPoint);
-  const pendingPoints = orderedPending.map(toPoint).filter(Boolean);
-  if (!pendingPoints.length) return { urls: [], pendingCount: 0 };
-
-  const routePoints = originPoint ? [originPoint, ...pendingPoints] : pendingPoints;
-  const urls = buildChunkedRouteUrls(routePoints);
-  return { urls, pendingCount: pending.length };
+function segmentStorageKey() {
+  return currentAssignment ? `marzam_seg_${currentAssignment.id}` : null;
 }
 
-function updateGoogleMapsLink() {
-  const link = document.getElementById('btn-gmaps');
-  if (!link) return;
-  const { urls } = getOptimizedPendingRoute(lastPosition);
-  link.href = urls[0] || currentAssignment?.google_maps_url || '#';
+function saveSegmentState() {
+  const key = segmentStorageKey();
+  if (key) localStorage.setItem(key, String(currentSegmentIdx));
 }
 
-async function openOptimizedGoogleMapsRoute(e) {
-  e.preventDefault();
-  if (!currentAssignment) {
-    showToast('Selecciona una asignación primero', 'error');
+function loadSegmentState() {
+  const key = segmentStorageKey();
+  if (!key) return 0;
+  const saved = parseInt(localStorage.getItem(key), 10);
+  return Number.isFinite(saved) ? saved : 0;
+}
+
+function rebuildSegments() {
+  segments = buildSegments();
+  if (!segments.length) {
+    currentSegmentIdx = 0;
+    renderSegmentControls();
+    updateSegmentMapHighlight();
     return;
   }
 
-  let origin = lastPosition;
-  if (!origin) {
-    try {
-      origin = await getPosition();
-      lastPosition = origin;
-      updateMyPosition(origin);
-    } catch {
-      origin = null;
-    }
+  let idx = loadSegmentState();
+  if (idx >= segments.length) idx = 0;
+
+  if (segments[idx] && segments[idx].pendingCount === 0) {
+    const better = segments.findIndex(s => s.pendingCount > 0);
+    if (better >= 0) idx = better;
   }
 
-  const { urls, pendingCount } = getOptimizedPendingRoute(origin);
-  if (!urls.length) {
-    showToast('No hay paradas pendientes para navegar', 'info');
+  currentSegmentIdx = idx;
+  saveSegmentState();
+  renderSegmentControls();
+  updateSegmentMapHighlight();
+}
+
+function renderSegmentControls() {
+  const nav = document.getElementById('segment-nav');
+  if (!nav) return;
+
+  if (!segments.length) { nav.classList.add('hidden'); return; }
+  nav.classList.remove('hidden');
+
+  const seg = segments[currentSegmentIdx];
+  const label = document.getElementById('seg-label');
+  const detail = document.getElementById('seg-detail');
+  const prevBtn = document.getElementById('btn-seg-prev');
+  const nextBtn = document.getElementById('btn-seg-next');
+  const gmapsBtn = document.getElementById('btn-seg-gmaps');
+
+  if (label) label.textContent = segments.length > 1
+    ? `Tramo ${currentSegmentIdx + 1} de ${segments.length}`
+    : 'Ruta completa';
+  if (detail && seg) {
+    detail.textContent = `Paradas ${seg.startOrder}\u2013${seg.endOrder} \u00b7 ${seg.pendingCount} pendiente${seg.pendingCount !== 1 ? 's' : ''}`;
+  }
+  if (prevBtn) prevBtn.disabled = currentSegmentIdx <= 0;
+  if (nextBtn) nextBtn.disabled = currentSegmentIdx >= segments.length - 1;
+  if (gmapsBtn) {
+    gmapsBtn.disabled = !seg?.url;
+    gmapsBtn.textContent = seg?.url ? 'Abrir Tramo' : 'Sin pendientes';
+  }
+}
+
+function updateSegmentMapHighlight() {
+  const seg = segments[currentSegmentIdx];
+  if (!seg || seg.coords.length < 2) {
+    map.getSource('segment-line')?.setData(emptyFC());
     return;
   }
+  map.getSource('segment-line')?.setData({
+    type: 'FeatureCollection',
+    features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: seg.coords } }],
+  });
+}
 
-  document.getElementById('btn-gmaps').href = urls[0];
-  window.open(urls[0], '_blank', 'noopener,noreferrer');
+function focusCurrentSegment() {
+  const seg = segments[currentSegmentIdx];
+  if (!seg || !seg.coords.length) return;
+  map.fitBounds(boundsFromCoords(seg.coords), { padding: { top: 80, bottom: 200, left: 40, right: 40 }, maxZoom: 16, duration: 600 });
+}
 
-  if (urls.length > 1) {
-    showToast(`Ruta 1 de ${urls.length} abierta (${GOOGLE_MAPS_MAX_POINTS} paradas máx. por ruta en Google Maps). Usa el botón de nuevo para el siguiente tramo.`, 'info');
+function updateStopSegmentHighlight() {
+  const seg = segments[currentSegmentIdx];
+  if (!seg) return;
+  const validStops = stops.filter(s => Number.isFinite(Number(s.lng)) && Number.isFinite(Number(s.lat)));
+  const features = validStops.map(s => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [Number(s.lng), Number(s.lat)] },
+    properties: {
+      id: s.id, name: s.name, order: String(s.route_order),
+      status: s.stop_status, pharmacy_id: s.pharmacy_id,
+      inSegment: seg.stopIds.has(s.id),
+    },
+  }));
+  map.getSource('stops')?.setData({ type: 'FeatureCollection', features });
+
+  document.querySelectorAll('.stop-card[data-stop-id]').forEach(card => {
+    const inSeg = seg.stopIds.has(card.dataset.stopId);
+    card.classList.toggle('in-segment', inSeg);
+    card.classList.toggle('not-in-segment', !inSeg);
+  });
+}
+
+function goToSegment(idx) {
+  if (idx < 0 || idx >= segments.length) return;
+  currentSegmentIdx = idx;
+  saveSegmentState();
+  renderSegmentControls();
+  updateSegmentMapHighlight();
+  updateStopSegmentHighlight();
+  focusCurrentSegment();
+}
+
+function prevSegment() { goToSegment(currentSegmentIdx - 1); }
+function nextSegment() { goToSegment(currentSegmentIdx + 1); }
+
+function openSegmentInGMaps() {
+  const seg = segments[currentSegmentIdx];
+  if (!seg?.url) {
+    showToast('No hay paradas pendientes en este tramo', 'info');
     return;
   }
-
-  showToast(`Ruta abierta con ${pendingCount} parada(s) pendiente(s).`, 'success');
+  window.open(seg.url, '_blank', 'noopener,noreferrer');
+  if (segments.length > 1) {
+    showToast(`Tramo ${currentSegmentIdx + 1} de ${segments.length} abierto en Google Maps`, 'success');
+  } else {
+    showToast(`Ruta abierta con ${seg.pendingCount} parada(s)`, 'success');
+  }
 }
 
 function renderStopList() {
   const el = document.getElementById('stop-list');
   document.getElementById('stop-empty')?.classList.add('hidden');
 
-  const pending = stops.filter(s => s.stop_status !== 'completed' && s.stop_status !== 'skipped').length;
-  const done = stops.filter(s => s.stop_status === 'completed').length;
+  const pendingCount = stops.filter(s => s.stop_status !== 'completed' && s.stop_status !== 'skipped').length;
+  const doneCount = stops.filter(s => s.stop_status === 'completed').length;
+  const seg = segments[currentSegmentIdx];
+  const multiSeg = segments.length > 1;
 
-  el.innerHTML = `<div class="flex items-center justify-between mb-2 px-1">
+  let html = `<div class="flex items-center justify-between mb-2 px-1">
     <p class="text-xs font-bold text-slate-500">${stops.length} paradas total</p>
     <div class="flex gap-2 text-[10px]">
-      <span class="text-emerald-600 font-bold">${done} completadas</span>
-      <span class="text-slate-500 font-bold">${pending} pendientes</span>
+      <span class="text-emerald-600 font-bold">${doneCount} completadas</span>
+      <span class="text-slate-500 font-bold">${pendingCount} pendientes</span>
     </div>
-  </div>` + stops.map((s, i) => {
+  </div>`;
+
+  let lastSegIdx = -1;
+  stops.forEach((s) => {
+    if (multiSeg) {
+      const sIdx = segments.findIndex(sg => sg.stopIds.has(s.id));
+      if (sIdx >= 0 && sIdx !== lastSegIdx) {
+        lastSegIdx = sIdx;
+        const isCurrent = sIdx === currentSegmentIdx;
+        const sg = segments[sIdx];
+        html += `<div class="seg-divider ${isCurrent ? 'seg-divider-active' : ''}" onclick="goToSegment(${sIdx})">
+          <span>Tramo ${sIdx + 1}</span>
+          <span>${sg.pendingCount} pendiente${sg.pendingCount !== 1 ? 's' : ''}</span>
+        </div>`;
+      }
+    }
+
     const done = s.stop_status === 'completed';
     const skipped = s.stop_status === 'skipped';
-    const hasCoords = Number.isFinite(Number(s.lat)) && Number.isFinite(Number(s.lng));
-    const mapsUrl = hasCoords ? `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}` : '#';
-    return `
-    <div class="stop-card ${done ? 'completed' : ''} ${skipped ? 'completed' : ''}" onclick="focusStop(${s.lng},${s.lat},'${esc(s.name)}')">
+    const inSeg = seg ? seg.stopIds.has(s.id) : true;
+
+    html += `
+    <div class="stop-card ${done ? 'completed' : ''} ${skipped ? 'completed' : ''} ${multiSeg && inSeg ? 'in-segment' : ''} ${multiSeg && !inSeg ? 'not-in-segment' : ''}" data-stop-id="${s.id}" onclick="focusStop(${s.lng},${s.lat},'${esc(s.name)}')">
       <div class="stop-num ${done ? 'bg-emerald-100 text-emerald-700' : skipped ? 'bg-rose-100 text-rose-700' : 'bg-[#1b365d]/10 text-[#1b365d]'}">${s.route_order}</div>
       <div class="flex-1 min-w-0">
         <p class="font-medium text-sm truncate">${esc(s.name)}</p>
@@ -596,7 +690,9 @@ function renderStopList() {
         }
       </div>
     </div>`;
-  }).join('');
+  });
+
+  el.innerHTML = html;
 }
 
 function focusStop(lng, lat, name) {
@@ -607,12 +703,14 @@ function focusStop(lng, lat, name) {
 
 function clearRoute() {
   currentAssignment = null; stops = [];
+  segments = []; currentSegmentIdx = 0;
   document.getElementById('route-strip').classList.add('hidden');
   document.getElementById('header-bar').classList.remove('hidden');
   document.getElementById('stop-list').innerHTML = '';
   document.getElementById('stop-empty')?.classList.remove('hidden');
   map.getSource('stops')?.setData(emptyFC());
   map.getSource('route-line')?.setData(emptyFC());
+  map.getSource('segment-line')?.setData(emptyFC());
   stopRouteSimulation(true);
   setSheetSnap('peek');
 }
@@ -726,8 +824,8 @@ async function submitSkip(e) {
       pharmacy_id: document.getElementById('skip-pharmacy-id').value,
       assignment_stop_id: stopId,
       outcome: reason === 'closed' ? 'closed' : 'invalid',
-      notes: notes || `Skipped: ${reason}`,
-      flag_reason: `Stop skipped - ${reason}`,
+      notes: notes || `Omitido: ${reason}`,
+      flag_reason: `Parada omitida - ${reason}`,
     });
 
     if (photoInput.files[0] && !DEMO.active) {
@@ -782,10 +880,10 @@ function toggleTracking() {
   const btn = document.getElementById('btn-tracking');
   if (trackingOn) {
     clearInterval(trackingTimer); trackingOn = false;
-    btn.textContent = 'GPS Off'; btn.style.background = 'rgba(255 255 255 / .15)';
+    btn.textContent = 'GPS Apagado'; btn.style.background = 'rgba(255 255 255 / .15)';
   } else {
     trackingOn = true;
-    btn.textContent = 'GPS On'; btn.style.background = '#059669';
+    btn.textContent = 'GPS Activo'; btn.style.background = '#059669';
     sendPing();
     trackingTimer = setInterval(sendPing, gpsPingIntervalMs);
   }
@@ -797,7 +895,6 @@ async function sendPing() {
     lastPosition = pos;
     await API.post('/tracking/ping', { lat: pos.lat, lng: pos.lng, accuracy_meters: pos.accuracy, assignment_id: currentAssignment?.id || undefined });
     updateMyPosition(pos);
-    updateGoogleMapsLink();
   } catch {}
 }
 
@@ -807,7 +904,7 @@ function updateMyPosition(pos) {
 
 function getPosition() {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) { reject(new Error('Geolocation not supported')); return; }
+    if (!navigator.geolocation) { reject(new Error('Geolocalización no compatible')); return; }
     navigator.geolocation.getCurrentPosition(
       (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
       (err) => reject(err),
