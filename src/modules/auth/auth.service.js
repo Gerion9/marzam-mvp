@@ -4,6 +4,7 @@ const db = require('../../config/database');
 const config = require('../../config');
 const accessDirectory = require('../../services/accessDirectory');
 const { isExternalDataMode } = require('../../repositories/runtime');
+const { getDataScope } = require('../../middleware/requestContext');
 
 const SALT_ROUNDS = 10;
 
@@ -14,6 +15,7 @@ function buildAuthResult(user, extra = {}) {
       email: user.email,
       full_name: user.full_name,
       role: user.role,
+      data_scope: user.data_scope || null,
       impersonated_by: extra.impersonated_by || null,
       original_role: extra.original_role || null,
     },
@@ -23,7 +25,7 @@ function buildAuthResult(user, extra = {}) {
 
   return {
     token,
-    user: { id: user.id, email: user.email, full_name: user.full_name, role: user.role },
+    user: { id: user.id, email: user.email, full_name: user.full_name, role: user.role, data_scope: user.data_scope || null },
     ...(extra.impersonated_by ? { impersonated_by: extra.impersonated_by } : {}),
   };
 }
@@ -98,7 +100,7 @@ async function me(userId) {
 
 async function listUsers() {
   if (isExternalDataMode()) {
-    return accessDirectory.listUsers();
+    return accessDirectory.listUsersByScope(getDataScope());
   }
 
   return db('users')
@@ -129,6 +131,11 @@ async function impersonate(managerId, targetUserId) {
     if (target.id === managerId) {
       const err = new Error('Cannot impersonate yourself');
       err.status = 400;
+      throw err;
+    }
+    if ((manager.data_scope || null) !== (target.data_scope || null)) {
+      const err = new Error('Cannot impersonate users from a different data scope');
+      err.status = 403;
       throw err;
     }
     return buildAuthResult(target, {

@@ -1,5 +1,6 @@
 const config = require('../../config');
 const getExternalDatabase = require('../../config/externalDatabase');
+const { getFieldSurveyTable } = require('./tableScope');
 
 const FLEX = {
   repId: 'flex_parameter_1',
@@ -99,8 +100,9 @@ async function loadRawRows(limit = 20000) {
   }
 
   const db = getExternalDatabase();
+  const tableName = getFieldSurveyTable();
   const result = await db.raw(
-    `SELECT * FROM ${config.externalData.fieldSurveyTable} ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST, id DESC LIMIT ?`,
+    `SELECT * FROM ${tableName} ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST, id DESC LIMIT ?`,
     [Math.min(Number(limit) || 20000, config.limits.fieldSurveyMax)],
   );
   return result.rows || [];
@@ -192,14 +194,15 @@ async function insertEvents(events) {
   if (!events.length) return [];
   const db = getExternalDatabase();
   const rows = events.map(serializeEvent);
-  await db(config.externalData.fieldSurveyTable).insert(rows);
+  await db(getFieldSurveyTable()).insert(rows);
   return events;
 }
 
 async function cancelByRepNamePattern(pattern) {
   const db = getExternalDatabase();
+  const tableName = getFieldSurveyTable();
   const result = await db.raw(
-    `UPDATE ${config.externalData.fieldSurveyTable} SET ${FLEX.assignmentStatus} = 'cancelled', updated_at = NOW() WHERE ${FLEX.repName} LIKE ? AND ${FLEX.assignmentStatus} != 'cancelled' RETURNING id`,
+    `UPDATE ${tableName} SET ${FLEX.assignmentStatus} = 'cancelled', updated_at = NOW() WHERE ${FLEX.repName} LIKE ? AND ${FLEX.assignmentStatus} != 'cancelled' RETURNING id`,
     [pattern],
   );
   return (result.rows || []).length;

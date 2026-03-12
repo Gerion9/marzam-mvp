@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 
 const config = require('./config');
 const errorHandler = require('./middleware/errorHandler');
+const { requestContextMiddleware } = require('./middleware/requestContext');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const pharmacyRoutes = require('./modules/pharmacies/pharmacies.routes');
@@ -34,6 +35,7 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
 });
+app.use(requestContextMiddleware);
 app.use('/api/', apiLimiter);
 
 const authLimiter = rateLimit({

@@ -5,10 +5,11 @@ const externalDeviceLocationRepository = require('../../repositories/external/de
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { resolveEvidenceAccessUrl } = require('../../utils/gcsEvidence');
 const accessDirectory = require('../../services/accessDirectory');
+const { getDataScope } = require('../../middleware/requestContext');
 
 async function getRepNameMap() {
   if (isExternalDataMode()) {
-    return new Map(accessDirectory.listFieldReps().map((user) => [String(user.id), user.full_name]));
+    return new Map(accessDirectory.listFieldRepsByScope(getDataScope()).map((user) => [String(user.id), user.full_name]));
   }
   const reps = await db('users')
     .select('id', 'full_name')
@@ -89,7 +90,7 @@ async function getRepProductivity() {
     const { currentRows, repNameMap } = await getExternalDashboardData();
     const byRep = new Map();
 
-    const allReps = accessDirectory.listFieldReps();
+    const allReps = accessDirectory.listFieldRepsByScope(getDataScope());
     for (const rep of allReps) {
       byRep.set(String(rep.id), {
         rep_id: String(rep.id),
@@ -381,7 +382,7 @@ async function getRepAssignmentsForExport() {
 
   const assignmentService = require('../assignments/assignments.service');
   const assignments = await assignmentService.list({});
-  const reps = accessDirectory.listFieldReps();
+  const reps = accessDirectory.listFieldRepsByScope(getDataScope());
   const repMap = new Map(reps.map((r) => [String(r.id), r]));
   const poiRows = await externalPoiRepository.list({ limit: 6000 });
   const poiById = new Map(poiRows.map((p) => [String(p.id), p]));

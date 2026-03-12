@@ -12,9 +12,10 @@ const {
   coerceNumber,
 } = require('./mappingUtils');
 const { parseBigQueryTableRef } = require('./tableRef');
+const { getDeviceLocationsTable } = require('./tableScope');
 
-let cachedLocationMap = null;
-let canUseRemoteStore = null;
+const cachedLocationMaps = {};
+const remoteStoreFlags = {};
 const LOCAL_TRACKING_PATH = config.externalData.deviceLocationsFallbackPath || path.resolve(process.cwd(), 'data', 'device-locations-runtime.json');
 
 function parseSqlTableRef(tableRef) {
@@ -39,13 +40,14 @@ async function writeLocalRows(rows) {
 }
 
 async function loadRawRows(limit = 10000) {
-  if (!config.externalData.deviceLocationsTable) return null;
+  const tableName = getDeviceLocationsTable();
+  if (!tableName) return null;
 
   if (config.externalData.provider === 'bigquery') {
     try {
       const client = getBigQueryClient();
       const tableRef = parseBigQueryTableRef(
-        config.externalData.deviceLocationsTable,
+        tableName,
         config.bigquery.projectId || config.bigquery.serviceAccount?.project_id,
       );
       const [rows] = await client.query({
@@ -60,7 +62,7 @@ async function loadRawRows(limit = 10000) {
 
   try {
     const db = getExternalDatabase();
-    const result = await db.raw(`SELECT * FROM ${config.externalData.deviceLocationsTable} LIMIT ?`, [limit]);
+    const result = await db.raw(`SELECT * FROM ${tableName} LIMIT ?`, [limit]);
     return result.rows || [];
   } catch {
     return null;
@@ -68,12 +70,13 @@ async function loadRawRows(limit = 10000) {
 }
 
 async function getSemanticMap() {
-  if (cachedLocationMap) return cachedLocationMap;
+  const tableName = getDeviceLocationsTable();
+  if (cachedLocationMaps[tableName]) return cachedLocationMaps[tableName];
   const rows = await loadRawRows(1);
   let columns = rows?.[0] ? Object.keys(rows[0]) : Object.values(config.externalData.deviceLocationsSchemaMap || {});
   if (!columns.length && config.externalData.provider === 'sql') {
     const db = getExternalDatabase();
-    const tableRef = parseSqlTableRef(config.externalData.deviceLocationsTable);
+    const tableRef = parseSqlTableRef(tableName);
     const result = await db('information_schema.columns')
       .select('column_name')
       .where({ table_schema: tableRef.schema, table_name: tableRef.table })
@@ -81,15 +84,16 @@ async function getSemanticMap() {
     columns = result.map((row) => row.column_name);
   }
   if (!columns.length) return null;
-  cachedLocationMap = buildSemanticMap(columns, DEVICE_LOCATION_CANDIDATES, config.externalData.deviceLocationsSchemaMap);
-  return cachedLocationMap;
+  cachedLocationMaps[tableName] = buildSemanticMap(columns, DEVICE_LOCATION_CANDIDATES, config.externalData.deviceLocationsSchemaMap);
+  return cachedLocationMaps[tableName];
 }
 
 async function resolveStoreMode() {
-  if (canUseRemoteStore != null) return canUseRemoteStore;
+  const tableName = getDeviceLocationsTable();
+  if (remoteStoreFlags[tableName] != null) return remoteStoreFlags[tableName];
   const semanticMap = await getSemanticMap();
-  canUseRemoteStore = !!semanticMap;
-  return canUseRemoteStore;
+  remoteStoreFlags[tableName] = !!semanticMap;
+  return remoteStoreFlags[tableName];
 }
 
 function normalizeLocationRow(rawRow, semanticMap) {
@@ -130,16 +134,17 @@ async function insertLocation(event) {
     };
     const row = pickExistingColumns(translatedEvent, semanticMap);
 
+    const tableName = getDeviceLocationsTable();
     if (config.externalData.provider === 'bigquery') {
       const client = getBigQueryClient();
       const tableRef = parseBigQueryTableRef(
-        config.externalData.deviceLocationsTable,
+        tableName,
         config.bigquery.projectId || config.bigquery.serviceAccount?.project_id,
       );
       await client.dataset(tableRef.datasetId, { projectId: tableRef.projectId }).table(tableRef.tableId).insert([row]);
     } else {
       const db = getExternalDatabase();
-      await db(config.externalData.deviceLocationsTable).insert(row);
+      await db(tableName).insert(row);
     }
 
     return event;

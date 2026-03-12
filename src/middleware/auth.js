@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const config = require('../config');
+const { setDataScope } = require('./requestContext');
 
 function authenticate(req, res, next) {
   const header = req.headers.authorization;
@@ -15,9 +16,11 @@ function authenticate(req, res, next) {
       email: payload.email,
       full_name: payload.full_name || null,
       role: payload.role,
+      data_scope: payload.data_scope || null,
       impersonated_by: payload.impersonated_by || null,
       original_role: payload.original_role || null,
     };
+    setDataScope(payload.data_scope);
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });

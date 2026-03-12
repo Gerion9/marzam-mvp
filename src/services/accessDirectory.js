@@ -16,6 +16,7 @@ function normalizeCustomUser(user, index) {
     role: user.role === 'manager' ? 'manager' : 'field_rep',
     is_active: user.is_active !== false,
     db_user_id: user.db_user_id || uuidv5(String(user.id || user.email || `custom${index + 1}`), DEVICE_USER_NAMESPACE),
+    data_scope: user.data_scope || null,
   };
 }
 
@@ -28,6 +29,7 @@ function buildVirtualUsers() {
     role: 'manager',
     is_active: true,
     db_user_id: uuidv5(config.authDirectory.managerId, DEVICE_USER_NAMESPACE),
+    data_scope: null,
   };
 
   const reps = Array.from({ length: config.authDirectory.repCount }, (_, index) => {
@@ -41,6 +43,7 @@ function buildVirtualUsers() {
       role: 'field_rep',
       is_active: true,
       db_user_id: uuidv5(`${config.authDirectory.repIdPrefix}${suffix}`, DEVICE_USER_NAMESPACE),
+      data_scope: null,
     };
   });
 
@@ -67,6 +70,7 @@ function sanitizeUser(user) {
     role: user.role,
     is_active: user.is_active,
     db_user_id: user.db_user_id,
+    data_scope: user.data_scope || null,
   };
 }
 
@@ -104,9 +108,21 @@ function authenticate(email, password) {
   return sanitizeUser(user);
 }
 
+function listUsersByScope(scope) {
+  const all = listUsers();
+  if (scope === 'demo') return all.filter((u) => u.data_scope === 'demo');
+  return all.filter((u) => u.data_scope !== 'demo');
+}
+
+function listFieldRepsByScope(scope) {
+  return listUsersByScope(scope).filter((u) => u.role === 'field_rep' && u.is_active);
+}
+
 module.exports = {
   listUsers,
   listFieldReps,
+  listUsersByScope,
+  listFieldRepsByScope,
   getUserById,
   getUserByEmail,
   getUserByDbUserId,

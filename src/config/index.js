@@ -63,6 +63,8 @@ const config = {
     poiTable: process.env.EXTERNAL_POI_TABLE || 'ingestion.ing_poi_farmacias_ecatepec',
     fieldSurveyTable: process.env.EXTERNAL_FIELD_SURVEY_TABLE || 'ingestion.field_survey_pharmacy',
     deviceLocationsTable: process.env.EXTERNAL_DEVICE_LOCATIONS_TABLE || 'ingestion.device_locations',
+    fieldSurveyTableDemo: process.env.EXTERNAL_FIELD_SURVEY_TABLE_DEMO || 'ingestion.field_survey_pharmacy_demo',
+    deviceLocationsTableDemo: process.env.EXTERNAL_DEVICE_LOCATIONS_TABLE_DEMO || 'ingestion.device_locations_demo',
     poiSchemaMap: parseJsonEnv(process.env.EXTERNAL_POI_SCHEMA_MAP, {}),
     fieldSurveySchemaMap: parseJsonEnv(process.env.EXTERNAL_FIELD_SURVEY_SCHEMA_MAP, {}),
     deviceLocationsSchemaMap: parseJsonEnv(process.env.EXTERNAL_DEVICE_LOCATIONS_SCHEMA_MAP, {}),

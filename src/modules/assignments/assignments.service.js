@@ -9,6 +9,7 @@ const externalFieldSurveyRepository = require('../../repositories/external/field
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { buildAssignmentId, buildStopId } = require('../externalData/externalAssignmentIds');
 const accessDirectory = require('../../services/accessDirectory');
+const { getDataScope } = require('../../middleware/requestContext');
 
 async function getRepNameMap(repIds) {
   if (isExternalDataMode()) {
@@ -236,7 +237,7 @@ async function distributeWaveExternal({
 }) {
   let targetRepIds = rep_ids;
   if (!Array.isArray(targetRepIds) || !targetRepIds.length) {
-    targetRepIds = accessDirectory.listFieldReps().map((user) => user.id);
+    targetRepIds = accessDirectory.listFieldRepsByScope(getDataScope()).map((user) => user.id);
   }
 
   if (!targetRepIds.length) {
