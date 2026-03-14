@@ -51,10 +51,15 @@ function buildVirtualUsers() {
 }
 
 function listUsers() {
+  const virtualUsers = buildVirtualUsers();
   if (Array.isArray(config.authDirectory.customUsers) && config.authDirectory.customUsers.length) {
-    return config.authDirectory.customUsers.map(normalizeCustomUser);
+    const customUsers = config.authDirectory.customUsers.map(normalizeCustomUser);
+    const customIds = new Set(customUsers.map((u) => u.id));
+    const customEmails = new Set(customUsers.map((u) => u.email));
+    const merged = virtualUsers.filter((u) => !customIds.has(u.id) && !customEmails.has(u.email));
+    return [...merged, ...customUsers];
   }
-  return buildVirtualUsers();
+  return virtualUsers;
 }
 
 function listFieldReps() {
