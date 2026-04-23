@@ -5,7 +5,12 @@ const externalDeviceLocationRepository = require('../../repositories/external/de
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { resolveEvidenceAccessUrl } = require('../../utils/gcsEvidence');
 const accessDirectory = require('../../services/accessDirectory');
-const { getDataScope } = require('../../middleware/requestContext');
+const { getDataScope, getUserScope } = require('../../middleware/requestContext');
+const { applyTerritoryFilter, isScopeFilteringEnabled } = require('../../middleware/scopeFilter');
+
+function applyPharmacyScope(q, column = 'pharmacies.territory_id') {
+  return applyTerritoryFilter(q, column, getUserScope());
+}
 
 async function getRepNameMap() {
   if (isExternalDataMode()) {
@@ -68,7 +73,7 @@ async function getPharmacyFunnel() {
     };
   }
 
-  const rows = await db('pharmacies')
+  const q = db('pharmacies')
     .select(
       db.raw(`count(*) FILTER (WHERE is_independent = true) AS total_pharmacies`),
       db.raw(`count(*) FILTER (WHERE is_independent = true AND assigned_rep_id IS NOT NULL) AS assigned`),
@@ -77,7 +82,15 @@ async function getPharmacyFunnel() {
       db.raw(`count(*) FILTER (WHERE is_independent = true AND last_visit_outcome = 'needs_follow_up') AS needs_follow_up`),
       db.raw(`count(*) FILTER (WHERE is_independent = true AND status IN ('closed','invalid','duplicate','moved')) AS invalid_closed`),
       db.raw(`count(*) FILTER (WHERE is_independent = true AND last_visit_outcome = 'contact_made') AS contact_made`),
-    );
+    )
+    .where(function () {
+      this.whereNull('colonia_id')
+        .orWhereNotIn('colonia_id', function () {
+          this.select('id').from('colonias').where('security_level', 'not_acceptable');
+        });
+    });
+  applyPharmacyScope(q, 'pharmacies.territory_id');
+  const rows = await q;
   const funnel = rows[0] || {};
   const total = Number(funnel.total_pharmacies || 0);
   const visited = Number(funnel.visited || 0);
@@ -174,7 +187,7 @@ async function getRepProductivity() {
     .groupBy('rep_id')
     .as('pva');
 
-  return db('users as u')
+  const q = db('users as u')
     .leftJoin(visitAgg, 'va.rep_id', 'u.id')
     .leftJoin(verificationAgg, 'pva.rep_id', 'u.id')
     .select(
@@ -195,6 +208,23 @@ async function getRepProductivity() {
     .where('u.role', 'field_rep')
     .where('u.is_active', true)
     .orderBy([{ column: 'total_visits', order: 'desc' }, { column: 'rep_name', order: 'asc' }]);
+
+  const scope = getUserScope();
+  if (scope && !scope.isGlobal && isScopeFilteringEnabled()) {
+    const ids = scope.accessibleTerritoryIds || [];
+    if (ids.length === 0) {
+      q.whereRaw('1 = 0');
+    } else {
+      q.whereIn('u.id', function () {
+        this.select('user_id')
+          .from('user_territories')
+          .whereIn('territory_id', ids)
+          .whereNull('valid_to');
+      });
+    }
+  }
+
+  return q;
 }
 
 async function getCoverageByMunicipality() {
@@ -228,7 +258,29 @@ async function getCoverageByMunicipality() {
     }));
   }
 
-  return db('mv_coverage_by_municipality').select('*');
+  const scope = getUserScope();
+  if (!scope || scope.isGlobal || !isScopeFilteringEnabled()) {
+    return db('mv_coverage_by_municipality').select('*');
+  }
+  const ids = scope.accessibleTerritoryIds || [];
+  if (ids.length === 0) return [];
+  const rows = await db('pharmacies as p')
+    .leftJoin('territories as t', 't.id', 'p.territory_id')
+    .select(
+      db.raw(`COALESCE(t.name, p.municipality, 'Unknown') AS municipality`),
+      db.raw('count(*) AS total_pharmacies'),
+      db.raw('count(*) FILTER (WHERE p.assigned_rep_id IS NOT NULL) AS assigned_total'),
+      db.raw('count(*) FILTER (WHERE p.last_visited_at IS NOT NULL) AS visited_total'),
+    )
+    .where('p.is_independent', true)
+    .whereIn('p.territory_id', ids)
+    .groupByRaw(`COALESCE(t.name, p.municipality, 'Unknown')`);
+  return rows.map((r) => ({
+    ...r,
+    coverage_pct: Number(r.total_pharmacies) > 0
+      ? Number(((Number(r.visited_total) * 100) / Number(r.total_pharmacies)).toFixed(1))
+      : 0,
+  }));
 }
 
 async function getAssignmentProgress(filters = {}) {
@@ -260,10 +312,38 @@ async function getAssignmentProgress(filters = {}) {
     return Array.from(grouped.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }
 
-  const q = db('mv_assignment_progress').select('*');
-  if (filters.rep_id) q.where('rep_id', filters.rep_id);
-  if (filters.status) q.where('assignment_status', filters.status);
-  return q.orderBy('created_at', 'desc');
+  const scope = getUserScope();
+  if (!scope || scope.isGlobal || !isScopeFilteringEnabled()) {
+    const q = db('mv_assignment_progress').select('*');
+    if (filters.rep_id) q.where('rep_id', filters.rep_id);
+    if (filters.status) q.where('assignment_status', filters.status);
+    return q.orderBy('created_at', 'desc');
+  }
+  const ids = scope.accessibleTerritoryIds || [];
+  if (ids.length === 0) return [];
+  const q = db('territory_assignments as ta')
+    .leftJoin('users as u', 'u.id', 'ta.rep_id')
+    .select(
+      'ta.id',
+      'ta.rep_id',
+      'u.full_name as rep_name',
+      'ta.campaign_objective',
+      'ta.status as assignment_status',
+      'ta.created_at',
+      db.raw(`(SELECT count(*) FROM assignment_stops WHERE assignment_id = ta.id) AS total_stops`),
+      db.raw(`(SELECT count(*) FROM assignment_stops WHERE assignment_id = ta.id AND stop_status = 'completed') AS completed_stops`),
+    )
+    .where(function () {
+      this.whereIn('ta.territory_id', ids).orWhereIn('ta.rep_id', function () {
+        this.select('user_id')
+          .from('user_territories')
+          .whereIn('territory_id', ids)
+          .whereNull('valid_to');
+      });
+    });
+  if (filters.rep_id) q.where('ta.rep_id', filters.rep_id);
+  if (filters.status) q.where('ta.status', filters.status);
+  return q.orderBy('ta.created_at', 'desc');
 }
 
 async function getPotentialSales() {
@@ -342,6 +422,7 @@ async function exportPharmacies(filters = {}) {
 
   if (filters.municipality) q.where('municipality', filters.municipality);
   if (filters.status) q.where('status', filters.status);
+  applyPharmacyScope(q, 'pharmacies.territory_id');
   q.orderBy('name');
 
   const pharmacies = await q;
@@ -409,6 +490,124 @@ async function getRepAssignmentsForExport() {
     });
 }
 
+async function getVisitDetail(filters = {}) {
+  if (isExternalDataMode()) {
+    const currentRows = await externalFieldSurveyRepository.listCurrentState({ limit: 20000 });
+    const repNameMap = await getRepNameMap();
+    let rows = currentRows.filter((r) => r.visited_at);
+
+    if (filters.rep_id) rows = rows.filter((r) => r.rep_id === String(filters.rep_id));
+    if (filters.from) rows = rows.filter((r) => r.visited_at >= filters.from);
+    if (filters.to) rows = rows.filter((r) => r.visited_at <= filters.to);
+
+    return rows.map((r) => ({
+      pharmacy_id: r.pharmacy_id,
+      rep_id: r.rep_id,
+      rep_name: r.rep_name || repNameMap.get(String(r.rep_id)) || null,
+      visit_status: r.visit_status,
+      visited_at: r.visited_at,
+      comment: r.comment,
+      order_potential: r.order_potential,
+      contact_name: r.contact_name,
+      contact_phone: r.contact_phone,
+      photo_url: r.photo_url,
+      assignment_id: r.assignment_id,
+      route_order: r.route_order,
+    }));
+  }
+
+  const q = db('visit_reports as v')
+    .join('users as u', 'u.id', 'v.rep_id')
+    .join('pharmacies as p', 'p.id', 'v.pharmacy_id')
+    .select(
+      'v.id',
+      'v.pharmacy_id',
+      'p.name as pharmacy_name',
+      'p.municipality',
+      'v.rep_id',
+      'u.full_name as rep_name',
+      'v.outcome',
+      'v.notes',
+      'v.order_potential',
+      'v.contact_person',
+      'v.contact_phone',
+      'v.contact_name',
+      'v.contact_email',
+      'v.wholesalers',
+      'v.visit_observations',
+      'v.competition_info',
+      'v.competition_prices',
+      'v.competition_offers',
+      'v.checkin_lat',
+      'v.checkin_lng',
+      'v.created_at',
+    )
+    .orderBy('v.created_at', 'desc');
+
+  if (filters.rep_id) q.where('v.rep_id', filters.rep_id);
+  if (filters.from) q.where('v.created_at', '>=', filters.from);
+  if (filters.to) q.where('v.created_at', '<=', filters.to);
+  if (filters.pharmacy_id) q.where('v.pharmacy_id', filters.pharmacy_id);
+  if (filters.outcome) {
+    if (Array.isArray(filters.outcome)) q.whereIn('v.outcome', filters.outcome);
+    else q.where('v.outcome', filters.outcome);
+  }
+
+  applyPharmacyScope(q, 'p.territory_id');
+
+  const limit = Math.min(Number(filters.limit) || 200, 2000);
+  q.limit(limit);
+
+  return q;
+}
+
+async function getFlotillaSummary() {
+  if (isExternalDataMode()) {
+    const { currentRows, locationRows, repNameMap } = await getExternalDashboardData();
+    const today = new Date().toISOString().slice(0, 10);
+    const visitedToday = currentRows.filter((r) => r.visited_at && r.visited_at.slice(0, 10) === today);
+    const skippedToday = currentRows.filter((r) => ['closed', 'invalid', 'duplicate', 'moved'].includes(r.visit_status) && r.visited_at?.slice(0, 10) === today);
+    const activeReps = new Set(locationRows.filter((r) => {
+      const age = Date.now() - new Date(r.recorded_at).getTime();
+      return age < 3600000;
+    }).map((r) => r.rep_id));
+
+    return {
+      visits_today: visitedToday.length,
+      skipped_today: skippedToday.length,
+      pending_total: currentRows.filter((r) => r.visit_status === 'pending').length,
+      active_reps: activeReps.size,
+      total_reps: repNameMap.size,
+    };
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const [visits] = await db('visit_reports')
+    .count('id as cnt')
+    .where('created_at', '>=', today);
+  const [skipped] = await db('visit_reports')
+    .count('id as cnt')
+    .where('created_at', '>=', today)
+    .whereIn('outcome', ['closed', 'invalid', 'duplicate', 'moved', 'wrong_category', 'chain_not_independent']);
+  const [pending] = await db('assignment_stops')
+    .count('id as cnt')
+    .where('stop_status', 'pending');
+  const [activeReps] = await db('rep_tracking_points')
+    .countDistinct('rep_id as cnt')
+    .where('recorded_at', '>=', db.raw(`NOW() - INTERVAL '1 hour'`));
+  const [totalReps] = await db('users')
+    .count('id as cnt')
+    .where({ role: 'field_rep', is_active: true });
+
+  return {
+    visits_today: Number(visits.cnt || 0),
+    skipped_today: Number(skipped.cnt || 0),
+    pending_total: Number(pending.cnt || 0),
+    active_reps: Number(activeReps.cnt || 0),
+    total_reps: Number(totalReps.cnt || 0),
+  };
+}
+
 module.exports = {
   refreshViews,
   getPharmacyFunnel,
@@ -419,4 +618,6 @@ module.exports = {
   getDashboard,
   exportPharmacies,
   getRepAssignmentsForExport,
+  getVisitDetail,
+  getFlotillaSummary,
 };

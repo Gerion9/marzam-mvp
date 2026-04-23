@@ -19,6 +19,10 @@ const reportingRoutes = require('./modules/reporting/reporting.routes');
 const auditRoutes = require('./modules/audit/audit.routes');
 const leadsRoutes = require('./modules/leads/leads.routes');
 const verificationRoutes = require('./modules/verifications/verifications.routes');
+const coloniasRoutes = require('./modules/colonias/colonias.routes');
+const territoriesRoutes = require('./modules/territories/territories.routes');
+const alertsRoutes = require('./modules/alerts/alerts.routes');
+const usersRoutes = require('./modules/users/users.routes');
 
 const app = express();
 
@@ -59,6 +63,10 @@ app.use('/api/reporting', reportingRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/commercial-leads', leadsRoutes);
 app.use('/api/verifications', verificationRoutes);
+app.use('/api/colonias', coloniasRoutes);
+app.use('/api/territories', territoriesRoutes);
+app.use('/api/alerts', alertsRoutes);
+app.use('/api/users', usersRoutes);
 
 app.get('/api/health', async (_req, res) => {
   const result = {

@@ -1,4 +1,5 @@
 const assignmentService = require('./assignments.service');
+const { canActOnAssignment } = require('../permissions/permissions');
 
 async function create(req, res, next) {
   try {
@@ -33,8 +34,8 @@ async function list(req, res, next) {
 async function getById(req, res, next) {
   try {
     const assignment = await assignmentService.getById(req.params.id);
-    if (req.user.role === 'field_rep' && assignment.rep_id !== req.user.id) {
-      return res.status(403).json({ error: 'Forbidden: not your assignment' });
+    if (!canActOnAssignment(req.user, assignment)) {
+      return res.status(403).json({ error: 'Forbidden: not in your scope' });
     }
     res.json(assignment);
   } catch (err) {
@@ -44,6 +45,10 @@ async function getById(req, res, next) {
 
 async function updateStatus(req, res, next) {
   try {
+    const assignment = await assignmentService.getById(req.params.id);
+    if (!canActOnAssignment(req.user, assignment)) {
+      return res.status(403).json({ error: 'Forbidden: cannot act on this assignment' });
+    }
     const { before, after } = await assignmentService.updateStatus(
       req.params.id,
       req.body.status,
@@ -67,6 +72,10 @@ async function checkOverlap(req, res, next) {
 
 async function reassign(req, res, next) {
   try {
+    const assignment = await assignmentService.getById(req.params.id);
+    if (!canActOnAssignment(req.user, assignment)) {
+      return res.status(403).json({ error: 'Forbidden: cannot reassign this assignment' });
+    }
     const { before, after } = await assignmentService.reassign(req.params.id, req.body, req.user.id);
     res.locals.auditDetail = { entityType: 'assignment', entityId: req.params.id, before, after };
     res.json(after);
@@ -96,6 +105,20 @@ async function distributeWave(req, res, next) {
   }
 }
 
+async function reorderStops(req, res, next) {
+  try {
+    const assignment = await assignmentService.getById(req.params.id);
+    if (!canActOnAssignment(req.user, assignment)) {
+      return res.status(403).json({ error: 'Forbidden: cannot reorder this assignment' });
+    }
+    const result = await assignmentService.reorderStops(req.params.id, req.body.stop_order);
+    res.locals.auditDetail = { entityType: 'assignment', entityId: req.params.id, after: { stop_order: req.body.stop_order } };
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function resetAll(req, res, next) {
   try {
     const result = await assignmentService.resetAllAssignments();
@@ -113,5 +136,6 @@ module.exports = {
   checkOverlap,
   reassign,
   distributeWave,
+  reorderStops,
   resetAll,
 };

@@ -94,6 +94,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   initMap();
   loadAssignments();
   setupSheetDrag();
+  startSyncLoop();
+  updateOfflineBadge();
+  syncPendingVisits();
 
   document.getElementById('sel-assignment').addEventListener('change', onAssignmentChange);
   document.getElementById('btn-tracking').addEventListener('click', toggleTracking);
@@ -294,10 +297,31 @@ async function onAssignmentChange() {
     currentAssignment = await API.get(`/assignments/${id}`);
     stops = currentAssignment.stops || [];
     await renderRoute();
+    cacheCurrentAssignment();
     if (currentAssignment.status === 'assigned') {
       await API.patch(`/assignments/${id}/status`, { status: 'in_progress' }).catch(() => {});
     }
-  } catch (err) { showToast(err.error || 'No se pudo cargar la asignación', 'error'); }
+  } catch (err) {
+    if (!navigator.onLine && _oq()) {
+      try {
+        const cached = await _oq().getCachedAssignment(id);
+        if (cached) {
+          currentAssignment = cached.assignment;
+          stops = cached.stops || [];
+          await renderRoute();
+          const cachedDate = cached.cachedAt ? new Date(cached.cachedAt) : null;
+          const hoursOld = cachedDate ? Math.round((Date.now() - cachedDate.getTime()) / 3600000) : null;
+          if (hoursOld && hoursOld > 12) {
+            showToast(`Cache de hace ${hoursOld}h — sincroniza cuando tengas señal`, 'error');
+          } else {
+            showToast('Cargado desde cache offline', 'info');
+          }
+          return;
+        }
+      } catch {}
+    }
+    showToast(err.error || 'No se pudo cargar la asignación', 'error');
+  }
 }
 
 async function resolveRouteOrigin() {
@@ -693,6 +717,13 @@ function renderStopList() {
   });
 
   el.innerHTML = html;
+
+  const pending = stops.filter(s => s.stop_status === 'pending');
+  const reorderBtn = document.getElementById('btn-reorder');
+  if (reorderBtn) {
+    if (pending.length > 1 && !reorderMode) reorderBtn.classList.remove('hidden');
+    else reorderBtn.classList.add('hidden');
+  }
 }
 
 function focusStop(lng, lat, name) {
@@ -759,22 +790,30 @@ async function submitVisit(e) {
   btn.disabled = true; btn.textContent = 'Enviando...';
   const pos = lastPosition || {};
 
+  const visitPayload = {
+    pharmacy_id: document.getElementById('v-pharmacy-id').value,
+    assignment_stop_id: stopId || undefined,
+    outcome,
+    notes: document.getElementById('v-notes').value,
+    order_potential: Number(document.getElementById('v-potential').value) || undefined,
+    competitor_products: document.getElementById('v-competition-info').value || undefined,
+    wholesalers: document.getElementById('v-wholesalers').value || undefined,
+    visit_observations: document.getElementById('v-visit-observations').value || undefined,
+    competition_info: document.getElementById('v-competition-info').value || undefined,
+    competition_prices: document.getElementById('v-competition-prices').value || undefined,
+    competition_offers: document.getElementById('v-competition-offers').value || undefined,
+    contact_name: document.getElementById('v-contact-name').value || undefined,
+    contact_email: document.getElementById('v-contact-email').value || undefined,
+    contact_person: document.getElementById('v-contact').value || document.getElementById('v-contact-name').value || undefined,
+    contact_phone: document.getElementById('v-phone').value || undefined,
+    follow_up_date: document.getElementById('v-followup-date')?.value || undefined,
+    follow_up_reason: document.getElementById('v-followup-reason')?.value || undefined,
+    flag_reason: document.getElementById('v-flag-reason')?.value || undefined,
+    checkin_lat: pos.lat, checkin_lng: pos.lng,
+  };
+
   try {
-    const visit = await API.post('/visits', {
-      pharmacy_id: document.getElementById('v-pharmacy-id').value,
-      assignment_stop_id: stopId || undefined,
-      outcome,
-      notes: document.getElementById('v-notes').value,
-      order_potential: Number(document.getElementById('v-potential').value) || undefined,
-      competitor_products: document.getElementById('v-competitors').value || undefined,
-      stock_observations: document.getElementById('v-stock').value || undefined,
-      contact_person: document.getElementById('v-contact').value || undefined,
-      contact_phone: document.getElementById('v-phone').value || undefined,
-      follow_up_date: document.getElementById('v-followup-date')?.value || undefined,
-      follow_up_reason: document.getElementById('v-followup-reason')?.value || undefined,
-      flag_reason: document.getElementById('v-flag-reason')?.value || undefined,
-      checkin_lat: pos.lat, checkin_lng: pos.lng,
-    });
+    const visit = await API.post('/visits', visitPayload);
 
     if (photoInput.files[0] && !DEMO.active) {
       const fd = new FormData();
@@ -791,7 +830,22 @@ async function submitVisit(e) {
     if (stop) stop.stop_status = flagOutcomes.includes(outcome) ? 'skipped' : 'completed';
     if (currentAssignment) renderRoute();
   } catch (err) {
-    showToast(err.error || err.errors?.join(', ') || 'Error al enviar', 'error');
+    if (!navigator.onLine || (err.status === 503)) {
+      try {
+        await OfflineQueue.enqueueVisit(visitPayload, photoInput.files[0] || null);
+        closeVisitSheet();
+        document.getElementById('visit-form').reset();
+        showToast('Sin conexión — Visita guardada localmente', 'info');
+        const stop = stops.find(s => s.id === stopId);
+        if (stop) stop.stop_status = 'completed';
+        if (currentAssignment) renderRoute();
+        updateOfflineBadge();
+      } catch (qErr) {
+        showToast('Error al guardar localmente', 'error');
+      }
+    } else {
+      showToast(err.error || err.errors?.join(', ') || 'Error al enviar', 'error');
+    }
   } finally {
     btn.disabled = false; btn.textContent = 'Enviar Visita';
   }
@@ -819,14 +873,16 @@ async function submitSkip(e) {
 
   if (!reason) { showToast('Selecciona un motivo', 'error'); return; }
 
+  const skipPayload = {
+    pharmacy_id: document.getElementById('skip-pharmacy-id').value,
+    assignment_stop_id: stopId,
+    outcome: reason === 'closed' ? 'closed' : 'invalid',
+    notes: notes || `Omitido: ${reason}`,
+    flag_reason: `Parada omitida - ${reason}`,
+  };
+
   try {
-    const visit = await API.post('/visits', {
-      pharmacy_id: document.getElementById('skip-pharmacy-id').value,
-      assignment_stop_id: stopId,
-      outcome: reason === 'closed' ? 'closed' : 'invalid',
-      notes: notes || `Omitido: ${reason}`,
-      flag_reason: `Parada omitida - ${reason}`,
-    });
+    const visit = await API.post('/visits', skipPayload);
 
     if (photoInput.files[0] && !DEMO.active) {
       const fd = new FormData();
@@ -842,7 +898,22 @@ async function submitSkip(e) {
     showToast('Parada omitida', 'success');
     if (currentAssignment) renderRoute();
   } catch (err) {
-    showToast(err.error || 'Error al omitir', 'error');
+    if (!navigator.onLine || (err.status === 503)) {
+      try {
+        await OfflineQueue.enqueueVisit(skipPayload, photoInput.files[0] || null);
+        const stop = stops.find(s => s.id === stopId);
+        if (stop) stop.stop_status = 'skipped';
+        closeSkipSheet();
+        document.getElementById('skip-form').reset();
+        showToast('Sin conexion — Omision guardada localmente', 'info');
+        if (currentAssignment) renderRoute();
+        updateOfflineBadge();
+      } catch (qErr) {
+        showToast('Error al guardar localmente', 'error');
+      }
+    } else {
+      showToast(err.error || 'Error al omitir', 'error');
+    }
   }
 }
 
@@ -900,6 +971,207 @@ async function sendPing() {
 
 function updateMyPosition(pos) {
   map.getSource('me')?.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [pos.lng, pos.lat] } }] });
+}
+
+/* ─── Route Reorder ──────────────────────────────────────────── */
+let reorderMode = false;
+let reorderList = [];
+
+function startReorder() {
+  if (!currentAssignment || !stops.length) return;
+  reorderMode = true;
+  reorderList = stops.filter(s => s.stop_status === 'pending').map(s => ({ ...s }));
+  document.getElementById('reorder-bar').classList.remove('hidden');
+  document.getElementById('btn-reorder').classList.add('hidden');
+  renderReorderList();
+}
+
+function cancelReorder() {
+  reorderMode = false;
+  reorderList = [];
+  document.getElementById('reorder-bar').classList.add('hidden');
+  document.getElementById('btn-reorder').classList.remove('hidden');
+  if (currentAssignment) renderRoute();
+}
+
+async function saveReorder() {
+  if (!currentAssignment || !reorderList.length) return;
+  try {
+    const stopOrder = reorderList.map(s => s.id);
+    const result = await API.patch(`/assignments/${currentAssignment.id}/reorder`, { stop_order: stopOrder });
+    if (result.stops) {
+      stops = result.stops;
+    } else {
+      let newOrder = 1;
+      for (const item of reorderList) {
+        const original = stops.find(s => s.id === item.id);
+        if (original) original.route_order = newOrder++;
+      }
+      stops.sort((a, b) => a.route_order - b.route_order);
+    }
+    reorderMode = false;
+    reorderList = [];
+    document.getElementById('reorder-bar').classList.add('hidden');
+    document.getElementById('btn-reorder').classList.remove('hidden');
+    renderRoute();
+    showToast('Ruta reorganizada', 'success');
+  } catch (err) {
+    showToast(err.error || 'Error al reorganizar', 'error');
+  }
+}
+
+function moveStop(idx, direction) {
+  const newIdx = idx + direction;
+  if (newIdx < 0 || newIdx >= reorderList.length) return;
+  [reorderList[idx], reorderList[newIdx]] = [reorderList[newIdx], reorderList[idx]];
+  renderReorderList();
+}
+
+function renderReorderList() {
+  const el = document.getElementById('stop-list');
+  el.innerHTML = reorderList.map((s, i) => `
+    <div class="stop-row flex items-center gap-3 py-2 border-b border-slate-100">
+      <div class="flex flex-col gap-0.5">
+        <button onclick="moveStop(${i}, -1)" class="text-slate-400 hover:text-slate-700 disabled:opacity-30" ${i === 0 ? 'disabled' : ''}>
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 15l7-7 7 7"/></svg>
+        </button>
+        <button onclick="moveStop(${i}, 1)" class="text-slate-400 hover:text-slate-700 disabled:opacity-30" ${i === reorderList.length - 1 ? 'disabled' : ''}>
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"/></svg>
+        </button>
+      </div>
+      <div class="stop-num bg-amber-100 text-amber-700">${i + 1}</div>
+      <div class="flex-1 min-w-0">
+        <p class="font-medium text-sm truncate">${esc(s.name)}</p>
+        <p class="text-xs text-slate-400 truncate">${esc(s.address || '')}</p>
+      </div>
+    </div>`).join('');
+}
+
+/* ─── Offline Sync (Hardened) ─────────────────────────────────── */
+let syncTimer = null;
+let _syncInProgress = false;
+
+function _oq() { return typeof OfflineQueue !== 'undefined' ? OfflineQueue : null; }
+
+function updateOfflineBadge() {
+  const banner = document.getElementById('offline-banner');
+  const badge = document.getElementById('offline-pending-count');
+  if (!banner || !_oq()) return;
+
+  _oq().pendingCount().then((count) => {
+    if (!navigator.onLine || count > 0) {
+      banner.classList.remove('hidden');
+      if (badge) badge.textContent = count > 0 ? `${count} pendiente${count > 1 ? 's' : ''}` : '';
+    } else {
+      banner.classList.add('hidden');
+    }
+  }).catch(() => {});
+
+  _oq().getStorageEstimate().then((est) => {
+    if (est.percent > 80) {
+      showToast(`Almacenamiento al ${est.percent}% — sincroniza pronto`, 'error');
+    }
+  }).catch(() => {});
+}
+
+async function syncPendingVisits() {
+  if (!navigator.onLine || !_oq() || _syncInProgress) return;
+  _syncInProgress = true;
+
+  API.suppressAuthRedirect(true);
+  let syncedAny = false;
+
+  try {
+    const pending = await _oq().getPendingVisits();
+    if (!pending.length) return;
+
+    for (const entry of pending) {
+      if (!navigator.onLine) break;
+
+      if ((entry.retryCount || 0) >= OfflineQueue.MAX_RETRIES) {
+        await _oq().markPermanentlyFailed(entry.localId);
+        continue;
+      }
+
+      try {
+        const payload = { ...entry.payload };
+        if (entry.idempotencyKey) payload._idempotencyKey = entry.idempotencyKey;
+
+        const visit = await API.post('/visits', payload);
+
+        if (entry.photoBlob && entry.photoName && !entry.photoSynced) {
+          try {
+            const blob = new Blob([entry.photoBlob], { type: entry.photoType || 'image/jpeg' });
+            const fd = new FormData();
+            fd.append('photo', blob, entry.photoName);
+            await API.upload(`/visits/${visit.id}/photos`, fd);
+            await _oq().markPhotoSynced(entry.localId);
+          } catch (photoErr) {
+            console.warn('[Sync] Photo upload failed, will retry', photoErr);
+            await _oq().incrementRetry(entry.localId, 'photo_upload_failed');
+            continue;
+          }
+        }
+
+        await _oq().markSynced(entry.localId);
+        syncedAny = true;
+      } catch (err) {
+        if (err.status === 401) {
+          showToast('Sesion expirada — inicia sesion para sincronizar', 'error');
+          break;
+        }
+        if (err.status && err.status < 500) {
+          await _oq().markPermanentlyFailed(entry.localId);
+          syncedAny = true;
+        } else {
+          const retries = await _oq().incrementRetry(entry.localId, err.error || `HTTP ${err.status || '?'}`);
+          if (retries >= OfflineQueue.MAX_RETRIES) {
+            await _oq().markPermanentlyFailed(entry.localId);
+          }
+        }
+      }
+    }
+
+    await _oq().clearSynced();
+    updateOfflineBadge();
+    if (syncedAny) showToast('Visitas pendientes sincronizadas', 'success');
+  } catch (e) {
+    console.warn('[Sync] Loop error', e);
+  } finally {
+    _syncInProgress = false;
+    API.suppressAuthRedirect(false);
+  }
+}
+
+function startSyncLoop() {
+  if (syncTimer) return;
+  syncTimer = setInterval(syncPendingVisits, 30000);
+}
+
+window.addEventListener('online', () => {
+  updateOfflineBadge();
+  setTimeout(syncPendingVisits, 2000);
+});
+window.addEventListener('offline', () => {
+  updateOfflineBadge();
+});
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data?.type === 'SYNC_VISITS') syncPendingVisits();
+  });
+}
+
+async function cacheCurrentAssignment() {
+  if (!currentAssignment || !_oq()) return;
+  try {
+    await _oq().cacheAssignment({
+      id: currentAssignment.id,
+      assignment: currentAssignment,
+      stops: stops,
+      cachedAt: new Date().toISOString(),
+    });
+  } catch {}
 }
 
 function getPosition() {

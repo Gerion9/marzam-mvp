@@ -8,6 +8,6 @@ const router = Router();
 
 router.get('/pharmacy/:pharmacyId', authenticate, controller.listByPharmacy);
 router.get('/evidence', authenticate, controller.listEvidence);
-router.get('/reps/:repId/summary', authenticate, authorize('manager'), controller.getRepSummary);
+router.get('/reps/:repId/summary', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.getRepSummary);
 
 module.exports = router;

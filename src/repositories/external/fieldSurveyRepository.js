@@ -164,7 +164,13 @@ function serializeEvent(event) {
     distance_to_pharmacy_m: event.distanceMeters ?? null,
     contact_name: normalizeText(event.contactName),
     contact_phone: normalizeText(event.contactPhone),
+    contact_email: normalizeText(event.contactEmail),
     created_by: normalizeText(event.createdBy),
+    wholesalers: normalizeText(event.wholesalers),
+    visit_observations: normalizeText(event.visitObservations),
+    competition_info: normalizeText(event.competitionInfo),
+    competition_prices: normalizeText(event.competitionPrices),
+    competition_offers: normalizeText(event.competitionOffers),
   };
 
   return {

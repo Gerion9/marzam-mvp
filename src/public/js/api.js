@@ -13,11 +13,15 @@ const API = (() => {
     return h;
   }
 
+  let _suppressAuthRedirect = false;
+
   async function request(method, path, body) {
     const opts = { method, headers: headers() };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${BASE}${path}`, opts);
-    if (res.status === 401) { localStorage.clear(); location.href = '/'; return; }
+    if (res.status === 401 && !_suppressAuthRedirect) {
+      localStorage.clear(); location.href = '/'; return;
+    }
     const data = res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text();
     if (!res.ok) throw { status: res.status, ...(typeof data === 'object' ? data : { error: data }) };
     return data;
@@ -61,6 +65,7 @@ const API = (() => {
     delete: (p)    => request('DELETE', p),
     upload,
     download,
+    suppressAuthRedirect(val) { _suppressAuthRedirect = !!val; },
     login: async (email, password) => {
       const data = await request('POST', '/auth/login', { email, password });
       localStorage.setItem('token', data.token);

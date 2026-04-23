@@ -100,4 +100,22 @@ async function exportAllRepRoutes(req, res, next) {
   }
 }
 
-module.exports = { dashboard, repProductivity, coverageByMunicipality, assignmentProgress, refreshViews, exportPharmacies, exportRepRoute, exportAllRepRoutes };
+async function visitDetail(req, res, next) {
+  try {
+    const data = await reportingService.getVisitDetail(req.query);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function flotillaSummary(req, res, next) {
+  try {
+    const data = await reportingService.getFlotillaSummary();
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { dashboard, repProductivity, coverageByMunicipality, assignmentProgress, refreshViews, exportPharmacies, exportRepRoute, exportAllRepRoutes, visitDetail, flotillaSummary };

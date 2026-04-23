@@ -35,21 +35,21 @@ router.post(
 router.get(
   '/checkins/:repId',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   controller.getCheckins,
 );
 
 router.get(
   '/breadcrumbs/:repId',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   controller.getBreadcrumbs,
 );
 
 router.get(
   '/positions',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   controller.getLatestPositions,
 );
 

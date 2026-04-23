@@ -5,10 +5,12 @@ const config = require('../../config');
 const accessDirectory = require('../../services/accessDirectory');
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { getDataScope } = require('../../middleware/requestContext');
+const { computeUserScope, isGlobalRole } = require('../../services/userScope');
 
 const SALT_ROUNDS = 10;
 
-function buildAuthResult(user, extra = {}) {
+async function buildAuthResult(user, extra = {}) {
+  const scope = await computeUserScope(user);
   const token = jwt.sign(
     {
       id: user.id,
@@ -16,6 +18,9 @@ function buildAuthResult(user, extra = {}) {
       full_name: user.full_name,
       role: user.role,
       data_scope: user.data_scope || null,
+      territory_ids: scope.territoryIds,
+      accessible_territory_ids: scope.accessibleTerritoryIds,
+      is_global: scope.isGlobal,
       impersonated_by: extra.impersonated_by || null,
       original_role: extra.original_role || null,
     },
@@ -25,12 +30,20 @@ function buildAuthResult(user, extra = {}) {
 
   return {
     token,
-    user: { id: user.id, email: user.email, full_name: user.full_name, role: user.role, data_scope: user.data_scope || null },
+    user: {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      role: user.role,
+      data_scope: user.data_scope || null,
+      territory_ids: scope.territoryIds,
+      is_global: scope.isGlobal,
+    },
     ...(extra.impersonated_by ? { impersonated_by: extra.impersonated_by } : {}),
   };
 }
 
-async function register({ email, password, full_name, role }) {
+async function register({ email, password, full_name, role, phone = null, created_by = null, territory_ids = [] }) {
   if (isExternalDataMode()) {
     const err = new Error('Register is disabled in external mode. Use AUTH_DIRECTORY settings.');
     err.status = 501;
@@ -46,8 +59,19 @@ async function register({ email, password, full_name, role }) {
 
   const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
   const [user] = await db('users')
-    .insert({ email, password_hash, full_name, role })
-    .returning(['id', 'email', 'full_name', 'role', 'created_at']);
+    .insert({ email, password_hash, full_name, role, phone, created_by })
+    .returning(['id', 'email', 'full_name', 'role', 'is_active', 'phone', 'created_at']);
+
+  if (Array.isArray(territory_ids) && territory_ids.length) {
+    const territoriesRepository = require('../../repositories/territoriesRepository');
+    for (const tid of territory_ids) {
+      await territoriesRepository.assignUserToTerritory({
+        userId: user.id,
+        territoryId: tid,
+        assignedBy: created_by,
+      });
+    }
+  }
 
   return user;
 }
@@ -72,6 +96,8 @@ async function login({ email, password }) {
     throw err;
   }
 
+  await db('users').where({ id: user.id }).update({ last_login_at: db.fn.now() });
+
   return buildAuthResult(user);
 }
 
@@ -87,7 +113,7 @@ async function me(userId) {
   }
 
   const user = await db('users')
-    .select('id', 'email', 'full_name', 'role', 'created_at')
+    .select('id', 'email', 'full_name', 'role', 'phone', 'must_change_password', 'last_login_at', 'created_at')
     .where({ id: userId })
     .first();
   if (!user) {
@@ -95,17 +121,104 @@ async function me(userId) {
     err.status = 404;
     throw err;
   }
+
+  const territoriesRepository = require('../../repositories/territoriesRepository');
+  user.territories = await territoriesRepository.getUserTerritories(userId);
   return user;
 }
 
-async function listUsers() {
+async function listUsers(filters = {}) {
   if (isExternalDataMode()) {
     return accessDirectory.listUsersByScope(getDataScope());
   }
 
-  return db('users')
-    .select('id', 'email', 'full_name', 'role', 'is_active', 'created_at')
+  const q = db('users')
+    .select('id', 'email', 'full_name', 'role', 'is_active', 'phone', 'last_login_at', 'created_at')
     .orderBy('full_name', 'asc');
+  if (filters.role) q.where('role', filters.role);
+  if (filters.is_active !== undefined) q.where('is_active', filters.is_active);
+  if (filters.territory_id) {
+    q.whereIn('id', function () {
+      this.select('user_id')
+        .from('user_territories')
+        .where('territory_id', filters.territory_id)
+        .whereNull('valid_to');
+    });
+  }
+  if (Array.isArray(filters.accessible_territory_ids)) {
+    const ids = filters.accessible_territory_ids;
+    if (ids.length === 0) {
+      q.whereRaw('1 = 0');
+    } else {
+      q.whereIn('id', function () {
+        this.select('user_id')
+          .from('user_territories')
+          .whereIn('territory_id', ids)
+          .whereNull('valid_to');
+      });
+    }
+  }
+  return q;
+}
+
+async function updateUser(userId, patch, { actor: _actor = null } = {}) {
+  if (isExternalDataMode()) {
+    const err = new Error('Update user is disabled in external mode.');
+    err.status = 501;
+    throw err;
+  }
+  const allowed = ['full_name', 'role', 'is_active', 'phone', 'email'];
+  const data = {};
+  for (const key of allowed) {
+    if (patch[key] !== undefined) data[key] = patch[key];
+  }
+  if (patch.password) {
+    data.password_hash = await bcrypt.hash(patch.password, SALT_ROUNDS);
+    data.must_change_password = false;
+  }
+  if (Object.keys(data).length === 0) {
+    const user = await db('users').where({ id: userId }).first();
+    return user;
+  }
+  data.updated_at = db.fn.now();
+  const [row] = await db('users').where({ id: userId }).update(data).returning('*');
+  return row;
+}
+
+async function deactivateUser(userId) {
+  if (isExternalDataMode()) {
+    const err = new Error('Deactivate user is disabled in external mode.');
+    err.status = 501;
+    throw err;
+  }
+  const [row] = await db('users')
+    .where({ id: userId })
+    .update({ is_active: false, updated_at: db.fn.now() })
+    .returning('*');
+  return row;
+}
+
+async function resetPassword(userId) {
+  if (isExternalDataMode()) {
+    const err = new Error('Reset password is disabled in external mode.');
+    err.status = 501;
+    throw err;
+  }
+  const temp = generateTempPassword();
+  const password_hash = await bcrypt.hash(temp, SALT_ROUNDS);
+  await db('users')
+    .where({ id: userId })
+    .update({ password_hash, must_change_password: true, updated_at: db.fn.now() });
+  return { temporary_password: temp };
+}
+
+function generateTempPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let out = '';
+  for (let i = 0; i < 12; i += 1) {
+    out += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `${out}!`;
 }
 
 async function impersonate(managerId, targetUserId) {
@@ -117,8 +230,8 @@ async function impersonate(managerId, targetUserId) {
 
   if (isExternalDataMode()) {
     const manager = accessDirectory.getUserById(managerId);
-    if (!manager || manager.role !== 'manager') {
-      const err = new Error('Only managers can impersonate');
+    if (!manager || !isGlobalRole(manager.role)) {
+      const err = new Error('Only administrators can impersonate');
       err.status = 403;
       throw err;
     }
@@ -145,8 +258,8 @@ async function impersonate(managerId, targetUserId) {
   }
 
   const manager = await db('users').where({ id: managerId, is_active: true }).first();
-  if (!manager || manager.role !== 'manager') {
-    const err = new Error('Only managers can impersonate');
+  if (!manager || !isGlobalRole(manager.role)) {
+    const err = new Error('Only administrators can impersonate');
     err.status = 403;
     throw err;
   }
@@ -191,4 +304,14 @@ async function stopImpersonation(managerId) {
   return buildAuthResult(manager);
 }
 
-module.exports = { register, login, me, listUsers, impersonate, stopImpersonation };
+module.exports = {
+  register,
+  login,
+  me,
+  listUsers,
+  updateUser,
+  deactivateUser,
+  resetPassword,
+  impersonate,
+  stopImpersonation,
+};

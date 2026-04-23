@@ -5,7 +5,7 @@ const authorize = require('../../middleware/rbac');
 
 const router = Router();
 
-router.get('/', authenticate, authorize('manager'), controller.list);
-router.get('/:entityType/:entityId', authenticate, authorize('manager'), controller.getByEntity);
+router.get('/', authenticate, authorize({ roles: ['national_admin', 'regional_manager'] }), controller.list);
+router.get('/:entityType/:entityId', authenticate, authorize({ roles: ['national_admin', 'regional_manager'] }), controller.getByEntity);
 
 module.exports = router;

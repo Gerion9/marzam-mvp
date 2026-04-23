@@ -79,6 +79,13 @@ async function submit(data) {
     return submitExternal(data);
   }
 
+  const idempotencyKey = data._idempotencyKey || null;
+
+  if (idempotencyKey) {
+    const existing = await db('visit_reports').where({ idempotency_key: idempotencyKey }).first();
+    if (existing) return existing;
+  }
+
   return db.transaction(async (trx) => {
     const [visit] = await trx('visit_reports')
       .insert({
@@ -90,13 +97,21 @@ async function submit(data) {
         order_potential: data.order_potential || null,
         contact_person: data.contact_person || null,
         contact_phone: data.contact_phone || null,
+        contact_name: data.contact_name || null,
+        contact_email: data.contact_email || null,
         competitor_products: data.competitor_products || null,
         stock_observations: data.stock_observations || null,
+        wholesalers: data.wholesalers || null,
+        visit_observations: data.visit_observations || null,
+        competition_info: data.competition_info || null,
+        competition_prices: data.competition_prices || null,
+        competition_offers: data.competition_offers || null,
         follow_up_date: data.follow_up_date || null,
         follow_up_reason: data.follow_up_reason || null,
         flag_reason: data.flag_reason || null,
         checkin_lat: data.checkin_lat || null,
         checkin_lng: data.checkin_lng || null,
+        idempotency_key: idempotencyKey,
       })
       .returning('*');
 
@@ -107,14 +122,19 @@ async function submit(data) {
         .update({ stop_status: stopStatus, completed_at: trx.fn.now() });
     }
 
-    // Update pharmacy last_visit fields
+    const pharmacyUpdates = {
+      last_visit_outcome: data.outcome,
+      last_visited_at: trx.fn.now(),
+      updated_at: trx.fn.now(),
+    };
+    if (data.contact_person) pharmacyUpdates.contact_person = data.contact_person;
+    if (data.contact_phone) pharmacyUpdates.contact_phone = data.contact_phone;
+    if (data.contact_email) pharmacyUpdates.contact_email = data.contact_email;
+    if (data.contact_name) pharmacyUpdates.contact_person = data.contact_name;
+
     await trx('pharmacies')
       .where({ id: data.pharmacy_id })
-      .update({
-        last_visit_outcome: data.outcome,
-        last_visited_at: trx.fn.now(),
-        updated_at: trx.fn.now(),
-      });
+      .update(pharmacyUpdates);
 
     // Side-effect: create commercial lead
     if (OUTCOMES_CREATING_LEAD.includes(data.outcome)) {

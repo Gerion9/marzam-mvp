@@ -284,7 +284,8 @@ function setupTabs() {
         loadRepSection();
         startRepPolling();
       }
-      if (tabId === 'reporting') loadReporting();
+      if (tabId === 'colonias') loadColonias();
+      if (tabId === 'reporting') { loadReporting(); loadFlotilla(); }
       if (tabId === 'audit') loadAudit();
     });
   });
@@ -658,8 +659,12 @@ async function openPharmacyDrawer(id) {
             </div>
             <p class="text-[11px] text-slate-500 mb-2">Rep: ${esc(v.rep_name || 'Desconocido')} ${v.route_order ? `| Parada ${v.route_order}` : ''}</p>
             <p class="text-sm text-slate-600">${esc(v.comment || 'Sin comentarios registrados.')}</p>
-            ${v.order_potential ? `<p class="text-xs text-emerald-600 mt-1 font-medium">Potencial: $${num(v.order_potential)}</p>` : ''}
+            ${v.order_potential ? `<p class="text-xs text-emerald-600 mt-1 font-medium">Potencial de compra: $${num(v.order_potential)}</p>` : ''}
             ${v.contact_name ? `<p class="text-[10px] text-slate-400 mt-1">Contacto: ${esc(v.contact_name)} ${v.contact_phone ? `| ${esc(v.contact_phone)}` : ''}</p>` : ''}
+            ${v.wholesalers ? `<p class="text-[10px] text-slate-500 mt-1">Mayoristas: ${esc(v.wholesalers)}</p>` : ''}
+            ${v.competition_info ? `<p class="text-[10px] text-slate-500 mt-1">Competencia: ${esc(v.competition_info)}</p>` : ''}
+            ${v.competition_prices ? `<p class="text-[10px] text-slate-500">Precios: ${esc(v.competition_prices)}</p>` : ''}
+            ${v.competition_offers ? `<p class="text-[10px] text-slate-500">Ofertas: ${esc(v.competition_offers)}</p>` : ''}
             ${v.distance_to_pharmacy_m != null ? `<p class="text-[10px] ${Number(v.distance_to_pharmacy_m) > 500 ? 'text-rose-500' : 'text-slate-400'} mt-1">Distancia check-in: ${Math.round(Number(v.distance_to_pharmacy_m))}m</p>` : ''}
             ${v.photo_url ? `
               <a href="${v.photo_url}" target="_blank" rel="noopener noreferrer" class="block mt-3">
@@ -800,7 +805,7 @@ function showAssignForm() {
         
         <div class="flex gap-2 pt-2">
           <button onclick="cancelAssignForm()" class="flex-1 btn btn-ghost border border-slate-200 text-sm py-2">Cancelar</button>
-          <button onclick="submitAssignForm()" class="flex-1 btn btn-primary text-sm py-2">Crear Asignación</button>
+          <button id="btn-assign-submit" onclick="submitAssignForm()" class="flex-1 btn btn-primary text-sm py-2">Crear Asignación</button>
         </div>
       </div>
     </div>`;
@@ -915,14 +920,21 @@ function togglePanel() {
 async function submitAssignForm() {
   const checked = document.querySelectorAll('.deselect-cb:checked');
   const selectedIds = [...checked].map(cb => cb.dataset.id);
-  
-  if (!selectedIds.length) { showToast('Selecciona al menos una farmacia', 'error'); return; }
 
-  const ring = polygonPoints.length >= 3 ? [...polygonPoints, polygonPoints[0]] : null;
-  
+  if (!selectedIds.length) { showToast('Selecciona al menos una farmacia', 'error'); return; }
+  if (polygonPoints.length < 3) {
+    showToast('Dibuja un polígono válido con al menos 3 puntos', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn-assign-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creando...'; }
+
+  const ring = [...polygonPoints, polygonPoints[0]];
+
   try {
     await API.post('/assignments', {
-      polygon_geojson: ring ? { type: 'Polygon', coordinates: [ring] } : { type: 'Polygon', coordinates: [[[0,0],[0,0],[0,0],[0,0]]] },
+      polygon_geojson: { type: 'Polygon', coordinates: [ring] },
       pharmacy_ids: selectedIds,
       campaign_objective: document.getElementById('f-obj').value,
       priority: document.getElementById('f-priority').value,
@@ -934,7 +946,11 @@ async function submitAssignForm() {
     cancelAssignForm();
     loadAssignmentPolygons();
     loadAssignments();
-  } catch (err) { showToast(err.error || 'Error al crear asignación', 'error'); }
+  } catch (err) {
+    showToast(err.error || 'Error al crear asignación', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Crear Asignación'; }
+  }
 }
 
 async function exportAllRepRoutes() {
@@ -1009,6 +1025,7 @@ async function previewWaveDistribution() {
 
 async function submitWaveDistribution() {
   const summary = document.getElementById('wave-summary');
+  const btn = document.getElementById('btn-wave-distribute');
   const payload = {
     wave_id: document.getElementById('wave-id').value || undefined,
     municipality: document.getElementById('wave-municipality').value || undefined,
@@ -1021,6 +1038,7 @@ async function submitWaveDistribution() {
     payload.max_pharmacies_per_rep = maxPerRep;
   }
 
+  if (btn) { btn.disabled = true; btn.textContent = 'Distribuyendo...'; }
   try {
     summary.textContent = 'Distribuyendo farmacias entre representantes activos...';
     const result = await API.post('/assignments/distribute', payload);
@@ -1032,6 +1050,8 @@ async function submitWaveDistribution() {
   } catch (err) {
     summary.textContent = err.error || 'La distribución falló.';
     showToast(err.error || 'La distribución falló', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Distribuir'; }
   }
 }
 
@@ -1509,6 +1529,121 @@ async function advanceLead(leadId, newStatus) {
     await API.patch(`/commercial-leads/${leadId}`, { status: newStatus });
     showToast(`Oportunidad actualizada a ${statusEs(newStatus)}`, 'success');
   } catch (err) { showToast(err.error || 'Error al actualizar oportunidad', 'error'); }
+}
+
+/* ─── Colonias ─────────────────────────────────────────────────── */
+let coloniasCache = [];
+let coloniasLayerAdded = false;
+
+async function loadColonias() {
+  try {
+    const params = new URLSearchParams();
+    const security = document.getElementById('colonia-filter-security')?.value;
+    const search = document.getElementById('colonia-search')?.value;
+    if (security) params.set('security_level', security);
+    if (search) params.set('search', search);
+    params.set('limit', '2000');
+
+    coloniasCache = await API.get(`/colonias?${params}`);
+    renderColoniasList();
+    loadColoniasLayer();
+  } catch {}
+}
+
+function renderColoniasList() {
+  const securityColors = { acceptable: 'badge-green', caution: 'badge-yellow', not_acceptable: 'badge-red' };
+  const securityLabels = { acceptable: 'Aceptable', caution: 'Precaución', not_acceptable: 'No aceptable' };
+
+  document.getElementById('colonia-list').innerHTML = coloniasCache.length
+    ? coloniasCache.slice(0, 100).map(c => `
+      <div class="bg-white border border-slate-100 p-3 rounded-xl shadow-sm" onclick="focusColonia('${c.id}', ${c.centroid_lng}, ${c.centroid_lat})">
+        <div class="flex items-center justify-between mb-1">
+          <h4 class="text-sm font-medium text-slate-800 truncate flex-1">${esc(c.settlement_name)}</h4>
+          <span class="badge ${securityColors[c.security_level]} ml-2">${securityLabels[c.security_level]}</span>
+        </div>
+        <p class="text-[10px] text-slate-400">${esc(c.settlement_type || '')} | CP ${c.postalcode || '—'}</p>
+        <div class="flex gap-1 mt-2">
+          <button onclick="event.stopPropagation(); updateColoniaSecurity('${c.id}','acceptable')" class="text-[9px] px-2 py-0.5 rounded font-bold ${c.security_level === 'acceptable' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700'}">Aceptable</button>
+          <button onclick="event.stopPropagation(); updateColoniaSecurity('${c.id}','caution')" class="text-[9px] px-2 py-0.5 rounded font-bold ${c.security_level === 'caution' ? 'bg-amber-500 text-white' : 'bg-amber-50 text-amber-700'}">Precaución</button>
+          <button onclick="event.stopPropagation(); updateColoniaSecurity('${c.id}','not_acceptable')" class="text-[9px] px-2 py-0.5 rounded font-bold ${c.security_level === 'not_acceptable' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-700'}">No aceptable</button>
+        </div>
+      </div>`).join('')
+    : '<p class="text-xs text-slate-400">Sin colonias cargadas.</p>';
+}
+
+function focusColonia(id, lng, lat) {
+  if (Number.isFinite(lng) && Number.isFinite(lat)) {
+    map.flyTo({ center: [lng, lat], zoom: 15, duration: 800 });
+  }
+}
+
+async function updateColoniaSecurity(id, level) {
+  try {
+    await API.patch(`/colonias/${id}/security`, { security_level: level });
+    const c = coloniasCache.find(r => r.id === id);
+    if (c) c.security_level = level;
+    renderColoniasList();
+    loadColoniasLayer();
+    showToast('Seguridad de colonia actualizada', 'success');
+  } catch (err) { showToast(err.error || 'Error al actualizar', 'error'); }
+}
+
+async function loadColoniasLayer() {
+  try {
+    const fc = await API.get('/colonias/geojson?limit=2000');
+
+    if (!coloniasLayerAdded && map.getSource) {
+      map.addSource('colonias', { type: 'geojson', data: fc });
+      map.addLayer({
+        id: 'colonias-fill',
+        type: 'fill',
+        source: 'colonias',
+        paint: {
+          'fill-color': ['match', ['get', 'security_level'],
+            'acceptable', '#10b981',
+            'caution', '#f59e0b',
+            'not_acceptable', '#ef4444',
+            '#94a3b8'],
+          'fill-opacity': 0.15,
+        },
+      }, 'pharmacies-layer');
+      map.addLayer({
+        id: 'colonias-outline',
+        type: 'line',
+        source: 'colonias',
+        paint: {
+          'line-color': ['match', ['get', 'security_level'],
+            'acceptable', '#059669',
+            'caution', '#d97706',
+            'not_acceptable', '#dc2626',
+            '#64748b'],
+          'line-width': 1.5,
+          'line-opacity': 0.5,
+        },
+      }, 'pharmacies-layer');
+      coloniasLayerAdded = true;
+    } else {
+      map.getSource('colonias')?.setData(fc);
+    }
+  } catch {}
+}
+
+/* ─── Flotilla ─────────────────────────────────────────────────── */
+async function loadFlotilla() {
+  try {
+    const data = await API.get('/reporting/flotilla');
+    const kpis = [
+      { label: 'Visitas Hoy', value: data.visits_today },
+      { label: 'Omitidas Hoy', value: data.skipped_today },
+      { label: 'Pendientes', value: data.pending_total },
+      { label: 'Reps Activos', value: `${data.active_reps}/${data.total_reps}` },
+    ];
+    document.getElementById('flotilla-kpis').innerHTML = kpis.map(c => `
+      <div class="bg-white border border-slate-100 p-2.5 rounded-xl shadow-sm text-center">
+        <p class="text-[10px] text-slate-500 uppercase tracking-wide font-medium">${c.label}</p>
+        <p class="text-lg font-bold text-slate-800">${c.value}</p>
+      </div>`).join('');
+  } catch {}
 }
 
 /* ─── Export ────────────────────────────────────────────────────── */

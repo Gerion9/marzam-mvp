@@ -2,6 +2,8 @@ const db = require('../../config/database');
 const externalPoiRepository = require('../../repositories/external/poiRepository');
 const externalFieldSurveyRepository = require('../../repositories/external/fieldSurveyRepository');
 const { isExternalDataMode } = require('../../repositories/runtime');
+const { getUserScope } = require('../../middleware/requestContext');
+const { applyTerritoryFilter } = require('../../middleware/scopeFilter');
 
 function mergeOperationalFields(pharmacy, stateRow) {
   if (!stateRow) return pharmacy;
@@ -41,9 +43,47 @@ async function listExternal(filters = {}) {
     rows = rows.filter((row) => row.assigned_rep_id === String(filters.rep_id));
   }
 
+  if (filters.exclude_unsafe_colonias !== false) {
+    try {
+      const unsafeIds = await filterUnsafeExternalPharmacies(rows);
+      if (unsafeIds.size) {
+        rows = rows.filter((row) => !unsafeIds.has(String(row.id)));
+      }
+    } catch (err) {
+      console.warn('[pharmacies] exclude_unsafe_colonias filter failed:', err.message);
+    }
+  }
+
   const page = Number(filters.page) || 1;
   const limit = Math.min(Number(filters.limit) || 200, 5000);
   return rows.slice((page - 1) * limit, page * limit);
+}
+
+async function filterUnsafeExternalPharmacies(pharmacies) {
+  const unsafeIds = new Set();
+  const candidates = pharmacies.filter((p) => p.lat != null && p.lng != null);
+  if (!candidates.length) return unsafeIds;
+
+  const batchSize = 200;
+  for (let i = 0; i < candidates.length; i += batchSize) {
+    const batch = candidates.slice(i, i + batchSize);
+    const values = batch.map(() => '(?, ST_SetSRID(ST_MakePoint(?, ?), 4326))').join(',');
+    const params = batch.flatMap((p) => [String(p.id), p.lng, p.lat]);
+    try {
+      const result = await db.raw(`
+        SELECT pts.pid FROM (VALUES ${values}) AS pts(pid, pt)
+        WHERE EXISTS (
+          SELECT 1 FROM colonias c
+          WHERE c.security_level = 'not_acceptable'
+            AND ST_Within(pts.pt, c.geom)
+        )
+      `, params);
+      for (const row of result.rows || []) unsafeIds.add(row.pid);
+    } catch (err) {
+      console.warn('[pharmacies] unsafe colonia batch query failed:', err.message);
+    }
+  }
+  return unsafeIds;
 }
 
 async function list(filters = {}) {
@@ -90,7 +130,17 @@ async function list(filters = {}) {
     });
   }
 
-  // Bounding-box spatial filter (for map viewport)
+  if (filters.exclude_unsafe_colonias !== false) {
+    q.where(function () {
+      this.whereNull('pharmacies.colonia_id')
+        .orWhereNotIn('pharmacies.colonia_id', function () {
+          this.select('id').from('colonias').where('security_level', 'not_acceptable');
+        });
+    });
+  }
+
+  applyTerritoryFilter(q, 'pharmacies.territory_id', getUserScope());
+
   if (filters.bbox) {
     const [west, south, east, north] = filters.bbox;
     q.whereRaw(
@@ -194,17 +244,33 @@ async function createCandidate(data) {
   });
 }
 
-async function findInsidePolygon(polygonGeoJSON) {
+async function findInsidePolygon(polygonGeoJSON, options = {}) {
   if (isExternalDataMode()) {
-    return externalPoiRepository.list({ polygon: polygonGeoJSON, limit: 5000 });
+    const rows = await externalPoiRepository.list({ polygon: polygonGeoJSON, limit: 5000 });
+    if (options.exclude_unsafe_colonias !== false) {
+      const unsafeIds = await filterUnsafeExternalPharmacies(rows);
+      return rows.filter((r) => !unsafeIds.has(String(r.id)));
+    }
+    return rows;
   }
 
-  return db('pharmacies')
+  const q = db('pharmacies')
     .select('id', 'name', 'address', db.raw(`ST_X(coordinates::geometry) AS lng, ST_Y(coordinates::geometry) AS lat`))
     .whereRaw(
       `ST_Within(coordinates::geometry, ST_SetSRID(ST_GeomFromGeoJSON(?), 4326))`,
       [JSON.stringify(polygonGeoJSON)],
     );
+
+  if (options.exclude_unsafe_colonias !== false) {
+    q.where(function () {
+      this.whereNull('colonia_id')
+        .orWhereNotIn('colonia_id', function () {
+          this.select('id').from('colonias').where('security_level', 'not_acceptable');
+        });
+    });
+  }
+
+  return q;
 }
 
 async function isAssignedToRep(pharmacyId, repId) {

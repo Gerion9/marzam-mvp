@@ -5,13 +5,15 @@ const authorize = require('../../middleware/rbac');
 
 const router = Router();
 
-router.get('/dashboard', authenticate, authorize('manager'), controller.dashboard);
-router.get('/reps', authenticate, authorize('manager'), controller.repProductivity);
-router.get('/coverage', authenticate, authorize('manager'), controller.coverageByMunicipality);
-router.get('/assignments', authenticate, authorize('manager'), controller.assignmentProgress);
-router.get('/export/pharmacies', authenticate, authorize('manager'), controller.exportPharmacies);
-router.get('/export/rep-route/:repId', authenticate, authorize('manager'), controller.exportRepRoute);
-router.get('/export/all-rep-routes', authenticate, authorize('manager'), controller.exportAllRepRoutes);
-router.post('/refresh', authenticate, authorize('manager'), controller.refreshViews);
+router.get('/dashboard', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.dashboard);
+router.get('/reps', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.repProductivity);
+router.get('/coverage', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.coverageByMunicipality);
+router.get('/assignments', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.assignmentProgress);
+router.get('/export/pharmacies', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.exportPharmacies);
+router.get('/export/rep-route/:repId', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.exportRepRoute);
+router.get('/export/all-rep-routes', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.exportAllRepRoutes);
+router.get('/visits', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.visitDetail);
+router.get('/flotilla', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.flotillaSummary);
+router.post('/refresh', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.refreshViews);
 
 module.exports = router;

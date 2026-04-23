@@ -9,7 +9,7 @@ const externalFieldSurveyRepository = require('../../repositories/external/field
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { buildAssignmentId, buildStopId } = require('../externalData/externalAssignmentIds');
 const accessDirectory = require('../../services/accessDirectory');
-const { getDataScope } = require('../../middleware/requestContext');
+const { getDataScope, getUserScope } = require('../../middleware/requestContext');
 
 async function getRepNameMap(repIds) {
   if (isExternalDataMode()) {
@@ -232,7 +232,7 @@ async function distributeWaveExternal({
   due_date,
   created_by,
   wave_id,
-  max_pharmacies_per_rep,
+  max_pharmacies_per_rep: _maxPerRep,
   dry_run,
 }) {
   let targetRepIds = rep_ids;
@@ -406,6 +406,23 @@ async function list(filters = {}) {
   if (filters.rep_id) q.where('ta.rep_id', filters.rep_id);
   if (filters.status) q.where('ta.status', filters.status);
 
+  const scope = getUserScope();
+  if (scope && !scope.isGlobal && scope.role !== 'field_rep') {
+    const ids = scope.accessibleTerritoryIds || [];
+    if (ids.length === 0) {
+      q.whereRaw('1 = 0');
+    } else {
+      q.where(function () {
+        this.whereIn('ta.territory_id', ids).orWhereIn('ta.rep_id', function () {
+          this.select('user_id')
+            .from('user_territories')
+            .whereIn('territory_id', ids)
+            .whereNull('valid_to');
+        });
+      });
+    }
+  }
+
   q.orderBy('ta.created_at', 'desc');
   return q;
 }
@@ -497,7 +514,20 @@ async function reassign(id, data, _userId) {
     if (data.visit_goal !== undefined) updates.visit_goal = data.visit_goal;
 
     if (data.rep_id && assignment.status === 'unassigned') {
+      assertTransition(assignment.status, 'assigned');
       updates.status = 'assigned';
+    } else if (data.rep_id === null && assignment.status === 'assigned') {
+      assertTransition(assignment.status, 'unassigned');
+      updates.status = 'unassigned';
+    }
+
+    if (data.rep_id) {
+      const repExists = await trx('users').where({ id: data.rep_id }).first('id');
+      if (!repExists) {
+        const err = new Error(`rep_id ${data.rep_id} does not exist`);
+        err.status = 400;
+        throw err;
+      }
     }
 
     updates.updated_at = trx.fn.now();
@@ -612,6 +642,13 @@ async function distributeWave({
           .whereIn('pv.assignment_status', ['assigned', 'in_progress', 'reassigned']);
       });
 
+    pharmacyQuery.where(function () {
+      this.whereNull('p.colonia_id')
+        .orWhereNotIn('p.colonia_id', function () {
+          this.select('id').from('colonias').where('security_level', 'not_acceptable');
+        });
+    });
+
     if (municipality) {
       pharmacyQuery.where('p.municipality', municipality);
     }
@@ -656,6 +693,65 @@ async function distributeWave({
   });
 }
 
+async function reorderStops(assignmentId, stopOrder) {
+  if (isExternalDataMode()) {
+    const currentRows = await externalFieldSurveyRepository.listCurrentState({ assignment_id: assignmentId, limit: 5000 });
+    const events = [];
+    for (let i = 0; i < stopOrder.length; i += 1) {
+      const pharmacyId = stopOrder[i];
+      const existing = currentRows.find((r) => r.pharmacy_id === pharmacyId);
+      if (existing) {
+        events.push({
+          assignmentId,
+          pharmacyId,
+          repId: existing.rep_id,
+          repName: existing.rep_name,
+          waveId: existing.wave_id,
+          campaignObjective: existing.campaign_objective,
+          assignmentStatus: existing.assignment_status,
+          visitStatus: existing.visit_status,
+          regularizationStatus: existing.regularization_status,
+          priority: existing.priority,
+          routeOrder: i + 1,
+          assignedAt: existing.assigned_at,
+          dueAt: existing.due_at,
+          visitedAt: existing.visited_at,
+          photoUrl: existing.photo_url,
+          comment: existing.comment,
+          contactName: existing.contact_name,
+          contactPhone: existing.contact_phone,
+          orderPotential: existing.order_potential,
+        });
+      }
+    }
+    if (events.length) await externalFieldSurveyRepository.insertEvents(events);
+    return { reordered: events.length };
+  }
+
+  return db.transaction(async (trx) => {
+    for (let i = 0; i < stopOrder.length; i += 1) {
+      const stopId = stopOrder[i];
+      await trx('assignment_stops')
+        .where({ id: stopId, assignment_id: assignmentId })
+        .update({ route_order: i + 1 });
+    }
+
+    const stops = await trx('assignment_stops as s')
+      .join('pharmacies as p', 'p.id', 's.pharmacy_id')
+      .select(
+        's.*',
+        'p.name',
+        trx.raw(`ST_X(p.coordinates::geometry) AS lng`),
+        trx.raw(`ST_Y(p.coordinates::geometry) AS lat`),
+      )
+      .where('s.assignment_id', assignmentId)
+      .orderBy('s.route_order', 'asc');
+
+    const googleMapsUrl = buildDirectionsUrl(stops);
+    return { stops, google_maps_url: googleMapsUrl };
+  });
+}
+
 async function resetAllAssignments() {
   if (!isExternalDataMode()) {
     const err = new Error('Reset is only available in external data mode');
@@ -675,5 +771,6 @@ module.exports = {
   checkOverlap,
   reassign,
   distributeWave,
+  reorderStops,
   resetAllAssignments,
 };

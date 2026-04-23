@@ -7,13 +7,13 @@ const validate = require('../../middleware/validate');
 
 const router = Router();
 
-router.get('/', authenticate, authorize('manager'), controller.list);
-router.get('/pending-count', authenticate, authorize('manager'), controller.pendingCount);
+router.get('/', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.list);
+router.get('/pending-count', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), controller.pendingCount);
 
 router.patch(
   '/:id/resolve',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   validate({
     decision: { required: true, type: 'string', oneOf: ['approved', 'rejected'] },
   }),
@@ -24,7 +24,7 @@ router.patch(
 router.post(
   '/batch-resolve',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   validate({
     ids: { required: true, type: 'array' },
     decision: { required: true, type: 'string', oneOf: ['approved', 'rejected'] },

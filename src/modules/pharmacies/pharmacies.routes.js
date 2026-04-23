@@ -13,7 +13,7 @@ router.get('/:id', authenticate, controller.getById);
 router.patch(
   '/:id',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   auditLog('pharmacy.updated'),
   controller.update,
 );
@@ -32,7 +32,7 @@ router.post(
 router.post(
   '/find-in-polygon',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   validate({ polygon: { required: true, type: 'object' } }),
   controller.findInsidePolygon,
 );

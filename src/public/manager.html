@@ -80,6 +80,12 @@
     <div class="hidden md:block flex-1"></div>
     <div class="hidden md:block w-8 h-px bg-slate-200/80 my-1 mx-auto group-hover/sidebar:w-[80%] transition-all duration-300"></div>
 
+    <button class="nav-tab" data-tab="colonias">
+      <div class="nav-icon-box">
+        <svg class="w-[20px] h-[20px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8z"/><circle cx="12" cy="10" r="3"/></svg>
+      </div>
+      <div class="tab-text-wrapper"><span class="tab-text-inner">Colonias</span></div>
+    </button>
     <button class="nav-tab" data-tab="reporting">
       <div class="nav-icon-box">
         <svg class="w-[20px] h-[20px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/></svg>
@@ -231,7 +237,24 @@
         <div id="reps-list" class="space-y-3"></div>
       </div>
 
+      <div id="tab-colonias" class="tab-content hidden">
+        <h3 class="text-sm font-bold text-slate-700 mb-2">Seguridad por Colonia</h3>
+        <p class="text-xs text-slate-500 mb-4">Define el nivel de seguridad de cada colonia. Las colonias marcadas como "No aceptable" serán excluidas de asignaciones y cálculos.</p>
+        <div class="flex flex-wrap gap-2 mb-4">
+          <select id="colonia-filter-security" class="custom-select-raw">
+            <option value="">Todos los niveles</option>
+            <option value="acceptable">Aceptable</option>
+            <option value="caution">Precaución</option>
+            <option value="not_acceptable">No aceptable</option>
+          </select>
+          <input id="colonia-search" type="text" class="custom-select-raw flex-1" placeholder="Buscar colonia...">
+        </div>
+        <div id="colonia-list" class="space-y-2"></div>
+      </div>
+
       <div id="tab-reporting" class="tab-content hidden">
+        <h3 class="text-sm font-bold text-slate-700 mb-3">Flotilla — Hoy</h3>
+        <div id="flotilla-kpis" class="grid grid-cols-3 gap-2 mb-5"></div>
         <h3 class="text-sm font-bold text-slate-700 mb-4">Cobertura y Productividad</h3>
         <div id="reporting-kpis" class="grid grid-cols-2 gap-3 mb-5"></div>
         <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Cobertura por Municipio</h4>

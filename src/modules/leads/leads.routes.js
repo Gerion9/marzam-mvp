@@ -5,11 +5,13 @@ const auditLog = require('../../middleware/auditLog');
 const db = require('../../config/database');
 const pharmacyService = require('../pharmacies/pharmacies.service');
 const { assertLeadTransition } = require('./leads.stateMachine');
+const { isExternalDataMode } = require('../../repositories/runtime');
 
 const router = Router();
 
-router.get('/', authenticate, authorize('manager'), async (req, res, next) => {
+router.get('/', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), async (req, res, next) => {
   try {
+    if (isExternalDataMode()) return res.json([]);
     const q = db('commercial_leads as cl')
       .join('pharmacies as p', 'p.id', 'cl.pharmacy_id')
       .select('cl.*', 'p.name as pharmacy_name', 'p.address as pharmacy_address');
@@ -22,6 +24,7 @@ router.get('/', authenticate, authorize('manager'), async (req, res, next) => {
 
 router.get('/pharmacy/:pharmacyId', authenticate, async (req, res, next) => {
   try {
+    if (isExternalDataMode()) return res.json([]);
     if (req.user.role === 'field_rep') {
       const assigned = await pharmacyService.isAssignedToRep(req.params.pharmacyId, req.user.id);
       if (!assigned) {
@@ -35,8 +38,11 @@ router.get('/pharmacy/:pharmacyId', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.patch('/:id', authenticate, authorize('manager'), auditLog('lead.updated'), async (req, res, next) => {
+router.patch('/:id', authenticate, authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }), auditLog('lead.updated'), async (req, res, next) => {
   try {
+    if (isExternalDataMode()) {
+      return res.status(501).json({ error: 'Commercial leads updates are not available in external data mode' });
+    }
     const lead = await db('commercial_leads').where({ id: req.params.id }).first();
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });

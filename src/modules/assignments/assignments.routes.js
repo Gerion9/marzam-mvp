@@ -13,7 +13,7 @@ router.get('/:id', authenticate, controller.getById);
 router.post(
   '/',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   validate({
     pharmacy_ids: { required: true },
     campaign_objective: { required: true, type: 'string' },
@@ -25,7 +25,7 @@ router.post(
 router.post(
   '/distribute',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   validate({
     campaign_objective: { required: true, type: 'string' },
     municipality: { type: 'string' },
@@ -57,7 +57,14 @@ router.patch(
 router.patch(
   '/:id',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
+  validate({
+    rep_id: { type: 'string' },
+    campaign_objective: { type: 'string' },
+    priority: { type: 'string', oneOf: ['low', 'normal', 'high', 'urgent'] },
+    due_date: { type: 'string' },
+    visit_goal: { type: 'number' },
+  }),
   auditLog('assignment.updated'),
   controller.reassign,
 );
@@ -65,15 +72,25 @@ router.patch(
 router.post(
   '/check-overlap',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   validate({ polygon: { required: true, type: 'object' } }),
   controller.checkOverlap,
+);
+
+router.patch(
+  '/:id/reorder',
+  authenticate,
+  validate({
+    stop_order: { required: true, type: 'array' },
+  }),
+  auditLog('assignment.reordered'),
+  controller.reorderStops,
 );
 
 router.post(
   '/reset',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
   controller.resetAll,
 );
 

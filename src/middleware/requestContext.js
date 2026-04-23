@@ -3,7 +3,7 @@ const { AsyncLocalStorage } = require('async_hooks');
 const asyncLocalStorage = new AsyncLocalStorage();
 
 function requestContextMiddleware(_req, _res, next) {
-  asyncLocalStorage.run({ dataScope: null }, next);
+  asyncLocalStorage.run({ dataScope: null, userScope: null }, next);
 }
 
 function setDataScope(scope) {
@@ -16,4 +16,20 @@ function getDataScope() {
   return store?.dataScope || null;
 }
 
-module.exports = { requestContextMiddleware, setDataScope, getDataScope };
+function setUserScope(scope) {
+  const store = asyncLocalStorage.getStore();
+  if (store) store.userScope = scope || null;
+}
+
+function getUserScope() {
+  const store = asyncLocalStorage.getStore();
+  return store?.userScope || null;
+}
+
+module.exports = {
+  requestContextMiddleware,
+  setDataScope,
+  getDataScope,
+  setUserScope,
+  getUserScope,
+};

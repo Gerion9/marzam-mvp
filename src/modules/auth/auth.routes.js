@@ -9,12 +9,16 @@ const router = Router();
 router.post(
   '/register',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager'] }),
   validate({
     email: { required: true, type: 'string' },
     password: { required: true, type: 'string' },
     full_name: { required: true, type: 'string' },
-    role: { required: true, type: 'string', oneOf: ['manager', 'field_rep'] },
+    role: {
+      required: true,
+      type: 'string',
+      oneOf: ['national_admin', 'regional_manager', 'area_coordinator', 'field_rep', 'manager'],
+    },
   }),
   controller.register,
 );
@@ -30,12 +34,17 @@ router.post(
 
 router.get('/me', authenticate, controller.me);
 
-router.get('/users', authenticate, authorize('manager'), controller.listUsers);
+router.get(
+  '/users',
+  authenticate,
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
+  controller.listUsers,
+);
 
 router.post(
   '/impersonate',
   authenticate,
-  authorize('manager'),
+  authorize({ roles: ['national_admin', 'regional_manager'] }),
   validate({
     target_user_id: { required: true, type: 'string' },
   }),
