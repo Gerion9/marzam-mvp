@@ -73,30 +73,44 @@ async function createForAssignmentExternal({ assignment, stops, wave_id = null }
   return externalFieldSurveyRepository.insertEvents(events);
 }
 
-async function syncAssignmentReassignmentExternal({ assignmentId, rep_id, priority, due_date }) {
+async function syncAssignmentReassignmentExternal({ assignmentId, rep_id, priority, due_date, repChanged, unassign }) {
   const currentRows = await externalFieldSurveyRepository.listCurrentState({ assignment_id: assignmentId, limit: 5000 });
   const repNameMap = await getRepNameMap(rep_id ? [rep_id] : []);
-  const events = currentRows.map((row) => ({
-    assignmentId,
-    pharmacyId: row.pharmacy_id,
-    repId: rep_id || row.rep_id,
-    repName: repNameMap.get(String(rep_id)) || row.rep_name || null,
-    waveId: row.wave_id,
-    campaignObjective: row.campaign_objective || null,
-    assignmentStatus: rep_id ? 'reassigned' : 'cancelled',
-    visitStatus: row.visit_status,
-    regularizationStatus: row.regularization_status,
-    priority: priority || row.priority || 'normal',
-    routeOrder: row.route_order,
-    assignedAt: row.assigned_at || new Date().toISOString(),
-    dueAt: due_date !== undefined ? due_date : row.due_at,
-    visitedAt: row.visited_at,
-    photoUrl: row.photo_url,
-    comment: row.comment,
-    contactName: row.contact_name,
-    contactPhone: row.contact_phone,
-    orderPotential: row.order_potential,
-  }));
+  const events = currentRows.map((row) => {
+    let nextStatus;
+    if (unassign) {
+      nextStatus = 'unassigned';
+    } else if (repChanged) {
+      nextStatus = 'reassigned';
+    } else {
+      nextStatus = row.assignment_status;
+    }
+    const nextRepId = unassign ? null : (repChanged ? rep_id : row.rep_id);
+    const nextRepName = repChanged
+      ? (repNameMap.get(String(rep_id)) || null)
+      : (row.rep_name || null);
+    return {
+      assignmentId,
+      pharmacyId: row.pharmacy_id,
+      repId: nextRepId,
+      repName: nextRepName,
+      waveId: row.wave_id,
+      campaignObjective: row.campaign_objective || null,
+      assignmentStatus: nextStatus,
+      visitStatus: row.visit_status,
+      regularizationStatus: row.regularization_status,
+      priority: priority || row.priority || 'normal',
+      routeOrder: row.route_order,
+      assignedAt: row.assigned_at || new Date().toISOString(),
+      dueAt: due_date !== undefined ? due_date : row.due_at,
+      visitedAt: row.visited_at,
+      photoUrl: row.photo_url,
+      comment: row.comment,
+      contactName: row.contact_name,
+      contactPhone: row.contact_phone,
+      orderPotential: row.order_potential,
+    };
+  });
   return externalFieldSurveyRepository.insertEvents(events);
 }
 
@@ -350,18 +364,21 @@ async function createForAssignment({ trx = db, assignment, stops, wave_id = null
   return trx('pharmacy_verifications').insert(rows).returning('*');
 }
 
-async function syncAssignmentReassignment({ trx = db, assignmentId, rep_id, priority, due_date }) {
+async function syncAssignmentReassignment({ trx = db, assignmentId, rep_id, priority, due_date, repChanged = false, unassign = false }) {
   if (isExternalDataMode()) {
-    return syncAssignmentReassignmentExternal({ assignmentId, rep_id, priority, due_date });
+    return syncAssignmentReassignmentExternal({ assignmentId, rep_id, priority, due_date, repChanged, unassign });
   }
 
   const updates = {
     updated_at: trx.fn.now(),
   };
 
-  if (rep_id !== undefined) {
-    if (rep_id) updates.rep_id = rep_id;
-    updates.assignment_status = rep_id ? 'reassigned' : 'cancelled';
+  if (repChanged) {
+    updates.rep_id = rep_id;
+    updates.assignment_status = 'reassigned';
+  } else if (unassign) {
+    updates.rep_id = null;
+    updates.assignment_status = 'unassigned';
   }
   if (priority) updates.priority = priority;
   if (due_date !== undefined) updates.due_at = due_date || null;

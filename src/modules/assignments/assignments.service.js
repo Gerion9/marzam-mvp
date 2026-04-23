@@ -7,7 +7,7 @@ const verificationService = require('../verifications/verifications.service');
 const externalPoiRepository = require('../../repositories/external/poiRepository');
 const externalFieldSurveyRepository = require('../../repositories/external/fieldSurveyRepository');
 const { isExternalDataMode } = require('../../repositories/runtime');
-const { buildAssignmentId, buildStopId } = require('../externalData/externalAssignmentIds');
+const { buildAssignmentId, buildStopId, parseStopId } = require('../externalData/externalAssignmentIds');
 const accessDirectory = require('../../services/accessDirectory');
 const { getDataScope, getUserScope } = require('../../middleware/requestContext');
 
@@ -207,19 +207,32 @@ async function checkOverlapExternal(polygon_geojson) {
 
 async function reassignExternal(id, data) {
   const assignment = await getByIdExternal(id);
+
+  const repProvided = Object.prototype.hasOwnProperty.call(data, 'rep_id');
+  const nextRepId = repProvided ? (data.rep_id || null) : assignment.rep_id;
+  const repChanged = repProvided && nextRepId && nextRepId !== assignment.rep_id;
+  const unassign = repProvided && !nextRepId && assignment.rep_id;
+
   await verificationService.syncAssignmentReassignment({
     assignmentId: id,
-    rep_id: data.rep_id,
+    rep_id: nextRepId,
     priority: data.priority,
     due_date: data.due_date,
+    repChanged,
+    unassign,
   });
+
+  let nextStatus = assignment.status;
+  if (unassign) nextStatus = 'unassigned';
+  else if (repChanged) nextStatus = 'reassigned';
+  else if (!assignment.rep_id && nextRepId) nextStatus = 'assigned';
 
   const after = {
     ...assignment,
-    rep_id: data.rep_id !== undefined ? data.rep_id : assignment.rep_id,
+    rep_id: nextRepId,
     priority: data.priority || assignment.priority,
     due_date: data.due_date !== undefined ? data.due_date : assignment.due_date,
-    status: data.rep_id ? 'assigned' : 'unassigned',
+    status: nextStatus,
   };
   return { before: assignment, after };
 }
@@ -752,6 +765,198 @@ async function reorderStops(assignmentId, stopOrder) {
   });
 }
 
+async function addStopsExternal(assignmentId, pharmacyIds) {
+  const assignment = await getByIdExternal(assignmentId);
+  const currentRows = await externalFieldSurveyRepository.listCurrentState({ limit: 20000 });
+
+  const existingInThis = new Set(assignment.stops.map((stop) => String(stop.pharmacy_id)));
+  const activeElsewhere = new Set(currentRows
+    .filter((row) => ['assigned', 'in_progress'].includes(row.assignment_status))
+    .filter((row) => row.assignment_id !== assignmentId)
+    .map((row) => String(row.pharmacy_id)));
+
+  const toAdd = [];
+  const skipped = [];
+  for (const raw of pharmacyIds) {
+    const pid = String(raw);
+    if (existingInThis.has(pid)) { skipped.push({ pharmacy_id: pid, reason: 'already_in_assignment' }); continue; }
+    if (activeElsewhere.has(pid)) { skipped.push({ pharmacy_id: pid, reason: 'active_in_other_assignment' }); continue; }
+    toAdd.push(pid);
+  }
+
+  if (!toAdd.length) return { added: 0, skipped };
+
+  const pois = await externalPoiRepository.list({ limit: 5000 });
+  const poiById = new Map(pois.map((row) => [String(row.id), row]));
+  const validPharmacies = toAdd.map((pid) => poiById.get(pid)).filter(Boolean);
+  if (validPharmacies.length !== toAdd.length) {
+    const missing = toAdd.filter((pid) => !poiById.has(pid));
+    missing.forEach((pid) => skipped.push({ pharmacy_id: pid, reason: 'pharmacy_not_found' }));
+  }
+  if (!validPharmacies.length) return { added: 0, skipped };
+
+  const ordered = orderStops(validPharmacies);
+  const nextOrder = (assignment.stops.reduce((max, s) => Math.max(max, Number(s.route_order) || 0), 0)) + 1;
+  const now = new Date().toISOString();
+  const repNameMap = await getRepNameMap(assignment.rep_id ? [assignment.rep_id] : []);
+
+  const events = ordered.map((pharmacy, idx) => ({
+    assignmentId,
+    pharmacyId: pharmacy.id,
+    repId: assignment.rep_id,
+    repName: repNameMap.get(String(assignment.rep_id)) || assignment.rep_name || null,
+    waveId: assignment.wave_id,
+    campaignObjective: assignment.campaign_objective,
+    assignmentStatus: assignment.rep_id ? 'assigned' : 'unassigned',
+    visitStatus: 'pending',
+    regularizationStatus: 'pending',
+    priority: assignment.priority,
+    routeOrder: nextOrder + idx,
+    assignedAt: now,
+    dueAt: assignment.due_date,
+  }));
+
+  await externalFieldSurveyRepository.insertEvents(events);
+  return { added: events.length, skipped };
+}
+
+async function addStops(assignmentId, pharmacyIds) {
+  if (!Array.isArray(pharmacyIds) || !pharmacyIds.length) {
+    const err = new Error('pharmacy_ids must be a non-empty array');
+    err.status = 400;
+    throw err;
+  }
+
+  if (isExternalDataMode()) {
+    return addStopsExternal(assignmentId, pharmacyIds);
+  }
+
+  return db.transaction(async (trx) => {
+    const assignment = await trx('territory_assignments').where({ id: assignmentId }).first();
+    if (!assignment) {
+      const err = new Error('Assignment not found');
+      err.status = 404;
+      throw err;
+    }
+
+    const existingIds = await trx('assignment_stops')
+      .where({ assignment_id: assignmentId })
+      .pluck('pharmacy_id');
+    const existingSet = new Set(existingIds.map(String));
+    const newIds = pharmacyIds.map(String).filter((id) => !existingSet.has(id));
+    if (!newIds.length) return { added: 0, skipped: pharmacyIds.map((id) => ({ pharmacy_id: String(id), reason: 'already_in_assignment' })) };
+
+    const activeElsewhere = await trx('assignment_stops as s')
+      .join('territory_assignments as ta', 'ta.id', 's.assignment_id')
+      .whereIn('s.pharmacy_id', newIds)
+      .whereNot('s.assignment_id', assignmentId)
+      .whereIn('ta.status', ['assigned', 'in_progress'])
+      .pluck('s.pharmacy_id');
+    const blockedSet = new Set(activeElsewhere.map(String));
+    const toInsert = newIds.filter((id) => !blockedSet.has(id));
+    const skipped = [
+      ...pharmacyIds.map(String).filter((id) => existingSet.has(id)).map((id) => ({ pharmacy_id: id, reason: 'already_in_assignment' })),
+      ...[...blockedSet].map((id) => ({ pharmacy_id: id, reason: 'active_in_other_assignment' })),
+    ];
+
+    if (!toInsert.length) return { added: 0, skipped };
+
+    const currentMax = await trx('assignment_stops')
+      .where({ assignment_id: assignmentId })
+      .max({ m: 'route_order' })
+      .first();
+    const startOrder = Number(currentMax?.m || 0) + 1;
+    const rows = toInsert.map((pid, idx) => ({
+      assignment_id: assignmentId,
+      pharmacy_id: pid,
+      route_order: startOrder + idx,
+      stop_status: 'pending',
+    }));
+    await trx('assignment_stops').insert(rows);
+
+    await trx('territory_assignments')
+      .where({ id: assignmentId })
+      .update({
+        visit_goal: trx.raw('visit_goal + ?', [toInsert.length]),
+        updated_at: trx.fn.now(),
+      });
+
+    return { added: toInsert.length, skipped };
+  });
+}
+
+async function removeStopExternal(assignmentId, stopId) {
+  const assignment = await getByIdExternal(assignmentId);
+  const parsed = parseStopId(stopId);
+  const pharmacyId = parsed.pharmacy_id;
+  if (!pharmacyId) {
+    const err = new Error('Invalid stop id');
+    err.status = 400;
+    throw err;
+  }
+  const stop = assignment.stops.find((s) => String(s.pharmacy_id) === String(pharmacyId));
+  if (!stop) {
+    const err = new Error('Stop not found in assignment');
+    err.status = 404;
+    throw err;
+  }
+  if (stop.stop_status === 'completed') {
+    const err = new Error('Cannot remove a completed stop');
+    err.status = 422;
+    throw err;
+  }
+
+  const repNameMap = await getRepNameMap(assignment.rep_id ? [assignment.rep_id] : []);
+  await externalFieldSurveyRepository.insertEvents([{
+    assignmentId,
+    pharmacyId,
+    repId: assignment.rep_id,
+    repName: repNameMap.get(String(assignment.rep_id)) || assignment.rep_name || null,
+    waveId: assignment.wave_id,
+    campaignObjective: assignment.campaign_objective,
+    assignmentStatus: 'cancelled',
+    visitStatus: 'pending',
+    regularizationStatus: 'pending',
+    priority: assignment.priority,
+    routeOrder: stop.route_order,
+    assignedAt: assignment.created_at,
+    dueAt: assignment.due_date,
+  }]);
+  return { removed: 1, pharmacy_id: pharmacyId };
+}
+
+async function removeStop(assignmentId, stopId) {
+  if (isExternalDataMode()) {
+    return removeStopExternal(assignmentId, stopId);
+  }
+
+  return db.transaction(async (trx) => {
+    const stop = await trx('assignment_stops')
+      .where({ id: stopId, assignment_id: assignmentId })
+      .first();
+    if (!stop) {
+      const err = new Error('Stop not found in assignment');
+      err.status = 404;
+      throw err;
+    }
+    if (stop.stop_status === 'completed') {
+      const err = new Error('Cannot remove a completed stop');
+      err.status = 422;
+      throw err;
+    }
+
+    await trx('assignment_stops').where({ id: stopId }).delete();
+    await trx('territory_assignments')
+      .where({ id: assignmentId })
+      .update({
+        visit_goal: trx.raw('GREATEST(visit_goal - 1, 0)'),
+        updated_at: trx.fn.now(),
+      });
+
+    return { removed: 1, stop_id: stopId };
+  });
+}
+
 async function resetAllAssignments() {
   if (!isExternalDataMode()) {
     const err = new Error('Reset is only available in external data mode');
@@ -772,5 +977,7 @@ module.exports = {
   reassign,
   distributeWave,
   reorderStops,
+  addStops,
+  removeStop,
   resetAllAssignments,
 };

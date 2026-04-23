@@ -1087,9 +1087,229 @@ async function loadAssignments() {
         <div class="w-full bg-slate-100 rounded-full h-1.5 mb-1.5 overflow-hidden">
           <div class="bg-[#1b365d] h-1.5 rounded-full transition-all" style="width: ${a.total_stops||a.pharmacy_count ? ((a.completed_stops||0)/(a.total_stops||a.pharmacy_count)*100) : 0}%"></div>
         </div>
-        <p class="text-[10px] text-slate-400 text-right uppercase tracking-wider">${a.completed_stops||0} / ${a.total_stops||a.pharmacy_count||0} visitadas</p>
+        <div class="flex items-center justify-between mt-2">
+          <p class="text-[10px] text-slate-400 uppercase tracking-wider">${a.completed_stops||0} / ${a.total_stops||a.pharmacy_count||0} visitadas</p>
+          <button onclick="openAssignmentEditor('${esc(a.id)}')" class="btn btn-ghost border border-slate-200 text-[11px] py-1 px-2">Editar</button>
+        </div>
       </div>`).join('') : '<p class="text-sm text-slate-400">No hay territorios asignados aún.</p>';
   } catch {}
+}
+
+/* ─── Assignment Editor Modal ─────────────────────────────────── */
+let editorState = {
+  assignment: null,
+  stops: [],
+  orderDirty: false,
+  availablePharmacies: [],
+  selectedToAdd: new Set(),
+};
+
+async function openAssignmentEditor(assignmentId) {
+  try {
+    const [assignment, users] = await Promise.all([
+      API.get(`/assignments/${encodeURIComponent(assignmentId)}`),
+      API.get('/users?role=field_rep&is_active=true').catch(() => []),
+    ]);
+    editorState = {
+      assignment,
+      stops: [...(assignment.stops || [])].sort((a,b) => (a.route_order||0) - (b.route_order||0)),
+      orderDirty: false,
+      availablePharmacies: [],
+      selectedToAdd: new Set(),
+    };
+
+    document.getElementById('editor-subtitle').textContent = `${assignment.campaign_objective || ''} — ${assignment.rep_name || 'Sin asignar'}`;
+
+    const repSelect = document.getElementById('editor-rep');
+    const reps = Array.isArray(users) ? users.filter(u => u.role === 'field_rep' && u.is_active !== false) : [];
+    repSelect.innerHTML = '<option value="">— Sin asignar —</option>' + reps.map(r =>
+      `<option value="${esc(r.id)}" ${assignment.rep_id === r.id ? 'selected' : ''}>${esc(r.full_name || r.email)}</option>`
+    ).join('');
+
+    document.getElementById('editor-priority').value = assignment.priority || 'normal';
+    document.getElementById('editor-due').value = assignment.due_date ? String(assignment.due_date).slice(0, 10) : '';
+    document.getElementById('editor-goal').value = assignment.visit_goal ?? (assignment.total_stops || editorState.stops.length);
+
+    document.getElementById('editor-add-panel').classList.add('hidden');
+    document.getElementById('editor-save-order').classList.add('hidden');
+    renderEditorStops();
+    document.getElementById('assignment-editor-modal').classList.remove('hidden');
+  } catch (err) {
+    showToast(err.error || 'No se pudo cargar la asignación', 'error');
+  }
+}
+
+function closeAssignmentEditor() {
+  document.getElementById('assignment-editor-modal').classList.add('hidden');
+  editorState = { assignment: null, stops: [], orderDirty: false, availablePharmacies: [], selectedToAdd: new Set() };
+}
+
+function renderEditorStops() {
+  const list = document.getElementById('editor-stops-list');
+  const count = document.getElementById('editor-stop-count');
+  count.textContent = editorState.stops.length;
+  if (!editorState.stops.length) {
+    list.innerHTML = '<p class="text-xs text-slate-400 italic">No hay paradas. Agrega farmacias.</p>';
+    return;
+  }
+  list.innerHTML = editorState.stops.map((stop, idx) => {
+    const done = stop.stop_status === 'completed';
+    const skipped = stop.stop_status === 'skipped';
+    const disabled = done ? 'opacity-50 pointer-events-none' : '';
+    return `
+      <div class="flex items-center gap-2 bg-white border border-slate-200 rounded-lg p-2 ${disabled}">
+        <div class="w-7 h-7 flex items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">${idx + 1}</div>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-semibold text-slate-800 truncate">${esc(stop.name || stop.pharmacy_id)}</p>
+          <p class="text-[10px] text-slate-400 truncate">${esc(stop.address || '')} ${done ? '· ✅ Visitada' : skipped ? '· ⊘ Omitida' : ''}</p>
+        </div>
+        <div class="flex items-center gap-1">
+          <button onclick="moveEditorStop(${idx}, -1)" ${idx === 0 || done ? 'disabled' : ''} class="btn btn-ghost border border-slate-200 text-xs px-1.5 py-0.5 ${idx === 0 || done ? 'opacity-30' : ''}" title="Subir">▲</button>
+          <button onclick="moveEditorStop(${idx}, 1)" ${idx === editorState.stops.length - 1 || done ? 'disabled' : ''} class="btn btn-ghost border border-slate-200 text-xs px-1.5 py-0.5 ${idx === editorState.stops.length - 1 || done ? 'opacity-30' : ''}" title="Bajar">▼</button>
+          <button onclick="removeEditorStop('${esc(stop.id)}')" ${done ? 'disabled' : ''} class="btn btn-ghost border border-rose-200 text-rose-500 text-xs px-1.5 py-0.5 ${done ? 'opacity-30' : ''}" title="Quitar">×</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function moveEditorStop(index, direction) {
+  const target = index + direction;
+  if (target < 0 || target >= editorState.stops.length) return;
+  const arr = editorState.stops;
+  [arr[index], arr[target]] = [arr[target], arr[index]];
+  editorState.orderDirty = true;
+  document.getElementById('editor-save-order').classList.remove('hidden');
+  renderEditorStops();
+}
+
+async function saveEditorOrder() {
+  if (!editorState.assignment || !editorState.orderDirty) return;
+  const btn = document.getElementById('editor-save-order');
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  try {
+    const stopOrder = editorState.stops
+      .filter(s => s.stop_status !== 'completed')
+      .map(s => (editorState.assignment.id && String(s.id).includes('::')) ? s.pharmacy_id : s.id);
+    await API.patch(`/assignments/${encodeURIComponent(editorState.assignment.id)}/reorder`, { stop_order: stopOrder });
+    editorState.orderDirty = false;
+    btn.classList.add('hidden');
+    showToast('Orden guardado', 'success');
+    loadAssignments();
+  } catch (err) {
+    showToast(err.error || 'Error al guardar orden', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar orden';
+  }
+}
+
+async function saveEditorProps() {
+  if (!editorState.assignment) return;
+  const btn = document.getElementById('editor-save-props');
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  const payload = {
+    rep_id: document.getElementById('editor-rep').value || null,
+    priority: document.getElementById('editor-priority').value,
+    due_date: document.getElementById('editor-due').value || null,
+    visit_goal: Number(document.getElementById('editor-goal').value) || undefined,
+  };
+  try {
+    const updated = await API.patch(`/assignments/${encodeURIComponent(editorState.assignment.id)}`, payload);
+    editorState.assignment = { ...editorState.assignment, ...updated };
+    document.getElementById('editor-subtitle').textContent = `${editorState.assignment.campaign_objective || ''} — ${editorState.assignment.rep_name || 'Sin asignar'}`;
+    showToast('Propiedades guardadas', 'success');
+    loadAssignments();
+    loadAssignmentPolygons();
+  } catch (err) {
+    showToast(err.error || (err.errors?.join(', ')) || 'Error al guardar propiedades', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar propiedades';
+  }
+}
+
+async function removeEditorStop(stopId) {
+  if (!editorState.assignment) return;
+  if (!confirm('¿Quitar esta parada de la asignación?')) return;
+  try {
+    await API.delete(`/assignments/${encodeURIComponent(editorState.assignment.id)}/stops/${encodeURIComponent(stopId)}`);
+    editorState.stops = editorState.stops.filter(s => s.id !== stopId);
+    renderEditorStops();
+    showToast('Parada quitada', 'success');
+    loadAssignments();
+  } catch (err) {
+    showToast(err.error || 'No se pudo quitar', 'error');
+  }
+}
+
+async function toggleAddPharmaciesPanel() {
+  const panel = document.getElementById('editor-add-panel');
+  const hidden = panel.classList.contains('hidden');
+  if (hidden) {
+    try {
+      const rows = await API.get('/pharmacies?limit=500');
+      const existingIds = new Set(editorState.stops.map(s => String(s.pharmacy_id)));
+      editorState.availablePharmacies = (rows || []).filter(p => !existingIds.has(String(p.id)));
+      editorState.selectedToAdd = new Set();
+      document.getElementById('editor-add-search').value = '';
+      renderEditorAvailablePharmacies();
+      panel.classList.remove('hidden');
+    } catch (err) {
+      showToast(err.error || 'No se pudieron cargar farmacias', 'error');
+    }
+  } else {
+    panel.classList.add('hidden');
+  }
+}
+
+function renderEditorAvailablePharmacies() {
+  const search = (document.getElementById('editor-add-search').value || '').toLowerCase().trim();
+  const list = document.getElementById('editor-available-list');
+  const filtered = editorState.availablePharmacies
+    .filter(p => !search
+      || String(p.name || '').toLowerCase().includes(search)
+      || String(p.address || '').toLowerCase().includes(search))
+    .slice(0, 200);
+  if (!filtered.length) {
+    list.innerHTML = '<p class="text-xs text-slate-400 italic p-2">Sin resultados.</p>';
+    return;
+  }
+  list.innerHTML = filtered.map(p => {
+    const checked = editorState.selectedToAdd.has(String(p.id)) ? 'checked' : '';
+    return `
+      <label class="flex items-start gap-2 bg-white border border-slate-200 rounded-lg p-2 cursor-pointer hover:bg-slate-50">
+        <input type="checkbox" ${checked} onchange="toggleAddPharmacySelection('${esc(p.id)}', this.checked)" class="mt-0.5">
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-semibold text-slate-800 truncate">${esc(p.name || p.id)}</p>
+          <p class="text-[10px] text-slate-400 truncate">${esc(p.address || '')}</p>
+        </div>
+      </label>`;
+  }).join('');
+}
+
+function toggleAddPharmacySelection(pharmacyId, checked) {
+  if (checked) editorState.selectedToAdd.add(String(pharmacyId));
+  else editorState.selectedToAdd.delete(String(pharmacyId));
+}
+
+async function commitAddPharmacies() {
+  if (!editorState.assignment || !editorState.selectedToAdd.size) {
+    showToast('Selecciona al menos una farmacia', 'error');
+    return;
+  }
+  const ids = [...editorState.selectedToAdd];
+  try {
+    const result = await API.post(`/assignments/${encodeURIComponent(editorState.assignment.id)}/stops`, { pharmacy_ids: ids });
+    let msg = `${result.added} farmacia(s) agregadas`;
+    if (result.skipped?.length) msg += `, ${result.skipped.length} omitidas`;
+    showToast(msg, result.added ? 'success' : 'info');
+    document.getElementById('editor-add-panel').classList.add('hidden');
+    const refreshed = await API.get(`/assignments/${encodeURIComponent(editorState.assignment.id)}`);
+    editorState.assignment = refreshed;
+    editorState.stops = [...(refreshed.stops || [])].sort((a,b) => (a.route_order||0) - (b.route_order||0));
+    renderEditorStops();
+    loadAssignments();
+  } catch (err) {
+    showToast(err.error || 'No se pudo agregar', 'error');
+  }
 }
 
 /* ─── Review ──────────────────────────────────────────────────── */

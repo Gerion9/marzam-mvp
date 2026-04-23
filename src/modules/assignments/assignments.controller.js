@@ -128,6 +128,42 @@ async function resetAll(req, res, next) {
   }
 }
 
+async function addStops(req, res, next) {
+  try {
+    const assignment = await assignmentService.getById(req.params.id);
+    if (!canActOnAssignment(req.user, assignment)) {
+      return res.status(403).json({ error: 'Forbidden: cannot modify this assignment' });
+    }
+    const result = await assignmentService.addStops(req.params.id, req.body.pharmacy_ids);
+    res.locals.auditDetail = {
+      entityType: 'assignment',
+      entityId: req.params.id,
+      after: { stops_added: result.added, skipped: result.skipped },
+    };
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function removeStop(req, res, next) {
+  try {
+    const assignment = await assignmentService.getById(req.params.id);
+    if (!canActOnAssignment(req.user, assignment)) {
+      return res.status(403).json({ error: 'Forbidden: cannot modify this assignment' });
+    }
+    const result = await assignmentService.removeStop(req.params.id, req.params.stopId);
+    res.locals.auditDetail = {
+      entityType: 'assignment',
+      entityId: req.params.id,
+      after: { stop_removed: req.params.stopId },
+    };
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   create,
   list,
@@ -137,5 +173,7 @@ module.exports = {
   reassign,
   distributeWave,
   reorderStops,
+  addStops,
+  removeStop,
   resetAll,
 };

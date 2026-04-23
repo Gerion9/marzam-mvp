@@ -312,6 +312,72 @@
     </div>
   </div>
 
+  <div id="assignment-editor-modal" class="hidden fixed inset-0 z-[210] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col animate-in">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+        <div>
+          <h3 class="font-bold text-lg text-slate-800">Editar Asignación</h3>
+          <p id="editor-subtitle" class="text-xs text-slate-400"></p>
+        </div>
+        <button onclick="closeAssignmentEditor()" class="p-2 -mr-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-6 space-y-6">
+        <section>
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Propiedades</h4>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-bold text-slate-500 mb-1">Representante</label>
+              <select id="editor-rep" class="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm outline-none"></select>
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-500 mb-1">Prioridad</label>
+              <select id="editor-priority" class="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm outline-none">
+                <option value="low">Baja</option>
+                <option value="normal">Normal</option>
+                <option value="high">Alta</option>
+                <option value="urgent">Urgente</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-500 mb-1">Fecha Límite</label>
+              <input id="editor-due" type="date" class="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm outline-none">
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-500 mb-1">Meta de Visitas</label>
+              <input id="editor-goal" type="number" min="0" class="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm outline-none">
+            </div>
+          </div>
+          <div class="flex justify-end mt-3">
+            <button id="editor-save-props" onclick="saveEditorProps()" class="btn btn-primary text-xs py-1.5 px-3">Guardar propiedades</button>
+          </div>
+        </section>
+
+        <section>
+          <div class="flex items-center justify-between mb-2">
+            <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Paradas (<span id="editor-stop-count">0</span>)</h4>
+            <div class="flex gap-2">
+              <button onclick="toggleAddPharmaciesPanel()" class="btn btn-ghost border border-slate-200 text-xs py-1 px-2">+ Agregar farmacia</button>
+              <button id="editor-save-order" onclick="saveEditorOrder()" class="btn btn-primary text-xs py-1 px-2 hidden">Guardar orden</button>
+            </div>
+          </div>
+          <div id="editor-stops-list" class="space-y-1.5 max-h-[40vh] overflow-y-auto"></div>
+        </section>
+
+        <section id="editor-add-panel" class="hidden bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <h4 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Agregar Farmacias</h4>
+          <input id="editor-add-search" type="text" placeholder="Buscar por nombre o dirección..." oninput="renderEditorAvailablePharmacies()" class="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm outline-none mb-2">
+          <div id="editor-available-list" class="space-y-1 max-h-[30vh] overflow-y-auto"></div>
+          <div class="flex justify-end gap-2 mt-3">
+            <button onclick="toggleAddPharmaciesPanel()" class="btn btn-ghost border border-slate-200 text-xs py-1 px-2">Cerrar</button>
+            <button onclick="commitAddPharmacies()" class="btn btn-primary text-xs py-1 px-2">Agregar seleccionadas</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
   <div id="context-drawer">
     <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
       <h3 id="drawer-title" class="font-bold text-lg text-slate-800 truncate pr-4"></h3>

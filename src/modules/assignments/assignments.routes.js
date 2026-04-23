@@ -88,6 +88,23 @@ router.patch(
 );
 
 router.post(
+  '/:id/stops',
+  authenticate,
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
+  validate({ pharmacy_ids: { required: true, type: 'array' } }),
+  auditLog('assignment.stops_added'),
+  controller.addStops,
+);
+
+router.delete(
+  '/:id/stops/:stopId',
+  authenticate,
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
+  auditLog('assignment.stop_removed'),
+  controller.removeStop,
+);
+
+router.post(
   '/reset',
   authenticate,
   authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
