@@ -3,27 +3,27 @@
  *
  * Two call signatures supported:
  *
- *   authorize('manager', 'national_admin')          // legacy: list of allowed roles
- *   authorize({ roles: [...], check: (req) => bool }) // new: roles + custom predicate
+ *   authorize('director_sucursal', 'gerente_ventas')          // legacy: list of allowed roles
+ *   authorize({ roles: [...], check: (req) => bool })         // new: roles + custom predicate
  *
- * Legacy `manager` is automatically treated as `national_admin` (backwards compat).
+ * Legacy role names (manager, national_admin, regional_manager, area_coordinator,
+ * field_rep) are accepted via ROLE_ALIASES — both in the request user.role and in
+ * the allowed lists declared by call sites — to keep older code working through
+ * the rename rollout.
  */
 
-const GLOBAL_ALIASES = new Set(['manager', 'national_admin']);
-
-function normalizeRole(role) {
-  if (GLOBAL_ALIASES.has(role)) return 'national_admin';
-  return role;
-}
+const { ROLE_ALIASES, normalizeRole } = require('../constants/roles');
 
 function expandAllowed(roles) {
   const expanded = new Set();
   for (const r of roles) {
-    if (r === 'manager' || r === 'national_admin') {
-      expanded.add('manager');
-      expanded.add('national_admin');
-    } else {
-      expanded.add(r);
+    if (!r) continue;
+    const canonical = normalizeRole(r);
+    expanded.add(canonical);
+    // Allow aliases too — so request users still carrying the legacy role
+    // (between deploy and migration) keep passing the gate.
+    for (const [alias, target] of Object.entries(ROLE_ALIASES)) {
+      if (target === canonical) expanded.add(alias);
     }
   }
   return expanded;

@@ -16,6 +16,7 @@ const { getDeviceLocationsTable } = require('./tableScope');
 
 const cachedLocationMaps = {};
 const remoteStoreFlags = {};
+const LOCAL_FALLBACK_ENABLED = config.env !== 'production';
 const LOCAL_TRACKING_PATH = config.externalData.deviceLocationsFallbackPath || path.resolve(process.cwd(), 'data', 'device-locations-runtime.json');
 
 function parseSqlTableRef(tableRef) {
@@ -24,7 +25,14 @@ function parseSqlTableRef(tableRef) {
   return { schema: parts[parts.length - 2], table: parts[parts.length - 1] };
 }
 
+function localFallbackDisabledError() {
+  const err = new Error('Local device-location fallback is disabled in production. Configure EXTERNAL_DEVICE_LOCATIONS_TABLE.');
+  err.status = 503;
+  return err;
+}
+
 async function readLocalRows() {
+  if (!LOCAL_FALLBACK_ENABLED) return [];
   try {
     const raw = await fs.readFile(LOCAL_TRACKING_PATH, 'utf8');
     const rows = JSON.parse(raw);
@@ -35,6 +43,7 @@ async function readLocalRows() {
 }
 
 async function writeLocalRows(rows) {
+  if (!LOCAL_FALLBACK_ENABLED) throw localFallbackDisabledError();
   await fs.mkdir(path.dirname(LOCAL_TRACKING_PATH), { recursive: true });
   await fs.writeFile(LOCAL_TRACKING_PATH, JSON.stringify(rows, null, 2), 'utf8');
 }
@@ -150,11 +159,7 @@ async function insertLocation(event) {
     return event;
   }
 
-  if (config.env === 'production') {
-    const err = new Error('Remote device_locations table is not available and local fallback is disabled in production');
-    err.status = 503;
-    throw err;
-  }
+  if (!LOCAL_FALLBACK_ENABLED) throw localFallbackDisabledError();
 
   const rows = await readLocalRows();
   rows.push({

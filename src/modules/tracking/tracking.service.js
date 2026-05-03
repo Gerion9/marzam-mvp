@@ -8,12 +8,45 @@ const accessDirectory = require('../../services/accessDirectory');
 
 const DISTANCE_WARNING_THRESHOLD_M = 500;
 
-async function recordPing({ rep_id, assignment_id, verification_id, lat, lng, accuracy_meters }) {
+// Lazy require to avoid circular load order with visit-sessions module.
+function visitSessionsService() {
+  return require('../visit-sessions/visitSessions.service');
+}
+
+async function pingActiveSession(repId) {
+  if (isExternalDataMode()) return;
+  try {
+    const active = await visitSessionsService().getActiveForUser(repId);
+    if (active) await visitSessionsService().recordPing(active.id);
+  } catch (err) {
+    // Best-effort; we never want to break tracking because of session bookkeeping.
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[tracking] pingActiveSession failed: ${err.message}`);
+    }
+  }
+}
+
+async function recordVisitForActiveSession(repId) {
+  if (isExternalDataMode()) return;
+  try {
+    const active = await visitSessionsService().getActiveForUser(repId);
+    if (active) await visitSessionsService().recordVisit(active.id);
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[tracking] recordVisitForActiveSession failed: ${err.message}`);
+    }
+  }
+}
+
+async function recordPing({ rep_id, rep_name, assignment_id, verification_id, lat, lng, accuracy_meters }) {
+  const repNameSnapshot = rep_name
+    || (isExternalDataMode() ? accessDirectory.getUserById(rep_id)?.full_name : null)
+    || 'Unknown Rep';
+
   if (isExternalDataMode()) {
-    const rep = accessDirectory.getUserById(rep_id);
     const event = {
       repId: rep_id,
-      repName: rep?.full_name || 'Unknown Rep',
+      repName: repNameSnapshot,
       assignmentId: assignment_id || null,
       verificationId: verification_id || null,
       lat,
@@ -31,11 +64,10 @@ async function recordPing({ rep_id, assignment_id, verification_id, lat, lng, ac
     };
   }
 
-  const rep = await db('users').select('full_name').where({ id: rep_id }).first();
   const [ping] = await db('rep_tracking_points')
     .insert({
       rep_id,
-      rep_name_snapshot: rep?.full_name || 'Unknown Rep',
+      rep_name_snapshot: repNameSnapshot,
       verification_id: verification_id || null,
       assignment_id: assignment_id || null,
       lat,
@@ -44,7 +76,48 @@ async function recordPing({ rep_id, assignment_id, verification_id, lat, lng, ac
       point: db.raw(`ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography`, [lng, lat]),
     })
     .returning('*');
+  await pingActiveSession(rep_id);
   return ping;
+}
+
+async function recordPingBatch({ rep_id, rep_name, pings }) {
+  if (!Array.isArray(pings) || pings.length === 0) return { inserted: 0 };
+  const repNameSnapshot = rep_name
+    || (isExternalDataMode() ? accessDirectory.getUserById(rep_id)?.full_name : null)
+    || 'Unknown Rep';
+
+  if (isExternalDataMode()) {
+    let inserted = 0;
+    for (const p of pings) {
+      await externalDeviceLocationRepository.insertLocation({
+        repId: rep_id,
+        repName: repNameSnapshot,
+        assignmentId: p.assignment_id || null,
+        verificationId: p.verification_id || null,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: p.accuracy_meters || null,
+        recordedAt: p.recorded_at || new Date().toISOString(),
+      });
+      inserted += 1;
+    }
+    return { inserted };
+  }
+
+  const rows = pings.map((p) => ({
+    rep_id,
+    rep_name_snapshot: repNameSnapshot,
+    verification_id: p.verification_id || null,
+    assignment_id: p.assignment_id || null,
+    lat: p.lat,
+    lng: p.lng,
+    accuracy_meters: p.accuracy_meters || null,
+    recorded_at: p.recorded_at || db.fn.now(),
+    point: db.raw(`ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography`, [p.lng, p.lat]),
+  }));
+  const result = await db('rep_tracking_points').insert(rows);
+  await pingActiveSession(rep_id);
+  return { inserted: Array.isArray(result) ? result.length : pings.length };
 }
 
 async function checkin({ rep_id, pharmacy_id, assignment_stop_id, lat, lng }) {
@@ -107,6 +180,8 @@ async function checkin({ rep_id, pharmacy_id, assignment_stop_id, lat, lng }) {
     lng,
     distance_to_pharmacy_m: distanceM,
   });
+
+  await recordVisitForActiveSession(rep_id);
 
   return {
     ...checkinRow,
@@ -225,4 +300,4 @@ async function getLatestPositions() {
     .orderBy(['rtp.rep_id', { column: 'rtp.recorded_at', order: 'desc' }]);
 }
 
-module.exports = { recordPing, checkin, getCheckins, getBreadcrumbs, getLatestPositions };
+module.exports = { recordPing, recordPingBatch, checkin, getCheckins, getBreadcrumbs, getLatestPositions };

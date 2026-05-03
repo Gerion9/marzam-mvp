@@ -111,9 +111,27 @@ async function submit(data) {
         flag_reason: data.flag_reason || null,
         checkin_lat: data.checkin_lat || null,
         checkin_lng: data.checkin_lng || null,
+        order_placed: !!data.order_placed,
+        no_order_reason: data.order_placed ? null : (data.no_order_reason || null),
+        order_amount: data.order_amount != null && data.order_amount !== '' ? Number(data.order_amount) : null,
         idempotency_key: idempotencyKey,
       })
       .returning('*');
+
+    if (Array.isArray(data.products) && data.products.length) {
+      const rows = data.products
+        .filter((p) => p && p.product_name && String(p.product_name).trim())
+        .map((p) => ({
+          visit_id: visit.id,
+          product_name: String(p.product_name).trim(),
+          presentation: p.presentation || null,
+          price_pharmacy: p.price_pharmacy != null && p.price_pharmacy !== '' ? Number(p.price_pharmacy) : null,
+          price_marzam: p.price_marzam != null && p.price_marzam !== '' ? Number(p.price_marzam) : null,
+          included_in_order: !!p.included_in_order,
+          notes: p.notes || null,
+        }));
+      if (rows.length) await trx('visit_products').insert(rows);
+    }
 
     if (data.assignment_stop_id) {
       const stopStatus = OUTCOMES_SKIPPING_STOP.includes(data.outcome) ? 'skipped' : 'completed';
@@ -300,4 +318,8 @@ async function addPhoto(visitId, photoData) {
   });
 }
 
-module.exports = { submit, listByPharmacy, listByRep, getById, addPhoto };
+async function listProducts(visitId) {
+  return db('visit_products').where({ visit_id: visitId }).orderBy('created_at', 'asc');
+}
+
+module.exports = { submit, listByPharmacy, listByRep, getById, addPhoto, listProducts };

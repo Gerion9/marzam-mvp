@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Marzam — Plataforma Comercial</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/app.css?v=app-15">
+  <link rel="stylesheet" href="/css/app-shell.css?v=app-15">
+  <link rel="stylesheet" href="/css/onboarding-wizard.css?v=app-15">
+</head>
+<body class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
+
+  <!-- Demo banner -->
+  <div id="demo-banner" class="hidden fixed top-0 inset-x-0 z-[9999] bg-gradient-to-r from-violet-600 to-blue-600 text-white text-center text-[11px] font-bold py-1 tracking-wide">
+    <span id="demo-banner-text">Modo Demo — Datos Sintéticos</span>
+  </div>
+
+  <!-- Map canvas (always present, behind everything) -->
+  <div id="map" class="absolute inset-0 z-0"></div>
+
+  <!-- ─── Topbar ─────────────────────────────────────────────────── -->
+  <header id="topbar" class="absolute top-4 inset-x-4 md:left-[112px] md:right-6 z-50 flex items-center gap-3">
+    <div class="flex-1 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-2xl flex items-center px-4 py-2.5 border border-white/60 ring-1 ring-slate-200/50 min-w-0">
+      <img src="/images/logo_marzam.svg" alt="Marzam" class="h-6 w-auto mr-3 select-none">
+      <div class="hidden md:flex items-center gap-2 mr-3 pr-3 border-r border-slate-200">
+        <span id="topbar-role-badge" class="role-badge"></span>
+        <span id="topbar-username" class="text-sm font-semibold text-slate-700 truncate max-w-[180px]"></span>
+      </div>
+      <svg class="w-4 h-4 text-slate-400 mr-2 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="search-input" type="text" class="bg-transparent w-full outline-none text-sm placeholder-slate-400" placeholder="Buscar farmacias, personas..." autocomplete="off">
+    </div>
+
+    <!-- Poblacion filter -->
+    <div id="poblacion-pill" class="hidden md:flex items-center gap-1.5 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full px-3 py-2 border border-white/60 ring-1 ring-slate-200/50 flex-shrink-0">
+      <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      <select id="poblacion-select" class="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer pr-1">
+        <option>Cargando...</option>
+      </select>
+    </div>
+
+    <!-- Mode pill (Mis rutas / Mi equipo) -->
+    <div id="mode-pill" class="hidden md:flex bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full p-1 border border-white/60 ring-1 ring-slate-200/50 flex-shrink-0">
+      <button data-mode="self" class="mode-pill-btn active">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
+        <span>Mis rutas</span>
+      </button>
+      <button data-mode="team" class="mode-pill-btn">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="17" cy="7" r="3" stroke-width="1.7"/><path d="M21 21v-2a3 3 0 0 0-2-2.83" stroke-width="1.7"/></svg>
+        <span>Mi equipo</span>
+      </button>
+    </div>
+
+    <!-- User menu -->
+    <div class="relative group flex-shrink-0">
+      <button id="user-menu-btn" class="w-11 h-11 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full flex items-center justify-center border border-white/60 ring-1 ring-slate-200/50 text-slate-700 hover:text-[#e5730a] hover:scale-105 transition-all duration-300">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </button>
+      <div id="user-menu" class="hidden absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-100 py-2">
+        <div class="px-4 py-3 border-b border-slate-100">
+          <p id="usermenu-name" class="text-sm font-bold text-slate-800 truncate"></p>
+          <p id="usermenu-email" class="text-xs text-slate-500 truncate"></p>
+          <p id="usermenu-zone" class="text-[11px] text-slate-400 truncate mt-0.5"></p>
+        </div>
+        <button id="usermenu-stop-impersonate" class="hidden w-full text-left px-4 py-2 text-sm text-violet-600 hover:bg-slate-50 font-semibold">↩ Volver a mi sesión</button>
+        <button id="btn-logout" class="w-full text-left px-4 py-2 text-sm text-rose-600 hover:bg-slate-50">Cerrar sesión</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ─── Sidebar ───────────────────────────────────────────────── -->
+  <nav id="sidenav" class="absolute z-[60] bg-white/92 backdrop-blur-3xl shadow-2xl border border-white/40 ring-1 ring-slate-200/50 flex
+        md:flex-col md:top-24 md:left-6 md:bottom-8 md:w-[80px] md:hover:w-[220px] md:rounded-3xl md:py-4 md:px-2 md:gap-1 group/sidebar overflow-hidden transition-all duration-500 ease-spring
+        max-md:bottom-3 max-md:left-3 max-md:right-3 max-md:h-[68px] max-md:rounded-2xl max-md:flex-row max-md:justify-around max-md:items-center max-md:px-2">
+
+    <div class="hidden md:flex items-center px-2 mb-2 flex-shrink-0">
+      <div id="sidebar-role-icon" class="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-md text-white role-gradient">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      </div>
+      <span id="sidebar-role-label" class="ml-3 font-black text-sm text-slate-800 opacity-0 w-0 overflow-hidden group-hover/sidebar:opacity-100 group-hover/sidebar:w-[140px] transition-all duration-300 whitespace-nowrap tracking-tight">Marzam</span>
+    </div>
+
+    <div id="nav-tabs" class="contents"></div>
+
+    <div class="hidden md:block flex-1"></div>
+  </nav>
+
+  <!-- ─── Main panel (sliding) ─────────────────────────────────── -->
+  <!--
+    Posicionamiento mobile (max-md):
+      - bottom: 80px  → el panel termina ARRIBA de la #sidenav (que ocupa
+        ~68px + 12px de margen inferior).  Antes se metía debajo y la
+        última fila de contenido quedaba oculta tras los iconos.
+      - height: 100vh - 90px (topbar) - 80px (sidenav) = 100vh - 170px
+      - translate inicial 35vh — overridable por setupMobilePanelDrag().
+  -->
+  <div id="panel" class="absolute z-40 max-md:z-[58] bg-white/96 backdrop-blur-3xl shadow-2xl flex flex-col transition-all duration-500 ease-spring
+        md:translate-y-0 md:top-24 md:left-[112px] md:bottom-8 md:w-[480px] xl:w-[540px] md:rounded-3xl border border-white/40 ring-1 ring-slate-200/50
+        left-0 right-0 max-md:bottom-[80px] max-md:top-[90px] rounded-t-3xl max-md:translate-y-[35vh]">
+
+    <button id="btn-collapse-panel" class="hidden md:flex absolute top-6 -right-5 w-10 h-10 bg-white shadow-lg border border-slate-100 rounded-full items-center justify-center text-slate-500 hover:text-[#e5730a] z-50 transition-all hover:scale-110">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></svg>
+    </button>
+
+    <div id="panel-handle" class="w-full flex justify-center py-3 md:hidden cursor-grab active:cursor-grabbing touch-none select-none">
+      <div class="w-12 h-1.5 bg-slate-300 rounded-full pointer-events-none"></div>
+    </div>
+
+    <div id="panel-header" class="px-5 pt-4 pb-3 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+      <div>
+        <h2 id="panel-title" class="text-lg font-black text-slate-800 leading-tight">Mis rutas</h2>
+        <p id="panel-subtitle" class="text-xs text-slate-400 mt-0.5"></p>
+      </div>
+      <div id="panel-header-actions" class="flex items-center gap-2"></div>
+    </div>
+
+    <div id="panel-body" class="flex-1 overflow-y-auto p-5 bg-slate-50/40 max-md:pb-24"></div>
+  </div>
+
+  <!-- ─── Floating Modo Visita Pill (cuando está activo) ─────── -->
+  <div id="visit-mode-pill" class="hidden fixed top-20 right-4 md:top-auto md:bottom-8 md:right-8 z-[80] bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-2xl shadow-2xl shadow-emerald-500/40 cursor-pointer max-w-[320px] overflow-hidden">
+    <div class="px-4 py-3 flex items-center gap-3">
+      <div class="w-3 h-3 bg-white rounded-full animate-pulse-live flex-shrink-0"></div>
+      <div class="flex-1 min-w-0">
+        <div class="text-[10px] font-bold uppercase tracking-widest opacity-80">Modo Visita</div>
+        <div class="flex items-center gap-2 mt-0.5">
+          <span id="vm-pill-timer" class="text-base font-black tabular-nums">00:00:00</span>
+          <span class="opacity-70">·</span>
+          <span id="vm-pill-progress" class="text-sm font-bold">0/0</span>
+        </div>
+        <div id="vm-pill-next" class="text-[10px] opacity-80 truncate mt-0.5"></div>
+      </div>
+      <button id="vm-pill-end" class="text-[10px] font-bold uppercase tracking-wide bg-white/20 hover:bg-white/30 px-2.5 py-1.5 rounded-lg transition flex-shrink-0">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- ─── FAB Iniciar Modo Visita ────────────────────────────── -->
+  <button id="fab-start-visit" class="hidden fixed bottom-24 right-5 md:bottom-10 md:right-[540px] xl:right-[600px] z-[70] bg-gradient-to-br from-[#e5730a] to-orange-400 hover:scale-105 transition-all duration-300 text-white rounded-full shadow-2xl shadow-orange-500/30 px-5 py-3.5 flex items-center gap-2 font-bold text-sm">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4z"/></svg>
+    <span>Iniciar Modo Visita</span>
+  </button>
+
+  <!-- ─── Modals container ───────────────────────────────────── -->
+  <div id="modals-root"></div>
+
+  <!-- ─── Offline banner ─────────────────────────────────────── -->
+  <div id="offline-banner" class="hidden absolute bottom-0 left-0 right-0 z-[9998] bg-amber-500 text-white text-center text-[11px] font-bold py-1.5 tracking-wide">
+    Sin conexión — Las visitas se guardarán localmente
+  </div>
+
+  <!-- Critical: kill the legacy service worker that ignored query strings
+       and served stale JS (see src/public/sw.js). Must happen BEFORE any
+       /api/* request fires. -->
+  <script>
+    (async function killStaleServiceWorker() {
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const r of regs) await r.unregister();
+        }
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+      } catch (err) { console.warn('[app] SW cleanup failed:', err); }
+    })();
+  </script>
+
+  <!-- Scripts -->
+  <script src="/js/api.js?v=app-15"></script>
+  <script src="/js/demoHierarchy.js?v=app-15"></script>
+  <script src="/js/app.js?v=app-15"></script>
+  <script src="/js/marzam-pharmacies-map.js?v=app-15"></script>
+  <script src="/js/marzam-charts.js?v=app-15"></script>
+  <script src="/js/views.js?v=app-15"></script>
+  <script src="/js/onboarding-wizard.js?v=app-15"></script>
+  <script src="/js/visit-client.js?v=app-15"></script>
+  <script src="/js/distribution.js?v=app-15"></script>
+  <script src="/js/marzam-analytics-ext.js?v=app-15"></script>
+</body>
+</html>
+
+
+
+
+
+

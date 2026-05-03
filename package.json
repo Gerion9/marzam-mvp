@@ -18,6 +18,14 @@
     "check:external": "node scripts/check-external-connectivity.js",
     "cleanup:test-data": "node scripts/cleanup-test-data.js",
     "prune:tracking": "node scripts/prune-tracking-points.js",
+    "validate:import": "node scripts/validate-import.js",
+    "bq:inspect": "node scripts/bq-inspect-schemas.js",
+    "bq:dry-run": "node scripts/bq-sync-dry-run.js",
+    "bq:sync": "node scripts/bq-sync-dry-run.js --commit",
+    "bq:sample": "node scripts/bq-sync-dry-run.js --limit 50",
+    "auth:generate": "node scripts/generate-auth-directory.js",
+    "auth:summary": "node scripts/generate-auth-directory.js --format summary",
+    "test": "node --test --test-reporter=spec \"tests/**/*.test.js\"",
     "lint": "eslint src/"
   },
   "dependencies": {

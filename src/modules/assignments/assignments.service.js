@@ -13,10 +13,18 @@ const { getDataScope, getUserScope } = require('../../middleware/requestContext'
 
 async function getRepNameMap(repIds) {
   if (isExternalDataMode()) {
-    return new Map(repIds
-      .map((id) => accessDirectory.getUserById(id))
-      .filter(Boolean)
-      .map((user) => [String(user.id), user.full_name]));
+    // The `repIds` we get here are whatever the external data layer stores,
+    // typically the canonical UUID (`users.id` / `db_user_id`). The directory
+    // lookup is keyed off that id so the resulting map preserves it as the
+    // key — otherwise a lookup with `row.rep_id` (UUID) would miss against a
+    // map keyed by virtual id (e.g. 'u-rep-001').
+    const map = new Map();
+    for (const repId of repIds) {
+      if (!repId) continue;
+      const user = accessDirectory.getUserById(repId);
+      if (user) map.set(String(repId), user.full_name);
+    }
+    return map;
   }
 
   if (!repIds.length) return new Map();

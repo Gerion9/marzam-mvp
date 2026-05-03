@@ -628,4 +628,38 @@ body {
 @media (max-width: 640px) {
   .filter-select { font-size: 11px; padding: 4px 8px; }
   #context-drawer { width: 100vw; }
+
+  /* KPIs: en pantallas chicas las stat cards se reorganizan a 2 columnas
+     en lugar de 3 para que el número grande no choque con el label. */
+  .kpi-mini { padding: 8px 10px; }
+  .kpi-mini__value { font-size: 18px !important; }
+  .kpi-mini__label { font-size: 9px; }
+
+  /* Visit cards: nombres y direcciones largos truncan correctamente. */
+  .visit-stop-card { padding: 10px; gap: 10px; }
+  .visit-stop-card .stop-order-badge { width: 28px; height: 28px; font-size: 12px; }
+  .visit-stop-card .text-sm { font-size: 12px; }
+
+  /* Tablas de analytics: scroll horizontal forzado. */
+  .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Modales: ocupan más pantalla en mobile. */
+  .app-modal-card { max-height: 92vh; border-radius: 18px; }
+  .app-modal-backdrop { padding: 8px; }
+}
+
+/* Pantallas muy pequeñas */
+@media (max-width: 380px) {
+  .kpi-mini { padding: 6px 8px; }
+  .kpi-mini__value { font-size: 15px !important; }
+  .visit-stop-card { padding: 8px; }
+  .visit-stop-card .stop-order-badge { width: 24px; height: 24px; font-size: 11px; }
+  .badge { font-size: 9px; padding: 2px 6px; }
+  .role-chip { font-size: 10px; padding: 4px 8px; }
+}
+
+/* Soporte para safe-area en notch / home indicator de iPhone. */
+@supports (padding: env(safe-area-inset-bottom)) {
+  #panel { padding-bottom: env(safe-area-inset-bottom); }
+  #sidenav { padding-bottom: env(safe-area-inset-bottom); }
 }

@@ -4,6 +4,7 @@ async function recordPing(req, res, next) {
   try {
     const ping = await trackingService.recordPing({
       rep_id: req.user.id,
+      rep_name: req.user.full_name,
       assignment_id: req.body.assignment_id,
       verification_id: req.body.verification_id,
       lat: req.body.lat,
@@ -13,6 +14,26 @@ async function recordPing(req, res, next) {
     res.status(201).json(ping);
   } catch (err) {
     next(err);
+  }
+}
+
+async function recordPingBatch(req, res, next) {
+  try {
+    const pings = Array.isArray(req.body?.pings) ? req.body.pings : [];
+    if (pings.length === 0) {
+      return res.status(400).json({ error: 'pings array is required and must be non-empty' });
+    }
+    if (pings.length > 200) {
+      return res.status(413).json({ error: 'Batch too large; max 200 pings per request' });
+    }
+    const result = await trackingService.recordPingBatch({
+      rep_id: req.user.id,
+      rep_name: req.user.full_name,
+      pings,
+    });
+    return res.status(201).json(result);
+  } catch (err) {
+    return next(err);
   }
 }
 
@@ -58,7 +79,7 @@ async function getBreadcrumbs(req, res, next) {
   }
 }
 
-async function getLatestPositions(req, res, next) {
+async function getLatestPositions(_req, res, next) {
   try {
     const positions = await trackingService.getLatestPositions();
     res.json(positions);
@@ -67,4 +88,4 @@ async function getLatestPositions(req, res, next) {
   }
 }
 
-module.exports = { recordPing, checkin, getCheckins, getBreadcrumbs, getLatestPositions };
+module.exports = { recordPing, recordPingBatch, checkin, getCheckins, getBreadcrumbs, getLatestPositions };

@@ -1,4 +1,5 @@
 const authService = require('./auth.service');
+const accessDirectory = require('../../services/accessDirectory');
 
 async function register(req, res, next) {
   try {
@@ -43,7 +44,10 @@ async function listUsers(req, res, next) {
 
 async function impersonate(req, res, next) {
   try {
-    const result = await authService.impersonate(req.user.id, req.body.target_user_id);
+    const result = await authService.impersonate(
+      req.user.id,
+      accessDirectory.toCanonicalId(req.body.target_user_id),
+    );
     res.json(result);
   } catch (err) {
     next(err);

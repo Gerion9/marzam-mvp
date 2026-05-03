@@ -1,7 +1,8 @@
 const territoriesRepository = require('../repositories/territoriesRepository');
 const { isExternalDataMode } = require('../repositories/runtime');
+const { normalizeRole, isGlobalRole: isGlobalRoleConst } = require('../constants/roles');
 
-const GLOBAL_ROLES = new Set(['national_admin', 'manager']);
+const GLOBAL_ROLES = new Set(['director_sucursal', 'national_admin', 'manager']);
 
 /**
  * Resolve the territorial scope of a user.
@@ -50,7 +51,7 @@ async function computeUserScope(user) {
 }
 
 function isGlobalRole(role) {
-  return GLOBAL_ROLES.has(role);
+  return GLOBAL_ROLES.has(role) || isGlobalRoleConst(normalizeRole(role));
 }
 
 module.exports = { computeUserScope, isGlobalRole };

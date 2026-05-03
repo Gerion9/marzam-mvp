@@ -1,0 +1,114 @@
+{
+  "branches": [
+    { "id": "branch-ecatepec", "code": "EC", "name": "Sucursal Ecatepec", "director_user_id": "u-dir-001" }
+  ],
+  "code_pattern": {
+    "directors": "No aparecen en int_marzam_cuadro_basico — se identifican por sucursal (ej. EC).",
+    "gerentes": "clave_cuadro_basico = 'GERENTE' literal (todos comparten ese valor). Se identifican unívocamente por gerencia_code (UE, ME, ...).",
+    "supervisores": "clave_cuadro_basico = 3 letras + '00' (ej. UEA00). Las 3 letras = supervisor_code; LEFT(clave,2) = gerencia_code.",
+    "representantes": "clave_cuadro_basico = supervisor_code + 2 dígitos (ej. UEA01 = supervisor UEA + rep 01).",
+    "match_rules": [
+      "rep.gerencia_code = LEFT(rep.clave_cuadro_basico, 2)",
+      "rep.supervisor_code = LEFT(rep.clave_cuadro_basico, 3)",
+      "supervisor.gerencia_code = LEFT(supervisor.clave_cuadro_basico, 2)",
+      "supervisor.supervisor_code = LEFT(supervisor.clave_cuadro_basico, 3)"
+    ]
+  },
+  "users": [
+    { "id": "u-dir-001", "employee_code": "EC", "clave_cuadro_basico": null, "agente_code": null, "supervisor_code": null, "gerencia_code": null, "full_name": "Arturo Serrano", "role": "director_sucursal", "branch_id": "branch-ecatepec", "manager_id": null, "email": "director@demo.marzam.mx", "zone": "Sucursal Ecatepec · todas las gerencias", "lat": 19.605, "lng": -99.060, "color": "#FFC107" },
+
+    { "id": "u-ger-001", "employee_code": "UE", "clave_cuadro_basico": "GERENTE", "gerencia_code": "UE", "full_name": "Roberto Vázquez", "role": "gerente_ventas", "branch_id": "branch-ecatepec", "manager_id": "u-dir-001", "email": "gerente@demo.marzam.mx", "zone": "Gerencia UE · Norte y Centro", "lat": 19.620, "lng": -99.052, "color": "#3B82F6" },
+    { "id": "u-ger-002", "employee_code": "ME", "clave_cuadro_basico": "GERENTE", "gerencia_code": "ME", "full_name": "Esteban Morales", "role": "gerente_ventas", "branch_id": "branch-ecatepec", "manager_id": "u-dir-001", "email": "esteban.morales@demo.marzam.mx", "zone": "Gerencia ME · Sur y Oriente", "lat": 19.580, "lng": -99.045, "color": "#3B82F6" },
+
+    { "id": "u-sup-001", "employee_code": "UEA00", "clave_cuadro_basico": "UEA00", "supervisor_code": "UEA", "gerencia_code": "UE", "full_name": "María Ruiz", "role": "supervisor", "branch_id": "branch-ecatepec", "manager_id": "u-ger-001", "email": "supervisor@demo.marzam.mx", "zone": "Ruta UEA · Centro Ecatepec", "lat": 19.615, "lng": -99.050, "color": "#10B981" },
+    { "id": "u-sup-002", "employee_code": "UEB00", "clave_cuadro_basico": "UEB00", "supervisor_code": "UEB", "gerencia_code": "UE", "full_name": "Diego Hernández", "role": "supervisor", "branch_id": "branch-ecatepec", "manager_id": "u-ger-001", "email": "diego.hernandez@demo.marzam.mx", "zone": "Ruta UEB · Norte Ecatepec", "lat": 19.640, "lng": -99.055, "color": "#10B981" },
+    { "id": "u-sup-003", "employee_code": "MEA00", "clave_cuadro_basico": "MEA00", "supervisor_code": "MEA", "gerencia_code": "ME", "full_name": "Karla Jiménez", "role": "supervisor", "branch_id": "branch-ecatepec", "manager_id": "u-ger-002", "email": "karla.jimenez@demo.marzam.mx", "zone": "Ruta MEA · Sur Ecatepec", "lat": 19.575, "lng": -99.060, "color": "#10B981" },
+    { "id": "u-sup-004", "employee_code": "MEB00", "clave_cuadro_basico": "MEB00", "supervisor_code": "MEB", "gerencia_code": "ME", "full_name": "Andrés Luna", "role": "supervisor", "branch_id": "branch-ecatepec", "manager_id": "u-ger-002", "email": "andres.luna@demo.marzam.mx", "zone": "Ruta MEB · Oriente Ecatepec", "lat": 19.595, "lng": -99.025, "color": "#10B981" },
+
+    { "id": "u-rep-001", "employee_code": "UEA01", "clave_cuadro_basico": "UEA01", "agente_code": "UEA01", "supervisor_code": "UEA", "gerencia_code": "UE", "full_name": "Carlos López", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-001", "email": "rep@demo.marzam.mx", "zone": "Centro · Polígono A", "lat": 19.610, "lng": -99.055, "color": "#E5730A" },
+    { "id": "u-rep-002", "employee_code": "UEA02", "clave_cuadro_basico": "UEA02", "agente_code": "UEA02", "supervisor_code": "UEA", "gerencia_code": "UE", "full_name": "Ana Martínez", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-001", "email": "ana.martinez@demo.marzam.mx", "zone": "Centro · Polígono B", "lat": 19.617, "lng": -99.045, "color": "#E5730A" },
+    { "id": "u-rep-003", "employee_code": "UEA03", "clave_cuadro_basico": "UEA03", "agente_code": "UEA03", "supervisor_code": "UEA", "gerencia_code": "UE", "full_name": "Miguel Torres", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-001", "email": "miguel.torres@demo.marzam.mx", "zone": "Centro · Polígono C", "lat": 19.620, "lng": -99.050, "color": "#E5730A" },
+    { "id": "u-rep-004", "employee_code": "UEA04", "clave_cuadro_basico": "UEA04", "agente_code": "UEA04", "supervisor_code": "UEA", "gerencia_code": "UE", "full_name": "Sofía Castillo", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-001", "email": "sofia.castillo@demo.marzam.mx", "zone": "Centro · Polígono D", "lat": 19.612, "lng": -99.040, "color": "#E5730A" },
+
+    { "id": "u-rep-005", "employee_code": "UEB01", "clave_cuadro_basico": "UEB01", "agente_code": "UEB01", "supervisor_code": "UEB", "gerencia_code": "UE", "full_name": "Javier Ramírez", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-002", "email": "javier.ramirez@demo.marzam.mx", "zone": "Norte · Polígono A", "lat": 19.640, "lng": -99.060, "color": "#E5730A" },
+    { "id": "u-rep-006", "employee_code": "UEB02", "clave_cuadro_basico": "UEB02", "agente_code": "UEB02", "supervisor_code": "UEB", "gerencia_code": "UE", "full_name": "Patricia Vega", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-002", "email": "patricia.vega@demo.marzam.mx", "zone": "Norte · Polígono B", "lat": 19.645, "lng": -99.050, "color": "#E5730A" },
+    { "id": "u-rep-007", "employee_code": "UEB03", "clave_cuadro_basico": "UEB03", "agente_code": "UEB03", "supervisor_code": "UEB", "gerencia_code": "UE", "full_name": "Roberto Salinas", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-002", "email": "roberto.salinas@demo.marzam.mx", "zone": "Norte · Polígono C", "lat": 19.650, "lng": -99.055, "color": "#E5730A" },
+    { "id": "u-rep-008", "employee_code": "UEB04", "clave_cuadro_basico": "UEB04", "agente_code": "UEB04", "supervisor_code": "UEB", "gerencia_code": "UE", "full_name": "Daniela Cruz", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-002", "email": "daniela.cruz@demo.marzam.mx", "zone": "Norte · Polígono D", "lat": 19.638, "lng": -99.065, "color": "#E5730A" },
+
+    { "id": "u-rep-009", "employee_code": "MEA01", "clave_cuadro_basico": "MEA01", "agente_code": "MEA01", "supervisor_code": "MEA", "gerencia_code": "ME", "full_name": "Eduardo Flores", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-003", "email": "eduardo.flores@demo.marzam.mx", "zone": "Sur · Polígono A", "lat": 19.575, "lng": -99.065, "color": "#E5730A" },
+    { "id": "u-rep-010", "employee_code": "MEA02", "clave_cuadro_basico": "MEA02", "agente_code": "MEA02", "supervisor_code": "MEA", "gerencia_code": "ME", "full_name": "Lucía Romero", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-003", "email": "lucia.romero@demo.marzam.mx", "zone": "Sur · Polígono B", "lat": 19.572, "lng": -99.058, "color": "#E5730A" },
+    { "id": "u-rep-011", "employee_code": "MEA03", "clave_cuadro_basico": "MEA03", "agente_code": "MEA03", "supervisor_code": "MEA", "gerencia_code": "ME", "full_name": "Jorge Aguilar", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-003", "email": "jorge.aguilar@demo.marzam.mx", "zone": "Sur · Polígono C", "lat": 19.580, "lng": -99.062, "color": "#E5730A" },
+    { "id": "u-rep-012", "employee_code": "MEA04", "clave_cuadro_basico": "MEA04", "agente_code": "MEA04", "supervisor_code": "MEA", "gerencia_code": "ME", "full_name": "Verónica Soto", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-003", "email": "veronica.soto@demo.marzam.mx", "zone": "Sur · Polígono D", "lat": 19.578, "lng": -99.055, "color": "#E5730A" },
+
+    { "id": "u-rep-013", "employee_code": "MEB01", "clave_cuadro_basico": "MEB01", "agente_code": "MEB01", "supervisor_code": "MEB", "gerencia_code": "ME", "full_name": "Fernando Méndez", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-004", "email": "fernando.mendez@demo.marzam.mx", "zone": "Oriente · Polígono A", "lat": 19.595, "lng": -99.025, "color": "#E5730A" },
+    { "id": "u-rep-014", "employee_code": "MEB02", "clave_cuadro_basico": "MEB02", "agente_code": "MEB02", "supervisor_code": "MEB", "gerencia_code": "ME", "full_name": "Gabriela Núñez", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-004", "email": "gabriela.nunez@demo.marzam.mx", "zone": "Oriente · Polígono B", "lat": 19.598, "lng": -99.020, "color": "#E5730A" },
+    { "id": "u-rep-015", "employee_code": "MEB03", "clave_cuadro_basico": "MEB03", "agente_code": "MEB03", "supervisor_code": "MEB", "gerencia_code": "ME", "full_name": "Héctor Pacheco", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-004", "email": "hector.pacheco@demo.marzam.mx", "zone": "Oriente · Polígono C", "lat": 19.600, "lng": -99.022, "color": "#E5730A" },
+    { "id": "u-rep-016", "employee_code": "MEB04", "clave_cuadro_basico": "MEB04", "agente_code": "MEB04", "supervisor_code": "MEB", "gerencia_code": "ME", "full_name": "Brenda Salas", "role": "representante", "branch_id": "branch-ecatepec", "manager_id": "u-sup-004", "email": "brenda.salas@demo.marzam.mx", "zone": "Oriente · Polígono D", "lat": 19.592, "lng": -99.028, "color": "#E5730A" }
+  ],
+
+  "visit_targets": [
+    { "pareto_class": "A", "role": "director_sucursal", "head_count": 1, "daily_contacts_per_person": 7, "monthly_target": 140, "channel": "visit" },
+    { "pareto_class": "A", "role": "gerente_ventas", "head_count": 6, "daily_contacts_per_person": 8, "monthly_target": 840, "channel": "visit" },
+    { "pareto_class": "A", "role": "supervisor", "head_count": 11, "daily_contacts_per_person": 3, "monthly_target": 660, "channel": "visit" },
+    { "pareto_class": "B", "role": "supervisor", "head_count": 11, "daily_contacts_per_person": 2, "monthly_target": 563, "channel": "visit" },
+    { "pareto_class": "C", "role": "representante", "head_count": 157, "daily_contacts_per_person": 23, "monthly_target": 4628, "channel": "visit" },
+    { "pareto_class": "B", "role": "contact_center_agent", "head_count": 74, "daily_contacts_per_person": 15, "monthly_target": 26640, "channel": "contact_center" },
+    { "pareto_class": "C", "role": "contact_center_agent", "head_count": 74, "daily_contacts_per_person": 30, "monthly_target": 2220, "channel": "contact_center" }
+  ],
+
+  "active_sessions": [
+    { "user_id": "u-rep-001", "started_minutes_ago": 165, "pharmacies_planned": 8, "pharmacies_visited": 4, "last_idle_minutes": 2, "current_pharmacy": "Farmacia Guadalajara · Centro 12" },
+    { "user_id": "u-rep-005", "started_minutes_ago": 95, "pharmacies_planned": 7, "pharmacies_visited": 3, "last_idle_minutes": 1, "current_pharmacy": "Farmacias del Ahorro · Norte 4" },
+    { "user_id": "u-sup-002", "started_minutes_ago": 50, "pharmacies_planned": 3, "pharmacies_visited": 1, "last_idle_minutes": 18, "current_pharmacy": "Farmacia Benavides · Norte 9" },
+    { "user_id": "u-rep-010", "started_minutes_ago": 30, "pharmacies_planned": 6, "pharmacies_visited": 1, "last_idle_minutes": 0, "current_pharmacy": "Farmacia Similares · Sur 3" },
+    { "user_id": "u-rep-014", "started_minutes_ago": 210, "pharmacies_planned": 9, "pharmacies_visited": 7, "last_idle_minutes": 4, "current_pharmacy": "Farmacia San Pablo · Oriente 6" }
+  ],
+
+  "compliance_seeds": {
+    "u-rep-001": { "month": 78, "today": 50,  "trend": [60, 72, 80, 65, 75, 82, 78, 85, 70, 88, 80, 75, 82, 78] },
+    "u-rep-002": { "month": 92, "today": 100, "trend": [88, 95, 90, 92, 100, 95, 88, 92, 95, 100, 90, 95, 92, 95] },
+    "u-rep-003": { "month": 65, "today": 40,  "trend": [55, 60, 70, 65, 50, 60, 70, 65, 55, 50, 65, 70, 60, 65] },
+    "u-rep-004": { "month": 84, "today": 80,  "trend": [80, 85, 82, 88, 80, 85, 90, 82, 80, 85, 88, 80, 85, 80] },
+    "u-rep-005": { "month": 71, "today": 60,  "trend": [70, 65, 75, 80, 60, 65, 70, 75, 70, 65, 70, 75, 70, 65] },
+    "u-rep-006": { "month": 88, "today": 90,  "trend": [85, 90, 88, 92, 85, 88, 90, 92, 85, 90, 88, 92, 90, 95] },
+    "u-rep-007": { "month": 55, "today": 25,  "trend": [50, 60, 45, 55, 60, 50, 55, 60, 45, 55, 50, 60, 55, 45] },
+    "u-rep-008": { "month": 79, "today": 75,  "trend": [75, 80, 78, 82, 75, 80, 78, 82, 75, 80, 82, 78, 80, 82] },
+    "u-rep-009": { "month": 82, "today": 100, "trend": [78, 82, 85, 80, 82, 88, 80, 85, 82, 88, 80, 85, 80, 90] },
+    "u-rep-010": { "month": 68, "today": 33,  "trend": [60, 65, 70, 68, 65, 70, 72, 65, 68, 70, 72, 65, 70, 68] },
+    "u-rep-011": { "month": 91, "today": 100, "trend": [88, 90, 95, 92, 90, 95, 88, 92, 95, 90, 92, 95, 90, 92] },
+    "u-rep-012": { "month": 73, "today": 60,  "trend": [70, 75, 72, 78, 70, 75, 72, 78, 70, 75, 78, 72, 75, 78] },
+    "u-rep-013": { "month": 86, "today": 80,  "trend": [82, 88, 85, 90, 82, 88, 85, 90, 82, 88, 85, 90, 82, 88] },
+    "u-rep-014": { "month": 95, "today": 100, "trend": [92, 95, 98, 92, 95, 100, 92, 98, 95, 92, 98, 95, 92, 98] },
+    "u-rep-015": { "month": 60, "today": 40,  "trend": [55, 60, 65, 58, 62, 60, 55, 65, 60, 58, 62, 65, 60, 55] },
+    "u-rep-016": { "month": 77, "today": 80,  "trend": [75, 80, 78, 75, 80, 75, 78, 80, 75, 78, 80, 75, 80, 78] },
+    "u-sup-001": { "month": 80, "today": 75,  "trend": [76, 82, 80, 78, 82, 80, 78, 82, 80, 82, 80, 82, 80, 82] },
+    "u-sup-002": { "month": 72, "today": 50,  "trend": [70, 75, 72, 70, 75, 72, 70, 75, 72, 75, 70, 75, 72, 70] },
+    "u-sup-003": { "month": 83, "today": 100, "trend": [80, 85, 82, 88, 80, 85, 82, 88, 80, 85, 82, 88, 85, 90] },
+    "u-sup-004": { "month": 79, "today": 75,  "trend": [75, 80, 78, 82, 75, 80, 78, 82, 75, 80, 78, 82, 80, 82] },
+    "u-ger-001": { "month": 76, "today": 71,  "trend": [72, 78, 76, 80, 72, 78, 76, 80, 72, 78, 76, 80, 76, 80] },
+    "u-ger-002": { "month": 81, "today": 88,  "trend": [78, 82, 80, 85, 78, 82, 80, 85, 78, 82, 80, 85, 82, 88] },
+    "u-dir-001": { "month": 79, "today": 79,  "trend": [75, 80, 78, 82, 75, 80, 78, 82, 75, 80, 78, 82, 80, 82] }
+  },
+
+  "day_targets": {
+    "director_sucursal": 7,
+    "gerente_ventas": 8,
+    "supervisor": 5,
+    "representante": 23
+  },
+
+  "role_pareto_default": {
+    "director_sucursal": "A",
+    "gerente_ventas": "A",
+    "supervisor": "B",
+    "representante": "C"
+  },
+
+  "untouched_seed": [
+    { "cpadre": "MZ-EC-1042", "farmacia_nombre": "Farmacia Guadalajara · La Esperanza", "pareto": "B", "delegacion_municipio": "Ecatepec", "days_without": 47, "last_visited_at": null, "owner_role": "supervisor" },
+    { "cpadre": "MZ-EC-2017", "farmacia_nombre": "Farmacias del Ahorro · Las Águilas", "pareto": "C", "delegacion_municipio": "Ecatepec", "days_without": 42, "last_visited_at": null, "owner_role": "representante" },
+    { "cpadre": "MZ-EC-1188", "farmacia_nombre": "Farmacia Benavides · San Cristóbal", "pareto": "A", "delegacion_municipio": "Ecatepec", "days_without": 38, "last_visited_at": null, "owner_role": "gerente_ventas" },
+    { "cpadre": "MZ-EC-2206", "farmacia_nombre": "Farmacia del Carmen · Tulpetlac", "pareto": "C", "delegacion_municipio": "Ecatepec", "days_without": 35, "last_visited_at": null, "owner_role": "representante" },
+    { "cpadre": "MZ-EC-1455", "farmacia_nombre": "Farmacias Similares · Xalostoc", "pareto": "B", "delegacion_municipio": "Ecatepec", "days_without": 33, "last_visited_at": null, "owner_role": "supervisor" }
+  ]
+}

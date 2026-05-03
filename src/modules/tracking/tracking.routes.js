@@ -21,6 +21,13 @@ router.post(
 );
 
 router.post(
+  '/ping-batch',
+  authenticate,
+  authorize('field_rep'),
+  controller.recordPingBatch,
+);
+
+router.post(
   '/checkin',
   authenticate,
   authorize('field_rep'),

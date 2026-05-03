@@ -11,9 +11,28 @@ const SALT_ROUNDS = 10;
 
 async function buildAuthResult(user, extra = {}) {
   const scope = await computeUserScope(user);
+  // Marzam identity tokens — only present in external/virtual mode (the
+  // accessDirectory carries them). When loading from the `users` table we
+  // copy whatever is on the row so production migrates seamlessly.
+  const employee_code = user.employee_code || null;
+  const employee_number = user.employee_number || null;
+  const branch_code = user.branch_code || null;
+  const manager_code = user.manager_code || null;
+
+  // The JWT subject (`id`) is ALWAYS the canonical UUID that lives in the
+  // `users` table. When auth comes from the virtual access directory the
+  // canonical UUID is `db_user_id` (deterministic uuidv5 of the virtual id).
+  // When auth comes from the DB users table the UUID is just `user.id`.
+  // `external_id` keeps the legacy/virtual identifier (e.g. `u-dir-001`) so
+  // legacy code paths and external systems (BQ sync, demo data) can still
+  // resolve it. Backend services should always prefer `req.user.id`.
+  const canonicalId = user.db_user_id || user.id;
+  const externalId = user.db_user_id ? user.id : (user.external_id || null);
+
   const token = jwt.sign(
     {
-      id: user.id,
+      id: canonicalId,
+      external_id: externalId,
       email: user.email,
       full_name: user.full_name,
       role: user.role,
@@ -21,6 +40,10 @@ async function buildAuthResult(user, extra = {}) {
       territory_ids: scope.territoryIds,
       accessible_territory_ids: scope.accessibleTerritoryIds,
       is_global: scope.isGlobal,
+      employee_code,
+      employee_number,
+      branch_code,
+      manager_code,
       impersonated_by: extra.impersonated_by || null,
       original_role: extra.original_role || null,
     },
@@ -31,13 +54,19 @@ async function buildAuthResult(user, extra = {}) {
   return {
     token,
     user: {
-      id: user.id,
+      id: canonicalId,
+      external_id: externalId,
       email: user.email,
       full_name: user.full_name,
       role: user.role,
       data_scope: user.data_scope || null,
       territory_ids: scope.territoryIds,
       is_global: scope.isGlobal,
+      employee_code,
+      employee_number,
+      branch_code,
+      manager_code,
+      must_change_password: user.must_change_password === true,
     },
     ...(extra.impersonated_by ? { impersonated_by: extra.impersonated_by } : {}),
   };
@@ -96,7 +125,10 @@ async function login({ email, password }) {
     throw err;
   }
 
-  await db('users').where({ id: user.id }).update({ last_login_at: db.fn.now() });
+  db('users')
+    .where({ id: user.id })
+    .update({ last_login_at: db.fn.now() })
+    .catch((err) => console.warn(`[auth] failed to update last_login_at for ${user.id}: ${err.message}`));
 
   return buildAuthResult(user);
 }
@@ -109,7 +141,25 @@ async function me(userId) {
       err.status = 404;
       throw err;
     }
-    return user;
+    // Reshape so the response matches the JWT contract: `id` is the canonical
+    // UUID (db_user_id) and `external_id` carries the legacy/virtual id.
+    // accessDirectory returns the virtual id as `.id`; we swap them here so
+    // any frontend that uses `me().id` for subsequent backend calls gets the
+    // same UUID it received in the login response.
+    return {
+      id: user.db_user_id || user.id,
+      external_id: user.db_user_id ? user.id : null,
+      email: user.email,
+      full_name: user.full_name,
+      role: user.role,
+      is_active: user.is_active,
+      data_scope: user.data_scope,
+      employee_code: user.employee_code,
+      employee_number: user.employee_number,
+      branch_code: user.branch_code,
+      manager_code: user.manager_code,
+      must_change_password: user.must_change_password,
+    };
   }
 
   const user = await db('users')

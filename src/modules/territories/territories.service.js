@@ -1,10 +1,20 @@
 const territoriesRepository = require('../../repositories/territoriesRepository');
 const { canAccessTerritory } = require('../permissions/permissions');
 const { isExternalDataMode } = require('../../repositories/runtime');
+const { createCache } = require('../../utils/memoryCache');
+
+const cache = createCache({
+  ttlSeconds: Number(process.env.CACHE_TTL_TERRITORIES_SECONDS) || 120,
+  maxEntries: 50,
+});
+
+function invalidate() {
+  cache.clear();
+}
 
 async function listTree(user) {
   if (isExternalDataMode()) return [];
-  const all = await territoriesRepository.listAll();
+  const all = await cache.wrap('all', () => territoriesRepository.listAll());
   if (user && (user.is_global || user.role === 'national_admin' || user.role === 'manager')) {
     return buildTree(all);
   }
@@ -28,7 +38,7 @@ function buildTree(rows) {
 
 async function listFlat() {
   if (isExternalDataMode()) return [];
-  return territoriesRepository.listAll();
+  return cache.wrap('all', () => territoriesRepository.listAll());
 }
 
 async function getById(id) {
@@ -49,17 +59,21 @@ function externalModeWriteError() {
 
 async function assignUser({ territoryId, userId, roleInTerritory, assignedBy }) {
   if (isExternalDataMode()) throw externalModeWriteError();
-  return territoriesRepository.assignUserToTerritory({
+  const result = await territoriesRepository.assignUserToTerritory({
     userId,
     territoryId,
     roleInTerritory,
     assignedBy,
   });
+  invalidate();
+  return result;
 }
 
 async function revokeUser({ territoryId, userId }) {
   if (isExternalDataMode()) throw externalModeWriteError();
-  return territoriesRepository.revokeUserFromTerritory({ userId, territoryId });
+  const result = await territoriesRepository.revokeUserFromTerritory({ userId, territoryId });
+  invalidate();
+  return result;
 }
 
 async function create({ parentId, level, name, code, metadata, actor }) {
@@ -71,7 +85,9 @@ async function create({ parentId, level, name, code, metadata, actor }) {
       throw err;
     }
   }
-  return territoriesRepository.create({ parentId, level, name, code, metadata });
+  const result = await territoriesRepository.create({ parentId, level, name, code, metadata });
+  invalidate();
+  return result;
 }
 
 async function update(id, patch, actor) {
@@ -81,7 +97,9 @@ async function update(id, patch, actor) {
     err.status = 403;
     throw err;
   }
-  return territoriesRepository.update(id, patch);
+  const result = await territoriesRepository.update(id, patch);
+  invalidate();
+  return result;
 }
 
 module.exports = {
