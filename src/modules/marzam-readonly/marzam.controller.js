@@ -198,6 +198,17 @@ async function clearCache(_req, res, next) {
   }
 }
 
+// Marzam Execution Doc §9 — daily/rolling sales summary keyed by Marzam
+// internal customer ID. Reads from `mv_pharmacy_sales_rollups`; degrades
+// gracefully if the MV doesn't exist yet (returns empty list + warning).
+async function salesSummary(req, res, next) {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 200, 1000);
+    const out = await service.getSalesSummary({ limit });
+    res.json(out);
+  } catch (e) { next(e); }
+}
+
 module.exports = {
   listRepresentatives,
   listBranches,
@@ -206,4 +217,5 @@ module.exports = {
   getMyProfile,
   getDiagnostics,
   clearCache,
+  salesSummary,
 };

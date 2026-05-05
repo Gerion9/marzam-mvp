@@ -807,6 +807,10 @@
   function userWithExtras(user, opts = {}) {
     return {
       ...user,
+      // Plan Editor expects home_lat/home_lng; demo stores the position as lat/lng.
+      home_lat: user.home_lat ?? user.lat ?? null,
+      home_lng: user.home_lng ?? user.lng ?? null,
+      has_home: (user.home_lat ?? user.lat) != null,
       metrics: metricsFor(user.id, opts),
       presence: presenceFor(user.id),
       sparkline: (STORE.compliance_seeds[user.id] || {}).trend || [],
@@ -909,6 +913,12 @@
       const original = JSON.parse(localStorage.getItem('marzam_original_user') || 'null');
       const restored = original || me;
       return { token: `demo_${restored.id}`, user: restored };
+    }
+
+    /* ── /team/descendants — flat list used by Plan Editor ─────── */
+    if (method === 'GET' && url === '/team/descendants' && me) {
+      const descendants = getDescendants(me.id);
+      return descendants.map((u) => userWithExtras(u, query));
     }
 
     /* ── /team — cascade for current user ──────────────────────── */
@@ -1392,6 +1402,100 @@
     /* ── /tracking/breadcrumbs/:userId ─────────────────────────── */
     if (method === 'GET' && (params = matchPath('/tracking/breadcrumbs/:repId', url))) {
       return STORE.breadcrumbs[params.repId] || [];
+    }
+
+    // preview-routing is a pure-computation endpoint that calls Google Routes API.
+    // It has no DB reads/writes, so it must reach the real backend even in demo mode.
+    if (url === '/visit-plans/preview-routing') return undefined;
+
+    /* ── POST /visit-plans/preview-full — real routing in demo ──── */
+    // The real preview-full requires manager role and database tables.
+    // We intercept it here, build demo users+stops from STORE, and call
+    // the role-unrestricted preview-routing endpoint to get actual Google
+    // Routes API results, then return them in preview-full shape so the
+    // Plan Editor can draw coloured polylines on the map.
+    if (method === 'POST' && url === '/visit-plans/preview-full') {
+      return (async () => {
+        const { scope_user_ids = [], period_start } = body || {};
+        const date = period_start || new Date().toISOString().slice(0, 10);
+
+        // Only route reps (not supervisors/gerentes — they don't have stop lists).
+        const reps = STORE.users.filter(
+          (u) => u.role === ROLES.REPRESENTANTE
+            && (scope_user_ids.length === 0 || scope_user_ids.includes(u.id))
+            && u.is_active !== false,
+        );
+        if (!reps.length) return { plan: { config: { working_days: 1 } }, assignments: [] };
+
+        const users = reps.map((r) => ({
+          id: r.id,
+          home_lat: r.lat,
+          home_lng: r.lng,
+          service_minutes_per_stop: 45,
+        }));
+
+        // Distribute pharmacies: each stop belongs to the rep whose home is nearest.
+        // Cap at 10 per rep so the API call stays well within quota.
+        const MAX_PER_REP = 10;
+        const stops = [];
+        for (const rep of reps) {
+          const repPharms = STORE.pharmacies
+            .filter((p) => p.assigned_rep_id === rep.id && p.lat != null && p.lng != null)
+            .slice(0, MAX_PER_REP);
+          for (const p of repPharms) {
+            stops.push({ id: p.id, user_id: rep.id, lat: p.lat, lng: p.lng, name: p.name, pareto: p.pareto });
+          }
+        }
+        if (!stops.length) return { plan: { config: { working_days: 1 } }, assignments: [] };
+
+        // Call the real endpoint with the demo user's token.
+        const token = localStorage.getItem('token');
+        let routingResult;
+        try {
+          const resp = await fetch('/api/visit-plans/preview-routing', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: 'Bearer ' + token } : {}),
+            },
+            body: JSON.stringify({ users, stops, date }),
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          routingResult = await resp.json();
+        } catch (err) {
+          console.warn('[demoHierarchy] preview-routing call failed:', err.message || err);
+          return { plan: { config: { working_days: 1 } }, assignments: [] };
+        }
+
+        // Transform to the shape expected by plan-editor.js generatePreview().
+        const assignments = [];
+        for (const route of (routingResult.routes || [])) {
+          for (const stop of (route.stops || [])) {
+            assignments.push({
+              visitor_user_id: route.user_id,
+              scheduled_date: date,
+              route_order: stop.route_order,
+              marzam_client_id: stop.id,
+              pharmacy_id: null,
+              farmacia_nombre: stop.name || 'Farmacia',
+              pareto: stop.pareto || 'B',
+              expected_arrival_time: stop.expected_arrival_iso || null,
+              expected_travel_minutes: stop.travel_minutes || 0,
+              expected_service_minutes: stop.service_minutes || 45,
+              polyline_to_next: stop.polyline_to_next || null,
+              lat: stop.lat,
+              lng: stop.lng,
+            });
+          }
+        }
+
+        return {
+          plan: { config: { working_days: 1 } },
+          assignments,
+          _cost: routingResult.cost_estimate || null,
+          _demo: true,
+        };
+      })();
     }
 
     // Safety net: if we're in demo mode and this is one of OUR endpoints,

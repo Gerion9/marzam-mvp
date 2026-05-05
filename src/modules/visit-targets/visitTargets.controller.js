@@ -10,6 +10,15 @@ async function list(req, res, next) {
   } catch (err) { next(err); }
 }
 
+async function listExpanded(req, res, next) {
+  try {
+    const branchId = req.query.branch_id || null;
+    const channel = req.query.channel || 'visit';
+    const result = await service.listExpandedMatrix({ branchId, channel });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
 async function listOverrides(req, res, next) {
   try {
     const rows = await service.listOverrides({
@@ -26,6 +35,8 @@ async function upsert(req, res, next) {
       pareto_class: paretoClass,
       channel,
       role,
+      category_kind: categoryKind,
+      days_share: daysShare,
       daily_contacts_per_person: dailyContactsPerPerson,
       head_count: headCount,
       monthly_target: monthlyTarget,
@@ -41,12 +52,28 @@ async function upsert(req, res, next) {
       paretoClass,
       channel,
       role,
+      categoryKind,
+      daysShare,
       dailyContactsPerPerson,
       headCount,
       monthlyTarget,
       effectiveFrom,
     });
     res.status(201).json(row);
+  } catch (err) { next(err); }
+}
+
+async function bulkUpsert(req, res, next) {
+  try {
+    const branchId = req.body.branch_id || req.query.branch_id || null;
+    const cells = req.body.cells || req.body;
+    const channel = req.body.channel || 'visit';
+
+    if (!Array.isArray(cells) || !cells.length) {
+      return res.status(400).json({ error: 'cells array required' });
+    }
+    const results = await service.bulkUpsert({ actor: req.user, branchId, cells, channel });
+    res.status(200).json(results);
   } catch (err) { next(err); }
 }
 
@@ -102,8 +129,10 @@ async function resolve(req, res, next) {
 
 module.exports = {
   list,
+  listExpanded,
   listOverrides,
   upsert,
+  bulkUpsert,
   override,
   resolve,
 };

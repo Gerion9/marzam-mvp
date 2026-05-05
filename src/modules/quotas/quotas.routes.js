@@ -4,12 +4,24 @@ const authorize = require('../../middleware/rbac');
 const auditLog = require('../../middleware/auditLog');
 const service = require('./quotas.service');
 const accessDirectory = require('../../services/accessDirectory');
+const roleCapacityCtrl = require('./role-capacity.controller');
+const estimationCtrl = require('./estimation.controller');
 
 const router = Router();
 
-// Solo management roles pueden tocar quotas. Representantes quedan fuera.
+// Management roles only for existing quota endpoints
 const managementOnly = authorize({ roles: ['director_sucursal', 'gerente_ventas', 'supervisor'] });
 
+// ── Estimation endpoints (read — management + admin) ─────────────────────────
+router.get('/estimation', authenticate, managementOnly, estimationCtrl.estimate);
+router.get('/estimation/by-poblacion', authenticate, managementOnly, estimationCtrl.estimateByPoblacion);
+router.get('/recommendations', authenticate, managementOnly, estimationCtrl.recommendations);
+
+// ── Role capacity endpoints ───────────────────────────────────────────────────
+router.get('/role-capacity', authenticate, managementOnly, roleCapacityCtrl.list);
+router.post('/role-capacity', authenticate, managementOnly, auditLog('quota.role_capacity.upsert'), roleCapacityCtrl.upsert);
+
+// ── Existing quota endpoints (individual rep quotas / visit_quotas table) ────
 router.get('/subordinates', authenticate, managementOnly, async (req, res, next) => {
   try { res.json(await service.listSubordinates(req.user.id)); } catch (err) { next(err); }
 });

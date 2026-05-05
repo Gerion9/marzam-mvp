@@ -10,6 +10,23 @@ async function register(req, res, next) {
   }
 }
 
+async function bootstrapAdmin(req, res, next) {
+  try {
+    const providedToken = req.headers['x-bootstrap-token']
+      || req.body?.bootstrap_token
+      || req.query?.token;
+    const user = await authService.bootstrapAdmin({
+      email: req.body?.email,
+      password: req.body?.password,
+      full_name: req.body?.full_name,
+      providedToken,
+    });
+    res.status(201).json(user);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function login(req, res, next) {
   try {
     const result = await authService.login(req.body);
@@ -66,4 +83,4 @@ async function stopImpersonation(req, res, next) {
   }
 }
 
-module.exports = { register, login, me, listUsers, impersonate, stopImpersonation };
+module.exports = { register, bootstrapAdmin, login, me, listUsers, impersonate, stopImpersonation };

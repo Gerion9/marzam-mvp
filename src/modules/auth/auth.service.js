@@ -354,9 +354,87 @@ async function stopImpersonation(managerId) {
   return buildAuthResult(manager);
 }
 
+// Bootstrap the very first admin user — Marzam Execution Doc §3 says only
+// admin can create users, but the chicken-and-egg of "who creates the first
+// admin" is solved here:
+//   - Caller must present the env var BOOTSTRAP_TOKEN as a header.
+//   - We refuse if any admin user already exists (one-shot in practice).
+//   - We refuse in external auth mode (admin is provisioned through the
+//     directory provider in that case, not the DB).
+async function bootstrapAdmin({ email, password, full_name, providedToken }) {
+  if (isExternalDataMode()) {
+    const err = new Error('Bootstrap admin is disabled in external auth mode');
+    err.status = 501;
+    throw err;
+  }
+  const expected = process.env.BOOTSTRAP_TOKEN;
+  if (!expected) {
+    const err = new Error('Bootstrap is disabled — BOOTSTRAP_TOKEN env var not set');
+    err.status = 501;
+    err.code = 'bootstrap_disabled';
+    throw err;
+  }
+  if (!providedToken || providedToken !== expected) {
+    const err = new Error('Invalid bootstrap token');
+    err.status = 401;
+    err.code = 'invalid_bootstrap_token';
+    throw err;
+  }
+  if (!email || !password || !full_name) {
+    const err = new Error('email, password, full_name are required');
+    err.status = 422;
+    throw err;
+  }
+  if (String(password).length < 12) {
+    const err = new Error('Bootstrap admin password must be at least 12 characters');
+    err.status = 422;
+    err.code = 'bootstrap_password_weak';
+    throw err;
+  }
+
+  const existingAdmin = await db('users').where({ role: 'admin' }).first();
+  if (existingAdmin) {
+    const err = new Error('Admin already exists — bootstrap is a one-shot');
+    err.status = 409;
+    err.code = 'admin_already_exists';
+    throw err;
+  }
+
+  const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+  const [user] = await db('users')
+    .insert({
+      email,
+      password_hash,
+      full_name,
+      role: 'admin',
+      is_active: true,
+      must_change_password: false,
+    })
+    .returning(['id', 'email', 'full_name', 'role', 'is_active', 'created_at']);
+  return user;
+}
+
+// Issue a JWT for an already-trusted user row (used right after invitation
+// activation or password reset, where credentials were just verified through
+// a one-shot token rather than email + password).
+async function loginByUserRow(user) {
+  if (!user || !user.id) {
+    const err = new Error('User row missing id');
+    err.status = 500;
+    throw err;
+  }
+  db('users')
+    .where({ id: user.id })
+    .update({ last_login_at: db.fn.now() })
+    .catch((err) => console.warn(`[auth] failed to update last_login_at for ${user.id}: ${err.message}`));
+  return buildAuthResult(user);
+}
+
 module.exports = {
   register,
   login,
+  loginByUserRow,
+  bootstrapAdmin,
   me,
   listUsers,
   updateUser,

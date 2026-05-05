@@ -1,0 +1,251 @@
+/* =============================================================
+   Routing-aware views — keyframes & polish
+   Loaded after app.css / app-shell.css; only adds new utility
+   classes used by Plan Editor, Live Ops, My Route and Post-mortem.
+   ============================================================= */
+
+/* ── Live ops: alert pulse halo around rep markers ────────────── */
+@keyframes mz-alert-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(244,63,94,0.55); }
+  60%  { box-shadow: 0 0 0 12px rgba(244,63,94,0); }
+  100% { box-shadow: 0 0 0 0   rgba(244,63,94,0); }
+}
+.mz-pulse-alert { animation: mz-alert-pulse 1.6s ease-out infinite; }
+
+@keyframes mz-active-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(16,185,129,0.5); }
+  70%  { box-shadow: 0 0 0 14px rgba(16,185,129,0); }
+  100% { box-shadow: 0 0 0 0   rgba(16,185,129,0); }
+}
+.mz-pulse-active { animation: mz-active-pulse 2s ease-out infinite; }
+
+/* ── Live trail: gradient polyline animation along a polyline ─ */
+@keyframes mz-trail-flow {
+  from { stroke-dashoffset: 0;   }
+  to   { stroke-dashoffset: -28; }
+}
+.mz-trail {
+  stroke-dasharray: 6 8;
+  animation: mz-trail-flow 1.4s linear infinite;
+}
+
+/* ── Plan editor: stop card slide-in when assigned to a rep ─── */
+@keyframes mz-slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.mz-slide-in { animation: mz-slide-in 0.22s ease-out both; }
+
+/* ── Drag preview during reassign ─────────────────────────────── */
+.mz-drag-ghost {
+  opacity: 0.7;
+  transform: rotate(-1.2deg);
+  box-shadow: 0 18px 40px -10px rgba(15,23,42,0.4);
+}
+.mz-drop-target {
+  outline: 2px dashed #f97316;
+  outline-offset: 2px;
+  background: linear-gradient(0deg, rgba(251,146,60,0.06), rgba(251,146,60,0.06));
+}
+
+/* ── Live event feed: slide-in + fade ─────────────────────────── */
+.mz-event-card { animation: mz-slide-in 0.3s ease-out both; }
+
+/* ── My Route: sticky next-stop card ───────────────────────────── */
+.mz-next-stop-card {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(14px);
+  background: rgba(255,255,255,0.96);
+  border: 1px solid rgba(229,115,10,0.18);
+  box-shadow: 0 8px 26px -10px rgba(229,115,10,0.30);
+  border-radius: 1.25rem;
+  padding: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+/* ── Post-mortem: time scrubber thumb pulse ───────────────────── */
+.mz-scrubber {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  background: linear-gradient(90deg, #fef3c7, #f97316, #ea580c);
+  border-radius: 999px;
+  outline: none;
+}
+.mz-scrubber::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: #ea580c;
+  border: 3px solid white;
+  box-shadow: 0 4px 12px rgba(234,88,12,0.5);
+  cursor: pointer;
+}
+
+/* ── Polyline overlays: rep colors on the map (16-rep palette) ─ */
+.mz-rep-color-0  { color: #6366f1; }   /* indigo  */
+.mz-rep-color-1  { color: #ec4899; }   /* pink    */
+.mz-rep-color-2  { color: #14b8a6; }   /* teal    */
+.mz-rep-color-3  { color: #f97316; }   /* orange  */
+.mz-rep-color-4  { color: #10b981; }   /* emerald */
+.mz-rep-color-5  { color: #8b5cf6; }   /* violet  */
+.mz-rep-color-6  { color: #f43f5e; }   /* rose    */
+.mz-rep-color-7  { color: #06b6d4; }   /* cyan    */
+.mz-rep-color-8  { color: #84cc16; }   /* lime    */
+.mz-rep-color-9  { color: #eab308; }   /* yellow  */
+.mz-rep-color-10 { color: #d946ef; }   /* fuchsia */
+.mz-rep-color-11 { color: #0ea5e9; }   /* sky     */
+.mz-rep-color-12 { color: #ef4444; }   /* red     */
+.mz-rep-color-13 { color: #22c55e; }   /* green   */
+.mz-rep-color-14 { color: #a855f7; }   /* purple  */
+.mz-rep-color-15 { color: #f59e0b; }   /* amber   */
+
+/* ── Status chips for assignments ─────────────────────────────── */
+.mz-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.mz-chip-planned   { background: #f1f5f9; color: #475569; }
+.mz-chip-progress  { background: #fef3c7; color: #b45309; }
+.mz-chip-done      { background: #dcfce7; color: #166534; }
+.mz-chip-skipped   { background: #fee2e2; color: #b91c1c; }
+.mz-chip-late      { background: #ffedd5; color: #c2410c; }
+.mz-chip-ontime    { background: #d1fae5; color: #065f46; }
+
+/* ── Rep avatar (initials) ─────────────────────────────────────── */
+.mz-avatar {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: white;
+  user-select: none;
+}
+
+/* ── Skeleton enhancements ─────────────────────────────────────── */
+.mz-skel {
+  background: linear-gradient(90deg, #e2e8f0 0%, #f1f5f9 50%, #e2e8f0 100%);
+  background-size: 200% 100%;
+  animation: mz-skel-flow 1.4s ease-in-out infinite;
+  border-radius: 0.75rem;
+}
+@keyframes mz-skel-flow {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Container queries — wide-panel responsive layouts
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Enable container tracking on the scrollable panel body */
+#panel-body { container: panelbody / inline-size; }
+
+/* ── Plan & Metas — Cuotas sub-tab — 2-col at ≥720px ──────── */
+@container panelbody (min-width: 720px) {
+  .cuotas-grid {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 1.25rem;
+    align-items: start;
+  }
+}
+
+/* ── Readability: scale up fonts in wide layout ──────────────── */
+@container panelbody (min-width: 720px) {
+  /* Card headings */
+  .cuotas-grid h4,
+  .cuotas-grid label {
+    font-size: 0.875rem !important;
+    letter-spacing: 0.04em;
+  }
+
+  /* Equipo table — headers and cells */
+  .cuotas-grid table th { font-size: 0.6875rem !important; }  /* 11px */
+  .cuotas-grid table td { font-size: 0.875rem  !important; }  /* 14px */
+  .cuotas-grid table input[type="number"] {
+    font-size: 0.875rem !important;
+    padding: 0.3rem 0.25rem !important;
+  }
+
+  /* Matrix table — header labels and cell inputs */
+  .cuotas-grid #matrix-table th { font-size: 0.6875rem !important; }
+  .cuotas-grid .matrix-cell-input { font-size: 0.875rem !important; }
+
+  /* Zone selector */
+  .cuotas-grid select { font-size: 0.875rem !important; }
+
+  /* Estimation card KPI numbers — enlarge significantly */
+  .cuotas-grid #preview-total,
+  .cuotas-grid #preview-coverage { font-size: 2.75rem !important; line-height: 1; }
+  .cuotas-grid #preview-nuevas-visits,
+  .cuotas-grid #preview-freq { font-size: 2.25rem !important; line-height: 1; }
+
+  /* Right column: ensure tables expand to full available width */
+  .cuotas-right { min-width: 0; }
+  .cuotas-right table { width: 100%; }
+}
+
+/* ── Analytics — filters sidebar + content — 2-col at ≥720px ─ */
+@container panelbody (min-width: 720px) {
+  .analytics-layout {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 1rem;
+    align-items: start;
+  }
+  .analytics-filters {
+    position: sticky;
+    top: 0;
+  }
+  /* Hide the collapse summary when sidebar is visible */
+  .analytics-filters > summary { display: none; }
+  /* Force single-column filter grid inside the narrow sidebar */
+  .analytics-filters .filter-grid {
+    grid-template-columns: 1fr !important;
+    display: flex !important;
+    flex-direction: column;
+  }
+  /* Remove col-span inside the sidebar */
+  .analytics-filters .filter-grid > * { grid-column: unset !important; }
+  /* Scale up filter labels and selects */
+  .analytics-filters select,
+  .analytics-filters button { font-size: 0.875rem !important; }
+  /* Content area: readable font sizes */
+  .analytics-layout #analytics-content { font-size: 0.875rem; min-width: 0; }
+}
+
+/* ── Mobile: touch-friendly inputs (prevents iOS auto-zoom) ─── */
+@container panelbody (max-width: 480px) {
+  .matrix-cell-input,
+  .cap-hc-input,
+  .cap-days-input {
+    min-height: 40px;
+    font-size: 16px !important;
+  }
+}
+
+/* ── Mobile: condensed by-state table — hide detail cols ─────── */
+@container panelbody (max-width: 560px) {
+  .by-state-nuevas-detail { display: none !important; }
+  .by-state-nuevas-total  { display: table-cell !important; }
+}
+/* Hide total column on wide (it's shown only on mobile) */
+@container panelbody (min-width: 561px) {
+  .by-state-nuevas-total  { display: none !important; }
+}

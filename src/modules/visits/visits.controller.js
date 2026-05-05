@@ -68,6 +68,60 @@ async function listByPharmacy(req, res, next) {
   }
 }
 
+// Pre-visit photo upload — Marzam Execution Doc §6.3 mandates that photo
+// evidence is "blocked if missing" at submit time, but the photo had to be
+// uploaded BEFORE the visit_report exists. This endpoint stores the photo to
+// GCS (or local in dev) and returns the URL so the FE can include it in the
+// `submit` payload as `photo_url`. The visit submission then attaches the
+// photo to the freshly-created visit row.
+//
+// Auth: any authenticated rep can upload to their own staging area; the
+// returned URL is stable and the rep proves ownership at submit time.
+async function uploadStagingPhoto(req, res, next) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Photo file is required' });
+    }
+    if (config.photos.provider === 'local') {
+      if (config.env === 'production') {
+        const err = new Error('Local photo storage is disabled in production');
+        err.status = 501;
+        throw err;
+      }
+      const ext = resolvePhotoExtension(req.file.originalname);
+      const fileName = `staging_${req.user.id}_${Date.now()}.${ext}`;
+      const destination = path.resolve(config.photos.storageDir, fileName);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.writeFile(destination, req.file.buffer);
+      return res.status(201).json({
+        photo_url: `/uploads/photos/${fileName}`,
+        object_path: fileName,
+        bucket: null,
+        size_bytes: req.file.size,
+        mime_type: req.file.mimetype,
+      });
+    }
+    // GCS path: namespace under `visits/staging/<rep>/<ts>` so the cleanup job
+    // can find orphaned uploads that never got attached to a visit.
+    const stored = await uploadVerificationPhoto({
+      state: 'mx',                                // staging is geography-agnostic
+      municipality: 'staging',
+      verificationId: `${req.user.id}_${Date.now()}`,
+      pharmacyId: req.body?.pharmacy_id || 'unknown',
+      originalName: req.file.originalname,
+      buffer: req.file.buffer,
+      contentType: req.file.mimetype,
+    });
+    res.status(201).json({
+      photo_url: stored.photoUrl,
+      object_path: stored.objectPath,
+      bucket: stored.bucket,
+      size_bytes: req.file.size,
+      mime_type: req.file.mimetype,
+    });
+  } catch (err) { next(err); }
+}
+
 async function uploadPhoto(req, res, next) {
   try {
     if (!req.file) {
@@ -105,4 +159,4 @@ async function uploadPhoto(req, res, next) {
   }
 }
 
-module.exports = { submit, listByPharmacy, uploadPhoto };
+module.exports = { submit, listByPharmacy, uploadPhoto, uploadStagingPhoto };

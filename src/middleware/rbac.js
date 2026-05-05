@@ -10,12 +10,18 @@
  * field_rep) are accepted via ROLE_ALIASES — both in the request user.role and in
  * the allowed lists declared by call sites — to keep older code working through
  * the rename rollout.
+ *
+ * `admin` (per Marzam Execution Doc §3) is implicitly allowed on every gate —
+ * see expandAllowed(). Endpoints that should be admin-exclusive must use the
+ * `adminOnly: true` option, which inverts the rule and rejects everyone else.
  */
 
-const { ROLE_ALIASES, normalizeRole } = require('../constants/roles');
+const { ROLES, ROLE_ALIASES, normalizeRole } = require('../constants/roles');
 
 function expandAllowed(roles) {
   const expanded = new Set();
+  // Admin always passes any non-empty role gate (top of hierarchy, global scope).
+  expanded.add(ROLES.ADMIN);
   for (const r of roles) {
     if (!r) continue;
     const canonical = normalizeRole(r);
@@ -32,13 +38,13 @@ function expandAllowed(roles) {
 function authorize(...args) {
   // New-style: single object
   if (args.length === 1 && typeof args[0] === 'object' && args[0] !== null && !Array.isArray(args[0])) {
-    const { roles = [], check = null } = args[0];
-    const allowed = expandAllowed(roles);
+    const { roles = [], check = null, adminOnly = false } = args[0];
+    const allowed = adminOnly ? new Set([ROLES.ADMIN]) : expandAllowed(roles);
     return (req, res, next) => {
       if (!req.user) {
         return res.status(401).json({ error: 'Unauthenticated' });
       }
-      if (allowed.size > 0 && !allowed.has(req.user.role)) {
+      if (allowed.size > 0 && !allowed.has(normalizeRole(req.user.role))) {
         return res.status(403).json({ error: 'Forbidden: insufficient permissions' });
       }
       if (typeof check === 'function' && !check(req)) {
@@ -51,7 +57,7 @@ function authorize(...args) {
   // Legacy-style: string list
   const allowed = expandAllowed(args);
   return (req, res, next) => {
-    if (!req.user || !allowed.has(req.user.role)) {
+    if (!req.user || !allowed.has(normalizeRole(req.user.role))) {
       return res.status(403).json({ error: 'Forbidden: insufficient permissions' });
     }
     next();

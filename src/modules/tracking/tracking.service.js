@@ -5,6 +5,7 @@ const externalDeviceLocationRepository = require('../../repositories/external/de
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { parseStopId } = require('../externalData/externalAssignmentIds');
 const accessDirectory = require('../../services/accessDirectory');
+const liveBus = require('../live/live.service');
 
 const DISTANCE_WARNING_THRESHOLD_M = 500;
 
@@ -77,6 +78,46 @@ async function recordPing({ rep_id, rep_name, assignment_id, verification_id, la
     })
     .returning('*');
   await pingActiveSession(rep_id);
+  // First-ping bootstrapping: if the rep has no home_lat yet AND we have a
+  // reasonably accurate fix (≤200 m), use this ping as their depot. Manager
+  // can always override later via POST /api/users/me/home.
+  // Only set when accuracy is good to avoid pinning the depot to a 1km
+  // GPS hop the first time the app opens. If accuracy_meters is unknown,
+  // we still trust it (browsers sometimes omit accuracy).
+  try {
+    if (Number.isFinite(lat) && Number.isFinite(lng)
+        && (accuracy_meters == null || accuracy_meters <= 200)) {
+      const u = await db('users').select('id', 'home_lat').where({ id: rep_id }).first();
+      if (u && u.home_lat == null) {
+        await db('users').where({ id: rep_id }).update({
+          home_lat: lat,
+          home_lng: lng,
+          home_geohash7: require('../../utils/geohash').encode(lat, lng, 7),
+        });
+      }
+    }
+  } catch (err) {
+    // Never fail the ping ingest because of home bootstrapping.
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[tracking] home bootstrap failed: ${err.message}`);
+    }
+  }
+  // Push to the live SSE bus so manager dashboards see the rep move in real time.
+  try {
+    liveBus.publish({
+      type: 'position',
+      subjectUserId: rep_id,
+      payload: {
+        rep_id,
+        rep_name: repNameSnapshot,
+        lat,
+        lng,
+        accuracy_meters: accuracy_meters || null,
+        recorded_at: ping.recorded_at || new Date().toISOString(),
+        assignment_id: assignment_id || null,
+      },
+    });
+  } catch { /* never break ping ingest because of bus */ }
   return ping;
 }
 

@@ -70,6 +70,97 @@ async function preview(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/**
+ * Rich preview that runs the full driving-aware planGenerator without
+ * persisting. Returns assignments with ETAs and polylines so the Plan
+ * Editor map can draw the routes.
+ */
+async function previewFull(req, res, next) {
+  try {
+    const {
+      scope_user_ids: scopeUserIds,
+      granularity,
+      period_start: periodStart,
+      period_end: periodEnd,
+      pareto_filter: paretoFilter,
+      branch_id: branchId,
+      name,
+      route_start_hhmm: routeStartHHMM,
+    } = req.body || {};
+    if (!Array.isArray(scopeUserIds) || !scopeUserIds.length) {
+      return res.status(400).json({ error: 'scope_user_ids is required' });
+    }
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({ error: 'period_start, period_end required' });
+    }
+    const result = await service.previewFull({
+      ownerUserId: req.user.id,
+      scopeUserIds: scopeUserIds.map((id) => accessDirectory.toCanonicalId(id)),
+      granularity: granularity || 'weekly',
+      periodStart,
+      periodEnd,
+      paretoFilter,
+      branchId,
+      name,
+      routeStartHHMM,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
+/**
+ * Routing sandbox — runs the full routing pipeline on caller-supplied
+ * users + stops without touching the DB. Safe for demo users.
+ *
+ * Body: { users: [{id, home_lat, home_lng}], stops: [{id, user_id, lat, lng, name?, pareto?}], date: "YYYY-MM-DD" }
+ */
+async function previewRouting(req, res, next) {
+  try {
+    const { users, stops, date, service_minutes_per_stop } = req.body || {};
+    const result = await service.routePreview({ users, stops, date, service_minutes_per_stop });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
+async function postMortem(req, res, next) {
+  try {
+    const result = await service.postMortem(req.params.id, {
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
+async function replayRepDay(req, res, next) {
+  try {
+    const repId = accessDirectory.toCanonicalId(req.params.repId);
+    const result = await service.replayRepDay(req.params.id, repId, req.params.day, {
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
+async function reassignStop(req, res, next) {
+  try {
+    const planId = req.params.id;
+    const { assignment_id: assignmentId, new_visitor_user_id: newVisitorUserId } = req.body || {};
+    if (!assignmentId || !newVisitorUserId) {
+      return res.status(400).json({ error: 'assignment_id and new_visitor_user_id are required' });
+    }
+    const result = await service.reassignStop({
+      planId,
+      assignmentId,
+      newVisitorUserId: accessDirectory.toCanonicalId(newVisitorUserId),
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
 async function publish(req, res, next) {
   try {
     const updated = await service.publish(req.params.id, req.user.id);
@@ -80,6 +171,29 @@ async function publish(req, res, next) {
 async function archive(req, res, next) {
   try {
     const updated = await service.archive(req.params.id, req.user.id);
+    res.json(updated);
+  } catch (err) { next(err); }
+}
+
+async function startAssignment(req, res, next) {
+  try {
+    const updated = await service.startAssignment({
+      assignmentId: req.params.id,
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
+    });
+    res.json(updated);
+  } catch (err) { next(err); }
+}
+
+async function deviateAssignment(req, res, next) {
+  try {
+    const updated = await service.deviateAssignment({
+      assignmentId: req.params.id,
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
+      reason: req.body?.reason,
+    });
     res.json(updated);
   } catch (err) { next(err); }
 }
@@ -109,7 +223,14 @@ module.exports = {
   show,
   create,
   preview,
+  previewFull,
+  previewRouting,
+  reassignStop,
   publish,
   archive,
   myAssignments,
+  startAssignment,
+  deviateAssignment,
+  postMortem,
+  replayRepDay,
 };

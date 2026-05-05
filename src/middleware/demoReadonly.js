@@ -37,6 +37,8 @@ const ALWAYS_ALLOW_PATHS = [
   '/api/auth/impersonate',
   '/api/auth/impersonate/stop',
   '/api/health',
+  // Pure computation — no DB writes. Safe for demo users; enables routing sandbox.
+  '/api/visit-plans/preview-routing',
 ];
 
 function isDemoUser(user) {

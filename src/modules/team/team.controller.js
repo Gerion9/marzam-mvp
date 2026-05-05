@@ -49,6 +49,22 @@ async function cascade(req, res, next) {
   }
 }
 
+async function descendants(req, res, next) {
+  try {
+    const result = await service.getDescendantsEnriched({
+      userId: req.user.id,
+      actor: req.user,
+    });
+    res.json(result);
+  } catch (err) {
+    if (isDbConnectionError(err)) {
+      console.warn(`[team.descendants] DB connection issue, returning empty: ${err.message}`);
+      return res.json([]);
+    }
+    next(err);
+  }
+}
+
 async function member(req, res, next) {
   try {
     const result = await service.getMember({
@@ -68,4 +84,4 @@ async function member(req, res, next) {
   }
 }
 
-module.exports = { cascade, member };
+module.exports = { cascade, member, descendants };

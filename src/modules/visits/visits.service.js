@@ -5,12 +5,14 @@ const {
   OUTCOMES_REQUIRING_FOLLOWUP,
   OUTCOMES_CREATING_FLAG,
   OUTCOMES_SKIPPING_STOP,
+  OUTCOMES_REQUIRING_PHOTO,
 } = require('./visits.stateMachine');
 const verificationService = require('../verifications/verifications.service');
 const externalFieldSurveyRepository = require('../../repositories/external/fieldSurveyRepository');
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { parseStopId } = require('../externalData/externalAssignmentIds');
 const { signVisitToken, verifyVisitToken } = require('./externalVisitToken');
+const alertsEngine = require('../alerts/alerts.engine');
 
 async function submitExternal(data) {
   const parsedStop = data.assignment_stop_id ? parseStopId(data.assignment_stop_id) : {};
@@ -67,10 +69,61 @@ async function submit(data) {
     }
   }
 
+  // Skip outcomes (closed/duplicate/moved/etc.) require an explicit reason —
+  // legacy flag_reason fallback to notes is dropped because the brief mandates
+  // a structured reason. The frontend exposes a dropdown.
   if (OUTCOMES_CREATING_FLAG.includes(data.outcome)) {
-    if (!data.flag_reason && !data.notes) {
-      const err = new Error('flag_reason or notes is required for flag outcomes');
+    if (!data.flag_reason || !String(data.flag_reason).trim()) {
+      const err = new Error('flag_reason is required for skip/flag outcomes');
       err.status = 422;
+      err.code = 'flag_reason_required';
+      throw err;
+    }
+  }
+
+  // Hard-block: every outcome listed in OUTCOMES_REQUIRING_PHOTO needs at
+  // least one photo at submit time. We accept any of: an explicit photo_url
+  // in the payload, a verification with a photo, or a precomputed photo_count.
+  // This matches Marzam Execution Doc §6.3: "blocked if missing".
+  if (OUTCOMES_REQUIRING_PHOTO.includes(data.outcome)) {
+    const hasInlinePhoto = Boolean(
+      data.photo_url
+      || data.evidence_photo_url
+      || (Array.isArray(data.photos) && data.photos.length > 0)
+      || data.verification?.photo_url,
+    );
+    const declaredCount = Number(data.photo_count || 0) > 0;
+    if (!hasInlinePhoto && !declaredCount) {
+      // Fire alert (best-effort; never let alerting break visit submission)
+      // so a manager sees repeated photo-block attempts as a quality signal.
+      try {
+        await alertsEngine.fireVisitMissingPhoto({
+          repId: data.rep_id,
+          pharmacyId: data.pharmacy_id,
+          attemptedOutcome: data.outcome,
+        });
+      } catch (_e) { /* swallow — table may not exist yet pre-migration */ }
+      const err = new Error('Photo evidence is required to close this visit');
+      err.status = 422;
+      err.code = 'photo_required';
+      throw err;
+    }
+  }
+
+  // 1 visit per pharmacy per day per Marzam Execution Doc §6.3 "Constraints".
+  // We check before insert so we return a friendlier 409 rather than a raw
+  // unique-constraint error, but the DB-level UNIQUE index (added in mig 053)
+  // is the source of truth.
+  if (!isExternalDataMode() && data.pharmacy_id && data.rep_id) {
+    const today = new Date().toISOString().slice(0, 10);
+    const dup = await db('visit_reports')
+      .where({ pharmacy_id: data.pharmacy_id, rep_id: data.rep_id })
+      .andWhereRaw('date(created_at) = ?', [today])
+      .first();
+    if (dup) {
+      const err = new Error('Esta farmacia ya fue visitada hoy por este representante');
+      err.status = 409;
+      err.code = 'visit_already_today';
       throw err;
     }
   }
@@ -178,6 +231,16 @@ async function submit(data) {
         submitted_by: data.rep_id,
         queue_status: 'pending',
       });
+      // Fire manager alert for closed/duplicate cases (Marzam Execution Doc §8 #5).
+      // Best-effort: outside the transaction is fine, this is a notification.
+      try {
+        await alertsEngine.fireCustomerClosed({
+          repId: data.rep_id,
+          pharmacyId: data.pharmacy_id,
+          outcome: data.outcome,
+          flagReason: data.flag_reason || null,
+        });
+      } catch (_e) { /* swallow */ }
     }
 
     if (data.assignment_stop_id) {

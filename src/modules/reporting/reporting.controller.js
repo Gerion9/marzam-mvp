@@ -46,6 +46,23 @@ async function refreshViews(req, res, next) {
   }
 }
 
+// ── Marzam Execution Doc §10 — KPIs locked set ────────────────────────────
+async function routeAdherence(req, res, next) {
+  try { res.json(await reportingService.getRouteAdherence(req.query)); } catch (err) { next(err); }
+}
+async function visitDuration(req, res, next) {
+  try { res.json(await reportingService.getVisitDuration(req.query)); } catch (err) { next(err); }
+}
+async function prospectFunnel(req, res, next) {
+  try { res.json(await reportingService.getProspectFunnel(req.query)); } catch (err) { next(err); }
+}
+async function salesVsTarget(req, res, next) {
+  try { res.json(await reportingService.getSalesVsTarget(req.query)); } catch (err) { next(err); }
+}
+async function routesOnTime(req, res, next) {
+  try { res.json(await reportingService.getRoutesStartedOnTime(req.query)); } catch (err) { next(err); }
+}
+
 async function exportPharmacies(req, res, next) {
   try {
     const rows = await reportingService.exportPharmacies(req.query);
@@ -118,4 +135,9 @@ async function flotillaSummary(req, res, next) {
   }
 }
 
-module.exports = { dashboard, repProductivity, coverageByMunicipality, assignmentProgress, refreshViews, exportPharmacies, exportRepRoute, exportAllRepRoutes, visitDetail, flotillaSummary };
+module.exports = {
+  dashboard, repProductivity, coverageByMunicipality, assignmentProgress, refreshViews,
+  exportPharmacies, exportRepRoute, exportAllRepRoutes, visitDetail, flotillaSummary,
+  // Marzam Execution Doc §10 KPI set:
+  routeAdherence, visitDuration, prospectFunnel, salesVsTarget, routesOnTime,
+};

@@ -80,17 +80,14 @@
   function clearLayer(id) {
     const map = getMap();
     if (!map) return;
-    [
-      id,
-      `${id}-prospects`,
-      `${id}-prospects-cross`,
-    ].forEach((layerId) => {
+    const layerIds = [id, `${id}-prospects`, `${id}-prospects-cross`, 'marzam-pharmacies-cross'];
+    const sourceIds = [id, `${id}-prospects`, `${id}-prospects-cross`];
+    // Layers must all be removed before any source that they reference is removed.
+    layerIds.forEach((layerId) => {
       if (map.getLayer(layerId)) map.removeLayer(layerId);
-      if (map.getSource(layerId)) map.removeSource(layerId);
     });
-    // Also drop the padrón-cross (consultorio clients, if any).
-    ['marzam-pharmacies-cross'].forEach((layerId) => {
-      if (map.getLayer(layerId)) map.removeLayer(layerId);
+    sourceIds.forEach((sourceId) => {
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
     });
   }
 
@@ -312,7 +309,7 @@
             'D', 9,
             10,
           ],
-          'text-font': ['Noto Sans Bold', 'Open Sans Bold', 'Arial Unicode MS Bold'],
+          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
           'text-allow-overlap': true,
           'text-ignore-placement': true,
         },

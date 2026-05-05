@@ -53,6 +53,9 @@
     // Icono unificado para "Plan & Metas" — diana con marca de check al
     // centro: comunica simultáneamente "objetivo configurado" + "logrado".
     plan: '<svg fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><path stroke-linecap="round" stroke-linejoin="round" d="M9.5 12.2l1.8 1.8 3.5-3.7"/></svg>',
+    planEditor: '<svg fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h12"/><circle cx="20" cy="18" r="2"/></svg>',
+    live: '<svg fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M5 12a7 7 0 0 1 7-7"/><path d="M19 12a7 7 0 0 0-7-7"/><path d="M9 18a4 4 0 0 1-4-4"/><path d="M19 14a4 4 0 0 1-4 4"/></svg>',
+    postMortem: '<svg fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>',
   };
 
   function tabsForRole(role) {
@@ -62,13 +65,12 @@
     ];
     if (norm !== ROLES.REPRESENTANTE) {
       tabs.push({ id: 'team', label: 'Mi equipo', icon: TAB_ICONS.team });
+      tabs.push({ id: 'live', label: 'En vivo', icon: TAB_ICONS.live });
     }
     tabs.push({ id: 'analytics', label: 'Analíticas', icon: TAB_ICONS.analytics });
     if (norm !== ROLES.REPRESENTANTE) {
-      // Antes eran dos tabs separados (Targets + Distribución).  Ahora todo
-      // vive en una sola entrada con tres sub-tabs internos para evitar
-      // confundir al manager sobre "dónde pongo qué meta".  Ver views.js →
-      // renderPlan.
+      // Plan & Metas absorbió "Planificar" (Generar) y "Análisis" (Resultados)
+      // como sub-tabs internos para evitar duplicación. Ver views.js → renderPlan.
       tabs.push({ id: 'plan', label: 'Plan & Metas', icon: TAB_ICONS.plan });
     }
     return tabs;
@@ -461,6 +463,9 @@
     document.querySelectorAll('.nav-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tabId));
     setPanelTitle(tabId);
     renderActions(tabId);
+    // Wide panel for Analytics and Plan & Metas (also covers legacy aliases that resolve to them)
+    const WIDE_TABS = new Set(['analytics', 'plan', 'planEditor', 'postMortem', 'targets', 'distribution']);
+    document.getElementById('panel').classList.toggle('panel-wide', WIDE_TABS.has(tabId));
     const body = document.getElementById('panel-body');
     body.innerHTML = `<div class="space-y-3">${skeletonBlock()}${skeletonBlock()}${skeletonBlock()}</div>`;
     try {
@@ -471,6 +476,14 @@
       else if (tabId === 'team')       await window.MarzamViews.renderMyTeam(body);
       else if (tabId === 'analytics')  await window.MarzamViews.renderAnalytics(body);
       else if (tabId === 'plan')       await window.MarzamViews.renderTargets(body);
+      else if (tabId === 'live')       await window.MarzamViews.renderLiveOps(body);
+      // Legacy aliases — old links/bookmarks redirect into the consolidated tab.
+      else if (tabId === 'planEditor' || tabId === 'postMortem') {
+        APP.activeTab = 'plan';
+        document.querySelectorAll('.nav-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'plan'));
+        setPanelTitle('plan');
+        await window.MarzamViews.renderTargets(body);
+      }
       // Aliases legacy por si algún deep-link o bookmark sigue apuntando
       // a los tabs viejos. Redirigen al nuevo tab unificado.
       else if (tabId === 'targets' || tabId === 'distribution') {
@@ -502,6 +515,9 @@
       team:      { title: 'Mi equipo', subtitle: 'Cascada · Tracking en vivo' },
       analytics: { title: 'Analíticas', subtitle: 'Cumplimiento, PARETO y tiempo' },
       plan:      { title: 'Plan & Metas', subtitle: 'Capacidad, overrides y cumplimiento mensual' },
+      planEditor: { title: 'Planificar', subtitle: 'Mapa interactivo · drag & drop · ETAs reales' },
+      live:      { title: 'En vivo', subtitle: 'Posiciones · alertas · jornada en curso' },
+      postMortem:{ title: 'Análisis', subtitle: 'Plan vs ejecutado · replay · ranking' },
       // Aliases legacy — mismo título que el nuevo tab unificado.
       targets:      { title: 'Plan & Metas', subtitle: 'Capacidad, overrides y cumplimiento mensual' },
       distribution: { title: 'Plan & Metas', subtitle: 'Capacidad, overrides y cumplimiento mensual' },
@@ -555,6 +571,7 @@
       container: 'map',
       style: {
         version: 8,
+        glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
         sources: {
           carto: {
             type: 'raster',

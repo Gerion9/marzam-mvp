@@ -39,19 +39,63 @@
 
   async function renderEmbedded(container) {
     const { start, end } = monthBounds();
+    // Pre-load team + clients + canonical EF list. clients sirve para
+    // hidratar `u.poblaciones` cuando el backend no enriqueció (fallback
+    // basado en rep_code/supervisor_code/gerencia_code del padrón).
+    const [team, clientsRaw, pobCanonical] = await Promise.all([
+      API.get('/team/descendants').catch(() => []),
+      API.get('/marzam/clients?limit=2000').catch(() => []),
+      API.get('/poblaciones').catch(() => null),
+    ]);
+    const clientList = Array.isArray(clientsRaw) ? clientsRaw : (clientsRaw?.clients || clientsRaw?.rows || clientsRaw?.data || []);
+    if (window.MarzamEF?.hydrateTeam) window.MarzamEF.hydrateTeam(team, clientList);
+    const polRaw = [];
+    (team || []).forEach((u) => (Array.isArray(u.poblaciones) ? u.poblaciones : []).forEach((p) => polRaw.push(p)));
+    if (pobCanonical?.options) {
+      for (const opt of pobCanonical.options) {
+        if (opt?.value && opt.value !== '__all__') polRaw.push(opt.value);
+      }
+    }
+    const populations = window.MarzamEF ? window.MarzamEF.dedup(polRaw) : [...new Set(polRaw.filter(Boolean))].sort();
+    let activeFilter = window.MarzamPlanZone || (window.APP?.poblacion && window.APP.poblacion !== '__all__' ? window.APP.poblacion : '');
+    const efKey = window.MarzamEF ? window.MarzamEF.key : ((s) => String(s || '').trim().toLowerCase());
+    // Index por efKey (sin acentos) para que el filtro tolere variantes.
+    const userIdsByKey = new Map();
+    const userWithoutPob = new Set(); // cobertura desconocida → incluir en cualquier filtro
+    (team || []).forEach((u) => {
+      const list = Array.isArray(u.poblaciones) ? u.poblaciones : [];
+      if (!list.length) { userWithoutPob.add(u.id); return; }
+      list.forEach((p) => {
+        const k = efKey(p);
+        if (!userIdsByKey.has(k)) userIdsByKey.set(k, new Set());
+        userIdsByKey.get(k).add(u.id);
+      });
+    });
+
     container.innerHTML = `
       <div>
-        <!-- Header explicativo:  evita que el manager se pregunte "y este número
-             para qué es" cuando aterriza por primera vez en el sub-tab. -->
         <div class="bg-gradient-to-br from-slate-50 to-white border border-slate-200 rounded-2xl p-3 mb-3">
           <div class="flex items-start gap-2">
             <span class="text-base leading-none mt-0.5">🎯</span>
             <p class="text-[11px] text-slate-600 leading-snug">
               <b class="text-slate-800">Meta del período por subordinado.</b>
               Es la <b>vara de cumplimiento</b>: cuántas <b>nuevas</b> y cuántos <b>clientes</b> esperas
-              de cada uno este mes.  El plan generado en <b>Defaults</b> ya distribuye visitas día a día;
+              de cada uno este mes.  El plan generado en <b>Cuotas</b> ya distribuye visitas día a día;
               estas metas son por las que evalúas el resultado.
             </p>
+          </div>
+        </div>
+
+        <!-- Filtro Entidad Federativa (col. poblacion en marzam_clients) -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-3 mb-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <label class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Entidad federativa</label>
+            <select id="dist-pob" class="flex-1 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
+              <option value="">Toda la sucursal</option>
+              ${populations.map((p) => `<option value="${escapeHtml(p)}" ${activeFilter === p ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+            </select>
+            <span id="dist-pob-count" class="text-[10px] text-slate-400 font-bold whitespace-nowrap"></span>
           </div>
         </div>
 
@@ -117,7 +161,19 @@
         const data = await API.get(`/quotas?period_start=${startInp.value}&period_end=${endInp.value}`);
         // Filtrar plazas vacantes — no se les puede fijar meta y al manager
         // solo le interesa ver gente con quien medir cumplimiento.
-        const rows = (data.rows || []).filter((r) => !isVacancy(r));
+        let rows = (data.rows || []).filter((r) => !isVacancy(r));
+        // Filtrar por Entidad Federativa: solo subordinados que sirvan a la
+        // EF activa. El set de user_ids por EF se construyó en init usando
+        // los `poblaciones` enriquecidos del backend (marzam_clients.poblacion).
+        if (activeFilter) {
+          // Strict: post-hidratación, un user sin coincidencia genuinamente
+          // no tiene padrón en la EF y no aparece en Avance. Esto hace que
+          // los conteos varíen al cambiar de EF.
+          const allowed = userIdsByKey.get(efKey(activeFilter)) || new Set();
+          rows = rows.filter((r) => allowed.has(r.user_id));
+        }
+        const countEl = container.querySelector('#dist-pob-count');
+        if (countEl) countEl.textContent = activeFilter ? `${rows.length} en ${activeFilter}` : '';
         renderRows(rows);
       } catch (err) {
         rowsEl.innerHTML = `<div class="text-center text-rose-600 text-sm py-4">${escapeHtml(err?.error || 'Error')}</div>`;
@@ -195,6 +251,17 @@
     }
 
     reload.addEventListener('click', load);
+    // Filtro Entidad Federativa: cambia el set activo + dispara reload.
+    // También sincroniza window.MarzamPlanZone para que Cuotas y Crear plan
+    // hereden el mismo filtro al cambiar de sub-tab.
+    const polSelect = container.querySelector('#dist-pob');
+    if (polSelect) {
+      polSelect.addEventListener('change', (e) => {
+        activeFilter = e.target.value || '';
+        window.MarzamPlanZone = activeFilter || null;
+        load();
+      });
+    }
 
     // Acordeón del atajo uniforme — empieza cerrado para no robarle protagonismo
     // a las tarjetas individuales (que son la acción principal).

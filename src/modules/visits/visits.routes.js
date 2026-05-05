@@ -38,4 +38,15 @@ router.post(
   controller.uploadPhoto,
 );
 
+// Pre-submit photo upload — returns a stable photo_url that the FE includes
+// in the visit submit payload to satisfy the OUTCOMES_REQUIRING_PHOTO gate.
+// See visits.service.js#submit() for the consumer contract.
+router.post(
+  '/staging-photo',
+  authenticate,
+  upload.single('photo'),
+  auditLog('visit.staging_photo_uploaded'),
+  controller.uploadStagingPhoto,
+);
+
 module.exports = router;

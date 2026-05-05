@@ -7,10 +7,15 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <!-- Alpine.js: scoped reactivity for new views (Plan Editor, Live Ops, Post-mortem).
+       Loaded `defer` so it boots after the DOM is ready, and AFTER our scripts so
+       window.MarzamApp / MarzamViews exist before Alpine starts traversing. -->
+  <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet"/>
   <link rel="stylesheet" href="/css/app.css?v=app-15">
   <link rel="stylesheet" href="/css/app-shell.css?v=app-15">
   <link rel="stylesheet" href="/css/onboarding-wizard.css?v=app-15">
+  <link rel="stylesheet" href="/css/views.css?v=app-15">
 </head>
 <body class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
 
@@ -98,7 +103,7 @@
       - translate inicial 35vh — overridable por setupMobilePanelDrag().
   -->
   <div id="panel" class="absolute z-40 max-md:z-[58] bg-white/96 backdrop-blur-3xl shadow-2xl flex flex-col transition-all duration-500 ease-spring
-        md:translate-y-0 md:top-24 md:left-[112px] md:bottom-8 md:w-[480px] xl:w-[540px] md:rounded-3xl border border-white/40 ring-1 ring-slate-200/50
+        md:translate-y-0 md:top-24 md:left-[112px] md:bottom-8 md:rounded-3xl border border-white/40 ring-1 ring-slate-200/50
         left-0 right-0 max-md:bottom-[80px] max-md:top-[90px] rounded-t-3xl max-md:translate-y-[35vh]">
 
     <button id="btn-collapse-panel" class="hidden md:flex absolute top-6 -right-5 w-10 h-10 bg-white shadow-lg border border-slate-100 rounded-full items-center justify-center text-slate-500 hover:text-[#e5730a] z-50 transition-all hover:scale-110">
@@ -176,6 +181,13 @@
   <script src="/js/marzam-pharmacies-map.js?v=app-15"></script>
   <script src="/js/marzam-charts.js?v=app-15"></script>
   <script src="/js/views.js?v=app-15"></script>
+  <!-- Routing-aware views (post-057). Each appends to window.MarzamViews
+       and uses Alpine for scoped reactivity. Loaded AFTER views.js so they
+       can extend the registry. -->
+  <script src="/js/views/plan-editor.js?v=app-15"></script>
+  <script src="/js/views/live-ops.js?v=app-15"></script>
+  <script src="/js/views/my-route.js?v=app-15"></script>
+  <script src="/js/views/post-mortem.js?v=app-15"></script>
   <script src="/js/onboarding-wizard.js?v=app-15"></script>
   <script src="/js/visit-client.js?v=app-15"></script>
   <script src="/js/distribution.js?v=app-15"></script>

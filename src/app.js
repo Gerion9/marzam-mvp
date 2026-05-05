@@ -36,6 +36,8 @@ const visitSessionsRoutes = require('./modules/visit-sessions/visitSessions.rout
 const pharmacyOnboardingRoutes = require('./modules/pharmacy-onboarding/onboarding.routes');
 const poblacionesRoutes = require('./modules/poblaciones/poblaciones.routes');
 const quotasRoutes = require('./modules/quotas/quotas.routes');
+const invitationsRoutes = require('./modules/invitations/invitations.routes');
+const liveRoutes = require('./modules/live/live.routes');
 
 const app = express();
 
@@ -127,6 +129,8 @@ app.use('/api/visit-sessions', visitSessionsRoutes);
 app.use('/api/pharmacy-onboarding', pharmacyOnboardingRoutes);
 app.use('/api/poblaciones', poblacionesRoutes);
 app.use('/api/quotas', quotasRoutes);
+app.use('/api/admin/invitations', invitationsRoutes);
+app.use('/api/live', liveRoutes);
 
 app.get('/api/health', async (_req, res) => {
   const result = {
@@ -189,8 +193,11 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/manager', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'manager.html')));
+app.get('/manager-live', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'manager-live.html')));
 app.get('/rep', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'rep.html')));
 app.get('/app', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'app.html')));
+app.get('/activate.html', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'activate.html')));
+app.get('/reset-password.html', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'reset-password.html')));
 
 // Static fallback for local dev (Vercel serves these via @vercel/static in prod).
 app.use(express.static(path.join(__dirname, 'public')));

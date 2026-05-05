@@ -158,6 +158,31 @@ async function getRepresentatives() {
     if (name) gerenteNameToGerencia.set(name.trim().toUpperCase(), g);
   }
 
+  // Token-set of each gerente name for fuzzy matching.
+  // Needed because cuadro_basico uses "ADRIANA MERCADO" while detalle_mostrador
+  // uses "MERCADO LOPEZ ADRIANA" — exact lookup fails for these cases.
+  const gerenteTokenSets = [];
+  for (const [g, name] of gerenciaToGerente.entries()) {
+    if (!name) continue;
+    const tokens = new Set(
+      tokenize(name).split('_').filter(Boolean),
+    );
+    gerenteTokenSets.push({ gerenciaCode: g, tokens });
+  }
+
+  function resolveGerenciaCode(fullName) {
+    const upper = String(fullName || '').trim().toUpperCase();
+    // 1. Exact match (fast path)
+    if (gerenteNameToGerencia.has(upper)) return gerenteNameToGerencia.get(upper);
+    // 2. Fuzzy match — at least 2 shared tokens
+    const queryTokens = new Set(tokenize(upper).split('_').filter(Boolean));
+    for (const { gerenciaCode, tokens } of gerenteTokenSets) {
+      const shared = [...queryTokens].filter(t => tokens.has(t));
+      if (shared.length >= 2) return gerenciaCode;
+    }
+    return null;
+  }
+
   // 3. Project each cuadro_basico row into the canonical user shape.
   const out = [];
   const seenGerentes = new Set();
@@ -179,8 +204,9 @@ async function getRepresentatives() {
 
     if (role === ROLES.GERENTE_VENTAS || claveLiteral === 'GERENTE') {
       // Multiple rows share clave='GERENTE'; identify via name → gerencia map.
-      const upper = String(fullName || '').trim().toUpperCase();
-      gerenciaCode = gerenteNameToGerencia.get(upper) || null;
+      // Uses fuzzy token matching to handle name format differences between
+      // cuadro_basico ("ADRIANA MERCADO") and detalle_mostrador ("MERCADO LOPEZ ADRIANA").
+      gerenciaCode = resolveGerenciaCode(fullName);
       if (gerenciaCode) {
         employeeCode = gerenciaCode; // unique per gerencia
       } else {
@@ -494,11 +520,45 @@ async function getDiagnostics() {
   };
 }
 
+// Marzam Execution Doc §9 — daily/rolling sales summary.
+// Reads from `mv_pharmacy_sales_rollups` (mig 056) joined with marzam_clients
+// for human-readable identifiers. Returns one row per (cpadre, internal_customer_id)
+// with sales_today / sales_7d / sales_30d / sales_mtd already aggregated.
+//
+// Degrades gracefully:
+//   - MV missing (pre-mig)        → { warning: 'mv_missing', items: [] }
+//   - daily_sales empty / no sync → empty list, no warning (legitimate state).
+async function getSalesSummary({ limit = 200 } = {}) {
+  const exists = await localDb.raw(`SELECT to_regclass('mv_pharmacy_sales_rollups') AS t`);
+  if (!exists.rows?.[0]?.t) {
+    return { warning: 'mv_missing', generated_at: new Date().toISOString(), items: [] };
+  }
+  const rows = await localDb('mv_pharmacy_sales_rollups as mv')
+    .leftJoin('marzam_clients as mc', 'mc.id', 'mv.marzam_client_id')
+    .select(
+      'mv.marzam_client_id',
+      'mc.cpadre',
+      'mc.clave_mostrador as internal_customer_id',
+      'mc.farmacia_nombre',
+      'mc.pareto',
+      'mv.last_sale_date',
+      'mv.sales_today',
+      'mv.sales_7d',
+      'mv.sales_30d',
+      'mv.sales_mtd',
+      'mv.active_days_30d',
+    )
+    .orderBy('mv.sales_30d', 'desc')
+    .limit(limit);
+  return { generated_at: new Date().toISOString(), count: rows.length, items: rows };
+}
+
 module.exports = {
   getRepresentatives,
   getBranches,
   getClients,
   getUniverse,
   getDiagnostics,
+  getSalesSummary,
   clearCache,
 };

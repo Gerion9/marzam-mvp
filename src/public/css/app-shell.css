@@ -575,3 +575,20 @@
 @media (hover: none) and (pointer: coarse) {
   #sidenav { transition: none !important; }
 }
+
+/* ─── Desktop panel width (default + wide) ───────────────── */
+/* Default width — mirrors the removed Tailwind md:w-[480px] xl:w-[540px] */
+@media (min-width: 768px) {
+  #panel { width: 480px; }
+}
+@media (min-width: 1280px) {
+  #panel { width: 540px; }
+}
+
+/* Wide mode for Analytics and Plan & Metas tabs */
+@media (min-width: 768px) {
+  #panel.panel-wide {
+    width: calc(100vw - 160px) !important;
+    max-width: 1440px !important;
+  }
+}

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="0; url=/app#live">
+  <title>Marzam — Redirigiendo a En vivo…</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #f8fafc; color: #475569;
+           display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { text-align: center; max-width: 420px; padding: 2rem; }
+    .spinner { width: 36px; height: 36px; border: 3px solid #e2e8f0; border-top-color: #e5730a;
+               border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 1rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    a { color: #e5730a; text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner"></div>
+    <h1 style="font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 0.5rem;">
+      Live Tracking se mudó
+    </h1>
+    <p style="font-size: 13px; margin: 0 0 1rem;">
+      La nueva vista <b>En vivo</b> vive ahora dentro de la plataforma con SSE,
+      trail de ruta, alertas y filtros.
+    </p>
+    <p style="font-size: 13px; margin: 0;">
+      Si no eres redirigido automáticamente, <a href="/app#live">haz clic aquí</a>.
+    </p>
+  </div>
+  <script>
+    // Belt-and-suspenders client-side redirect.
+    setTimeout(() => { location.replace('/app#live'); }, 500);
+  </script>
+</body>
+</html>

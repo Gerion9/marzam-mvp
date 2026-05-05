@@ -29,6 +29,7 @@ router.get('/me', authenticate, ctrl.getMyProfile);
 router.get('/branches', authenticate, ctrl.listBranches);
 router.get('/clients', authenticate, ctrl.listClients);
 router.get('/universe', authenticate, ctrl.listUniverse);
+router.get('/sales-summary', authenticate, ctrl.salesSummary);
 
 router.post(
   '/_admin/clear-cache',

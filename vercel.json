@@ -13,6 +13,7 @@
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/index.js" },
     { "src": "/manager", "dest": "/api/index.js" },
+    { "src": "/manager-live", "dest": "/api/index.js" },
     { "src": "/rep", "dest": "/api/index.js" },
     { "src": "/app", "dest": "/api/index.js" },
     { "src": "/(.*)", "dest": "/src/public/$1" }
@@ -25,6 +26,14 @@
     {
       "path": "/api/admin/bq-sync/_worker",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/alerts/_evaluate",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/admin/bq-sync/_purge-route-cache",
+      "schedule": "0 4 * * *"
     }
   ]
 }

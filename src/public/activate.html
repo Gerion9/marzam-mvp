@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Marzam — Activar cuenta</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="bg-gradient-to-br from-[#1b365d] via-[#152845] to-[#0f1f3a] min-h-screen flex items-center justify-center p-4">
+
+  <div class="w-full max-w-md">
+    <div class="text-center mb-7">
+      <img src="/images/logo_marzam.svg" alt="Marzam" class="h-14 w-auto mx-auto mb-3" onerror="this.style.display='none'">
+      <p class="text-blue-200 text-sm">Activa tu cuenta de Marzam</p>
+    </div>
+
+    <div id="loading" class="bg-white rounded-2xl shadow-2xl p-6 text-center">
+      <p class="text-slate-600 text-sm">Validando enlace…</p>
+    </div>
+
+    <div id="invalid" class="hidden bg-white rounded-2xl shadow-2xl p-6 text-center">
+      <h2 class="text-lg font-bold text-rose-600 mb-2">Enlace inválido o expirado</h2>
+      <p id="invalid-msg" class="text-slate-600 text-sm mb-4"></p>
+      <a href="/" class="inline-block px-4 py-2 text-sm font-bold text-white bg-[#1b365d] rounded-lg">Ir al inicio</a>
+    </div>
+
+    <form id="form" class="hidden bg-white rounded-2xl shadow-2xl p-6 space-y-4">
+      <div>
+        <p class="text-sm text-slate-700">Bienvenido, <span id="full_name" class="font-bold"></span></p>
+        <p class="text-xs text-slate-500 mt-1"><span id="email"></span> · <span id="role"></span></p>
+      </div>
+      <div>
+        <label class="block text-xs font-bold text-slate-700 mb-1" for="password">Nueva contraseña</label>
+        <input id="password" type="password" autocomplete="new-password" minlength="8"
+          class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+          placeholder="Mínimo 8 caracteres" required>
+      </div>
+      <div>
+        <label class="block text-xs font-bold text-slate-700 mb-1" for="password2">Confirmar contraseña</label>
+        <input id="password2" type="password" autocomplete="new-password"
+          class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+          required>
+      </div>
+      <div id="error" class="text-rose-600 text-xs hidden"></div>
+      <button type="submit" id="submit"
+        class="w-full py-2.5 bg-[#e5730a] hover:bg-[#c96205] text-white font-bold text-sm rounded-lg disabled:opacity-50">
+        Activar cuenta e iniciar sesión
+      </button>
+    </form>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const token = params.get('token');
+    const $ = (id) => document.getElementById(id);
+
+    if (!token) {
+      $('loading').classList.add('hidden');
+      $('invalid').classList.remove('hidden');
+      $('invalid-msg').textContent = 'Falta el token en la URL.';
+    } else {
+      fetch(`/api/auth/activate/${encodeURIComponent(token)}`)
+        .then((r) => r.json().then((body) => ({ status: r.status, body })))
+        .then(({ status, body }) => {
+          $('loading').classList.add('hidden');
+          if (status >= 400) {
+            $('invalid').classList.remove('hidden');
+            $('invalid-msg').textContent = body.error || 'No pudimos validar el enlace.';
+            return;
+          }
+          $('full_name').textContent = body.user.full_name || '';
+          $('email').textContent = body.user.email;
+          $('role').textContent = body.user.role;
+          $('form').classList.remove('hidden');
+        })
+        .catch(() => {
+          $('loading').classList.add('hidden');
+          $('invalid').classList.remove('hidden');
+          $('invalid-msg').textContent = 'Error de conexión.';
+        });
+    }
+
+    $('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      $('error').classList.add('hidden');
+      const pw = $('password').value;
+      const pw2 = $('password2').value;
+      if (pw.length < 8) {
+        $('error').textContent = 'La contraseña debe tener al menos 8 caracteres.';
+        $('error').classList.remove('hidden');
+        return;
+      }
+      if (pw !== pw2) {
+        $('error').textContent = 'Las contraseñas no coinciden.';
+        $('error').classList.remove('hidden');
+        return;
+      }
+      $('submit').disabled = true;
+      $('submit').textContent = 'Activando…';
+      try {
+        const r = await fetch(`/api/auth/activate/${encodeURIComponent(token)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw }),
+        });
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error || 'No se pudo activar.');
+        localStorage.setItem('token', body.token);
+        localStorage.setItem('user', JSON.stringify(body.user));
+        location.href = '/app';
+      } catch (err) {
+        $('error').textContent = err.message;
+        $('error').classList.remove('hidden');
+        $('submit').disabled = false;
+        $('submit').textContent = 'Activar cuenta e iniciar sesión';
+      }
+    });
+  </script>
+</body>
+</html>

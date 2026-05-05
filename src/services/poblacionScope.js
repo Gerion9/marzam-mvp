@@ -25,6 +25,7 @@
  */
 
 const db = require('../config/database');
+const { efKey } = require('../utils/efKey');
 
 const DEFAULT_ACTIVE = 'Estado de México';
 
@@ -45,17 +46,37 @@ const CACHE_TTL_MS = 60_000;
 async function listKnownPoblaciones() {
   const now = Date.now();
   if (_cache && (now - _cacheAt) < CACHE_TTL_MS) return _cache;
+  // PRIMARY source: marzam_clients.poblacion — la columna real que enlaza
+  // farmacias con su Entidad Federativa. Es el dato canónico que el usuario
+  // pidió usar (no `employee_profiles.zona_poblaciones`, que era una
+  // descripción libre del rep y no un join).
+  let primary = [];
   try {
-    const rows = await db('employee_profiles')
-      .whereNotNull('zona_poblaciones')
-      .where('zona_poblaciones', '<>', '')
-      .distinct('zona_poblaciones')
-      .orderBy('zona_poblaciones', 'asc');
-    _cache = rows.map((r) => r.zona_poblaciones).filter(Boolean);
+    const rows = await db('marzam_clients')
+      .whereNotNull('poblacion')
+      .where('poblacion', '<>', '')
+      .distinct('poblacion')
+      .orderBy('poblacion', 'asc');
+    primary = rows.map((r) => r.poblacion).filter(Boolean);
   } catch {
-    // Tabla no existe (modo external/demo) — devolvemos lista mínima.
-    _cache = [];
+    primary = [];
   }
+  // FALLBACK: si por alguna razón marzam_clients no tiene registros aún,
+  // mantenemos la lista vieja como red de seguridad para que el dropdown
+  // no aparezca vacío.
+  if (!primary.length) {
+    try {
+      const rows = await db('employee_profiles')
+        .whereNotNull('zona_poblaciones')
+        .where('zona_poblaciones', '<>', '')
+        .distinct('zona_poblaciones')
+        .orderBy('zona_poblaciones', 'asc');
+      primary = rows.map((r) => r.zona_poblaciones).filter(Boolean);
+    } catch {
+      primary = [];
+    }
+  }
+  _cache = primary;
   _cacheAt = now;
   return _cache;
 }
@@ -64,6 +85,9 @@ async function listKnownPoblaciones() {
  * Resuelve la población activa para una request. Retorna `null` si no
  * se pide ninguna explícitamente (= sin filtro). Solo retorna un valor
  * si el usuario lo pidió explícitamente y existe en la lista conocida.
+ *
+ * Supports alias normalization (e.g. "edomex" → "Estado de México") via
+ * efKey comparison so that URL params like ?poblacion=edomex work correctly.
  */
 async function resolveActiveFromQuery(req) {
   const requested = (req?.query?.poblacion || '').toString().trim();
@@ -71,23 +95,46 @@ async function resolveActiveFromQuery(req) {
     return null; // sin filtro
   }
   const known = await listKnownPoblaciones();
+  // 1. Exact match first (fast path, no normalization cost)
   if (known.includes(requested)) return requested;
-  // Si está en modo restringido y la pedida no es la activa, fuerza activa.
+  // 2. Normalized match — "edomex", "cdmx", etc. resolve to canonical
+  const keyedRaw = efKey(requested);
+  const match = known.find((k) => efKey(k) === keyedRaw);
+  if (match) return match;
+  // If restricted mode and no match found, fall back to active default
   if (isRestrictedToActive()) return getActivePoblacion();
   return null; // valor inválido → no filtrar (no falla)
 }
 
 /**
- * Devuelve un array de user_ids que pertenecen a la zona activa.
- * Útil para filtrar pharmacies/team/visits por usuarios de esa zona.
+ * Devuelve un array de user_ids que sirven a la Entidad Federativa
+ * (poblacion) indicada — derivado de las asignaciones reales en
+ * `marzam_clients`. Un user "pertenece" a una población si tiene al menos
+ * un cliente asignado (rep / supervisor / gerente) cuya `poblacion`
+ * coincida.
+ *
+ * The `poblacion` argument is normalized via efKey before the lookup so
+ * that aliases like "edomex" resolve to the canonical "Estado de México".
  */
 async function userIdsInPoblacion(poblacion) {
   if (!poblacion) return [];
   try {
-    const rows = await db('employee_profiles')
-      .where('zona_poblaciones', poblacion)
-      .pluck('user_id');
-    return rows.filter(Boolean);
+    // Resolve alias → canonical DB value (e.g. "edomex" → "Estado de México")
+    const known = await listKnownPoblaciones();
+    const keyedRaw = efKey(poblacion);
+    const canonical = known.find((k) => efKey(k) === keyedRaw) || poblacion;
+
+    const rows = await db.raw(`
+      SELECT DISTINCT user_id FROM (
+        SELECT assigned_rep_id        AS user_id FROM marzam_clients WHERE poblacion = ? AND assigned_rep_id        IS NOT NULL
+        UNION ALL
+        SELECT assigned_supervisor_id AS user_id FROM marzam_clients WHERE poblacion = ? AND assigned_supervisor_id IS NOT NULL
+        UNION ALL
+        SELECT assigned_gerente_id    AS user_id FROM marzam_clients WHERE poblacion = ? AND assigned_gerente_id    IS NOT NULL
+      ) t
+      WHERE user_id IS NOT NULL
+    `, [canonical, canonical, canonical]);
+    return (rows.rows || []).map((r) => r.user_id).filter(Boolean);
   } catch {
     return [];
   }

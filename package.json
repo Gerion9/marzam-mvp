@@ -25,7 +25,7 @@
     "bq:sample": "node scripts/bq-sync-dry-run.js --limit 50",
     "auth:generate": "node scripts/generate-auth-directory.js",
     "auth:summary": "node scripts/generate-auth-directory.js --format summary",
-    "test": "node --test --test-reporter=spec \"tests/**/*.test.js\"",
+    "test": "node --test --test-reporter=spec tests/",
     "lint": "eslint src/"
   },
   "dependencies": {

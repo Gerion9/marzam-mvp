@@ -1,13 +1,14 @@
 /**
  * Marzam Source Sync orchestrator.
  *
- * Runs the five sync jobs in order — they have read-after-write dependencies:
+ * Runs the six sync jobs in order — they have read-after-write dependencies:
  *
  *   1) cuadro_basico    → users + employee_profiles
  *   2) prospect_scored  → pharmacies (universe)
  *   3) detalle_mostrador→ marzam_clients
  *   4) hierarchy        → branches, users.manager_id, users.branch_id
  *   5) clients_ecatepec → marzam_clients.dataplor_id ↔ pharmacies
+ *   6) daily_sales      → daily_sales fact table (Marzam Execution Doc §9)
  *
  * Each job is idempotent. The whole orchestration is logged in `import_jobs`
  * so you can audit "when was the last full sync, how many rows changed".
@@ -26,6 +27,7 @@ const syncProspectScored = require('./jobs/syncProspectScored');
 const syncDetalleMostrador = require('./jobs/syncDetalleMostrador');
 const syncHierarchy = require('./jobs/syncHierarchy');
 const syncClientsEcatepec = require('./jobs/syncClientsEcatepec');
+const syncDailySales = require('./jobs/syncDailySales');
 
 const JOB_RUNNERS = [
   syncCuadroBasico,
@@ -33,6 +35,8 @@ const JOB_RUNNERS = [
   syncDetalleMostrador,
   syncHierarchy,
   syncClientsEcatepec,
+  // daily_sales runs last because it depends on marzam_clients populated by job 3.
+  syncDailySales,
 ];
 
 const REQUIRED_DESTINATION_TABLES = [
@@ -88,6 +92,29 @@ async function runAll({ limitPerJob = null, force = false } = {}) {
       console.warn(`[bq-sync] ${job.JOB_NAME} failed: ${err.message}`);
     }
   }
+
+  // Refresh the sales rollups MV after daily_sales lands.  Best-effort: a
+  // missing MV (pre-mig 056) or a contention error must not fail the run.
+  try {
+    const exists = await db.raw(`SELECT to_regclass('mv_pharmacy_sales_rollups') AS t`);
+    if (exists.rows?.[0]?.t) {
+      // CONCURRENTLY requires the MV to have been populated at least once;
+      // try concurrent first, fall back to a plain refresh on its first run.
+      try {
+        await db.raw('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_pharmacy_sales_rollups');
+      } catch (concurrentErr) {
+        if (/no data/i.test(concurrentErr.message) || /first refresh/i.test(concurrentErr.message)) {
+          await db.raw('REFRESH MATERIALIZED VIEW mv_pharmacy_sales_rollups');
+        } else {
+          throw concurrentErr;
+        }
+      }
+      results.push({ name: 'mv_pharmacy_sales_rollups', refreshed: true });
+    }
+  } catch (err) {
+    results.push({ name: 'mv_pharmacy_sales_rollups', error: err.message });
+  }
+
   const failed = results.some((r) => r.error);
   return { ok: !failed, duration_ms: Date.now() - startedAt, results };
 }
