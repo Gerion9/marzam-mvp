@@ -136,6 +136,33 @@
     return `https://www.google.com/maps/dir/?api=1&destination=${stop.lat},${stop.lng}&destination_place_id=&travelmode=driving&query=${q}`;
   }
 
+  function deepLinkWaze(stop) {
+    if (stop.lat == null || stop.lng == null) return null;
+    return `https://waze.com/ul?ll=${stop.lat},${stop.lng}&navigate=yes`;
+  }
+
+  /**
+   * GPS permission UX. Prompts the user when permission is in 'prompt' state;
+   * resolves true if granted, false otherwise.
+   */
+  async function ensureGpsPermission() {
+    if (!navigator.permissions || !navigator.permissions.query) return true;
+    try {
+      const status = await navigator.permissions.query({ name: 'geolocation' });
+      if (status.state === 'denied') {
+        window.MarzamToast?.show('GPS bloqueado. Activa la ubicación en tu navegador para registrar visitas.', 'danger');
+        return false;
+      }
+      if (status.state === 'prompt') {
+        // Wrap a one-shot getCurrentPosition to trigger the browser prompt.
+        return new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(() => resolve(true), () => resolve(false), { enableHighAccuracy: true, timeout: 8000 });
+        });
+      }
+      return true;
+    } catch { return true; }
+  }
+
   let _watchId = null;
   let _etaTimer = null;
 
@@ -146,6 +173,38 @@
 
     body.innerHTML = `
       <div x-data="myRoute()" x-init="init()" class="space-y-3">
+        <!-- Persistent offline banner -->
+        <template x-if="isOffline">
+          <div class="bg-amber-100 border border-amber-300 text-amber-800 text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-2">
+            <span class="inline-block w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+            Sin conexión — tus acciones se guardan y se enviarán al recuperar la red.
+            <span class="text-[10px] font-normal text-amber-700 ml-auto" x-show="pendingOps > 0" x-text="'(' + pendingOps + ' pendiente' + (pendingOps === 1 ? '' : 's') + ')'"></span>
+          </div>
+        </template>
+        <!-- Deviation modal -->
+        <template x-if="deviationOpen">
+          <div class="fixed inset-0 z-50 bg-slate-900/60 flex items-end sm:items-center justify-center p-4" @click.self="closeDeviation()">
+            <div class="bg-white rounded-2xl w-full max-w-sm shadow-xl">
+              <div class="px-4 py-3 border-b border-slate-100">
+                <div class="font-bold text-slate-800 text-sm">¿Por qué desviar esta parada?</div>
+                <div class="text-[11px] text-slate-500 mt-0.5" x-text="deviationStop?.farmacia_nombre || ''"></div>
+              </div>
+              <div class="p-4">
+                <textarea x-model="deviationReason" rows="3" maxlength="280"
+                  class="w-full text-sm rounded-lg border border-slate-200 p-2 focus:outline-none focus:ring-2 focus:ring-rose-300"
+                  placeholder="Motivo del desvío (requerido)…"></textarea>
+                <div class="flex justify-between items-center mt-2 text-[10px] text-slate-400">
+                  <span x-text="deviationReason.length + '/280'"></span>
+                </div>
+              </div>
+              <div class="px-4 pb-4 flex gap-2">
+                <button @click="closeDeviation()" class="flex-1 text-xs font-bold uppercase px-3 py-2 rounded-lg bg-slate-100 text-slate-700">Cancelar</button>
+                <button @click="confirmDeviation()" :disabled="!deviationReason.trim()"
+                  class="flex-1 text-xs font-bold uppercase px-3 py-2 rounded-lg bg-rose-600 text-white disabled:bg-rose-300">Registrar desvío</button>
+              </div>
+            </div>
+          </div>
+        </template>
         <!-- Sticky next-stop card -->
         <template x-if="next">
           <div class="mz-next-stop-card">
@@ -189,9 +248,15 @@
                 <div class="text-sm font-bold text-slate-800 truncate" x-text="s.farmacia_nombre || 'Sin nombre'"></div>
                 <div class="text-[11px] text-slate-500 truncate" x-text="s.delegacion_municipio || ''"></div>
               </div>
-              <div class="text-right text-[11px]">
+              <div class="text-right text-[11px] flex flex-col items-end gap-1">
                 <div class="font-semibold text-slate-700" x-text="timeOf(s.expected_arrival_time)"></div>
                 <span class="mz-chip" :class="statusClass(s)" x-text="statusLabel(s)"></span>
+                <div class="flex items-center gap-1 mt-0.5" x-show="s.status !== 'done' && s.status !== 'deviated' && s.status !== 'skipped'">
+                  <a :href="wazeUrl(s)" target="_blank" rel="noopener"
+                     class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-violet-100 text-violet-700">Waze</a>
+                  <button @click="deviateStop(s)"
+                     class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-rose-100 text-rose-700">Desviar</button>
+                </div>
               </div>
             </div>
           </template>
@@ -218,6 +283,11 @@
       etaSeconds: 0,
       etaOnTime: true,
       etaLabel: '—',
+      isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
+      pendingOps: 0,
+      deviationOpen: false,
+      deviationStop: null,
+      deviationReason: '',
 
       get next() { return this.stops[this.nextIdx]; },
       get total() { return this.stops.length; },
@@ -230,6 +300,21 @@
       get navUrl() { return this.next ? deepLinkMaps(this.next) : '#'; },
 
       async init() {
+        // Online/offline reactivity for the persistent banner + auto-drain.
+        // We bind handlers via addEventListener but tag them on the component
+        // so a re-init (SPA route swap) doesn't stack duplicates.
+        if (!this._onlineHandler) {
+          this._onlineHandler = () => {
+            this.isOffline = false;
+            if (window.MarzamOfflineQueue?.drain) {
+              window.MarzamOfflineQueue.drain().then(() => this._refreshPendingCount());
+            }
+          };
+          this._offlineHandler = () => { this.isOffline = true; };
+          window.addEventListener('online', this._onlineHandler);
+          window.addEventListener('offline', this._offlineHandler);
+        }
+        this._refreshPendingCount();
         try {
           const today = todayIso();
           const data = await API.get(`/visit-plans/assignments?from=${today}&to=${today}`);
@@ -282,13 +367,75 @@
       },
       async startStop() {
         const a = this.next; if (!a) return;
+        // Try to ensure we have GPS — non-blocking; rep can still start without it.
+        ensureGpsPermission();
+        // Use offlineQueue if present so a flaky connection doesn't lose the action.
+        const queue = window.MarzamOfflineQueue;
+        const op = { method: 'POST', path: `/visit-plans/assignments/${a.id}/start`, body: {} };
         try {
-          await API.post(`/visit-plans/assignments/${a.id}/start`, {});
-          window.MarzamToast?.show('Visita iniciada', 'success');
+          if (queue?.enqueue && !navigator.onLine) {
+            await queue.enqueue(op);
+            a.status = 'in_progress';
+            window.MarzamToast?.show('Iniciada (offline) — se sincronizará al recuperar la red', 'info');
+          } else {
+            await API.post(op.path, {});
+            a.status = 'in_progress';
+            window.MarzamToast?.show('Visita iniciada', 'success');
+          }
+          this._refreshMap();
+          this._refreshPendingCount();
         } catch (err) {
           window.MarzamToast?.show('No se pudo iniciar: ' + (err.message || err), 'danger');
         }
       },
+      deviateStop(stop) {
+        // Open the modal; submission flows through confirmDeviation().
+        this.deviationStop = stop;
+        this.deviationReason = '';
+        this.deviationOpen = true;
+      },
+      closeDeviation() {
+        this.deviationOpen = false;
+        this.deviationStop = null;
+        this.deviationReason = '';
+      },
+      async confirmDeviation() {
+        const stop = this.deviationStop;
+        const reason = (this.deviationReason || '').trim();
+        if (!stop || !reason) return;
+        const queue = window.MarzamOfflineQueue;
+        const op = {
+          method: 'POST',
+          path: `/visit-plans/assignments/${stop.id}/deviate`,
+          body: { reason },
+        };
+        try {
+          if (queue?.enqueue && !navigator.onLine) {
+            await queue.enqueue(op);
+            stop.status = 'deviated';
+            window.MarzamToast?.show('Desvío encolado offline', 'info');
+          } else {
+            await API.post(op.path, op.body);
+            stop.status = 'deviated';
+            window.MarzamToast?.show('Desvío registrado', 'success');
+          }
+          if (stop === this.next) {
+            this.nextIdx = Math.min(this.nextIdx + 1, this.stops.length - 1);
+          }
+          this._refreshMap();
+          this._refreshPendingCount();
+          this.closeDeviation();
+        } catch (err) {
+          window.MarzamToast?.show('No se pudo registrar desvío: ' + (err.message || err), 'danger');
+        }
+      },
+      async _refreshPendingCount() {
+        try {
+          const q = window.MarzamOfflineQueue;
+          if (q?.pendingOpsCount) this.pendingOps = await q.pendingOpsCount();
+        } catch { /* ignore */ }
+      },
+      wazeUrl(s) { return deepLinkWaze(s); },
       colorFor(s) {
         if (s.status === 'done') return '#10b981';
         if (s.status === 'skipped') return '#ef4444';

@@ -25,6 +25,8 @@
   const SRC_POLY = 'plan-editor-polylines';
   const SRC_STOPS = 'plan-editor-stops';
   const SRC_HOMES = 'plan-editor-homes';
+  const SRC_OVERLAY_CAUTION = 'plan-editor-overlay-caution';
+  const SRC_OVERLAY_BLOCKED = 'plan-editor-overlay-blocked';
 
   function colorFor(idx) { return REP_COLORS[idx % REP_COLORS.length]; }
 
@@ -55,6 +57,47 @@
       });
       if (map.getSource(srcId)) map.removeSource(srcId);
     });
+  }
+
+  function clearOverlays() {
+    const map = APP.map; if (!map) return;
+    [SRC_OVERLAY_CAUTION, SRC_OVERLAY_BLOCKED].forEach((srcId) => {
+      ['fill', 'line'].forEach((kind) => {
+        const id = `${srcId}-${kind}`;
+        if (map.getLayer(id)) map.removeLayer(id);
+      });
+      if (map.getSource(srcId)) map.removeSource(srcId);
+    });
+  }
+
+  async function drawSecurityOverlays(map) {
+    clearOverlays();
+    if (!map) return;
+    // Use the current map bounds as bbox.
+    const b = map.getBounds();
+    const bbox = `${b.getWest().toFixed(5)},${b.getSouth().toFixed(5)},${b.getEast().toFixed(5)},${b.getNorth().toFixed(5)}`;
+    try {
+      const [caution, blocked] = await Promise.all([
+        API.get(`/colonias/geojson?security_level=caution&bbox=${bbox}`),
+        API.get(`/colonias/geojson?security_level=not_acceptable&bbox=${bbox}`),
+      ]);
+      if (caution?.features?.length) {
+        map.addSource(SRC_OVERLAY_CAUTION, { type: 'geojson', data: caution });
+        map.addLayer({ id: `${SRC_OVERLAY_CAUTION}-fill`, type: 'fill', source: SRC_OVERLAY_CAUTION,
+          paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.18 } });
+        map.addLayer({ id: `${SRC_OVERLAY_CAUTION}-line`, type: 'line', source: SRC_OVERLAY_CAUTION,
+          paint: { 'line-color': '#d97706', 'line-width': 1.4, 'line-opacity': 0.7 } });
+      }
+      if (blocked?.features?.length) {
+        map.addSource(SRC_OVERLAY_BLOCKED, { type: 'geojson', data: blocked });
+        map.addLayer({ id: `${SRC_OVERLAY_BLOCKED}-fill`, type: 'fill', source: SRC_OVERLAY_BLOCKED,
+          paint: { 'fill-color': '#dc2626', 'fill-opacity': 0.22 } });
+        map.addLayer({ id: `${SRC_OVERLAY_BLOCKED}-line`, type: 'line', source: SRC_OVERLAY_BLOCKED,
+          paint: { 'line-color': '#991b1b', 'line-width': 1.6, 'line-opacity': 0.8 } });
+      }
+    } catch (err) {
+      console.warn('[plan-editor] security overlays failed', err);
+    }
   }
 
   function drawPreview(map, preview, repMeta) {
@@ -612,6 +655,9 @@
       repCards: [],
       expanded: {},
       _repMeta: new Map(),
+      costEstimate: null,
+      budgetStatus: null,
+      showOverlays: false,
 
       async init() {
         // ── Read preload config from Cuotas tab (if any) ──────────────────
@@ -833,6 +879,9 @@
           const costNote = (cost && cost.estimated_usd != null)
             ? ` · ~$${Number(cost.estimated_usd).toFixed(4)} USD Google API`
             : '';
+          // Load budget + cost estimate (best-effort; OK to fail silently).
+          try { this.budgetStatus = await API.get('/admin/routes-budget'); } catch { this.budgetStatus = null; }
+          this.loadCostEstimate();
           if (!assignments.length) {
             const snap = result.plan?.config?.targets_snapshot || {};
             const counts = result.plan?.config?.candidate_counts || {};
@@ -902,10 +951,96 @@
         if (!payload || payload.src === destUserId) return;
         const a = this.preview.assignments.find((x) => x.__key === payload.key);
         if (!a) return;
-        a.visitor_user_id = destUserId;
-        this.repCards = this._buildRepCards();
-        drawPreview(APP.map, this.preview, this._repMeta);
-        window.MarzamToast?.show('Stop reasignado (preview)', 'info');
+
+        // Two paths:
+        //  1) preview-only (no plan id) — mutate in memory, redraw, no server call
+        //  2) edit on a draft/published plan — call /:id/reassign-stop, refetch
+        const planId = this.preview?.plan?.id;
+        if (planId && a.id) {
+          try {
+            await API.post(`/visit-plans/${planId}/reassign-stop`, {
+              assignment_id: a.id,
+              new_visitor_user_id: destUserId,
+            });
+            // Refetch plan to get the recomputed ETAs and route_orders.
+            const fresh = await API.get(`/visit-plans/${planId}`);
+            this.preview = {
+              ...this.preview,
+              plan: fresh,
+              assignments: (fresh.assignments || []).map((x, i) => ({
+                ...x,
+                __key: `${x.visitor_user_id}|${x.scheduled_date}|${x.route_order}|${i}`,
+                __lat: null, __lng: null,
+              })),
+            };
+            this.repCards = this._buildRepCards();
+            drawPreview(APP.map, this.preview, this._repMeta);
+            window.MarzamToast?.show('Stop reasignado y persistido', 'success');
+          } catch (err) {
+            const msg = err?.error || err?.message || 'Error';
+            window.MarzamToast?.show(`No se pudo reasignar: ${msg}`, 'danger');
+          }
+        } else {
+          a.visitor_user_id = destUserId;
+          this.repCards = this._buildRepCards();
+          drawPreview(APP.map, this.preview, this._repMeta);
+          window.MarzamToast?.show('Stop reasignado (preview)', 'info');
+        }
+      },
+      async recalculateRep(userId) {
+        const planId = this.preview?.plan?.id;
+        if (!planId) {
+          window.MarzamToast?.show('Publica el plan antes de recalcular', 'info');
+          return;
+        }
+        try {
+          const result = await API.post(`/visit-plans/${planId}/users/${userId}/resequence`, {});
+          window.MarzamToast?.show(`Re-secuenciados ${result.resequenced_days} día(s)`, 'success');
+          const fresh = await API.get(`/visit-plans/${planId}`);
+          this.preview = {
+            ...this.preview,
+            plan: fresh,
+            assignments: (fresh.assignments || []).map((x, i) => ({
+              ...x,
+              __key: `${x.visitor_user_id}|${x.scheduled_date}|${x.route_order}|${i}`,
+              __lat: null, __lng: null,
+            })),
+          };
+          this.repCards = this._buildRepCards();
+          drawPreview(APP.map, this.preview, this._repMeta);
+        } catch (err) {
+          const msg = err?.error || err?.message || 'Error';
+          window.MarzamToast?.show(`No se pudo recalcular: ${msg}`, 'danger');
+        }
+      },
+      async loadCostEstimate() {
+        if (!this.canGenerate()) return;
+        try {
+          const r = await API.post('/visit-plans/preview/cost-estimate', {
+            scope_user_ids: this.scopeUserIds,
+            period_start: this.periodStart,
+            period_end: this.periodEnd,
+            granularity: 'weekly',
+          });
+          this.costEstimate = r;
+        } catch (err) {
+          this.costEstimate = null;
+          console.warn('[plan-editor] cost-estimate failed', err);
+        }
+      },
+      async toggleOverlays() {
+        this.showOverlays = !this.showOverlays;
+        if (this.showOverlays) await drawSecurityOverlays(APP.map);
+        else clearOverlays();
+      },
+      get unassignedSummary() {
+        const u = this.preview?.plan?.config?.unassigned || [];
+        const byReason = {};
+        for (const item of u) {
+          const k = item.reason || 'unknown';
+          byReason[k] = (byReason[k] || 0) + (item.shortfall || 1);
+        }
+        return { total: u.length, byReason };
       },
       async publish() {
         if (!this.preview) return;

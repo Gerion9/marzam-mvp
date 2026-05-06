@@ -223,9 +223,33 @@
           <span x-text="connected ? 'Conectado en vivo' : 'Reconectando…'"></span>
         </div>
 
+        <!-- Branch filter -->
+        <div class="flex items-center gap-2 text-[11px]" x-show="branches.length > 0">
+          <label class="text-slate-500 font-semibold">Sucursal:</label>
+          <select x-model="branchFilter" @change="onBranchFilterChange()"
+                  class="text-[11px] border border-slate-200 rounded px-2 py-1 bg-white">
+            <option value="">Todas</option>
+            <template x-for="b in branches" :key="b.id">
+              <option :value="b.id" x-text="b.name"></option>
+            </template>
+          </select>
+        </div>
+
+        <!-- Alert detail panel -->
+        <template x-if="selectedAlert">
+          <div class="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs">
+            <div class="flex items-start justify-between gap-2">
+              <div class="font-bold text-rose-800" x-text="selectedAlert.title"></div>
+              <button @click="closeAlert()" class="text-rose-400 hover:text-rose-700">×</button>
+            </div>
+            <div class="text-rose-700 mt-1" x-text="'Severidad: ' + (selectedAlert.severity || 'info')"></div>
+            <pre class="text-[10px] text-rose-600 mt-2 whitespace-pre-wrap" x-text="JSON.stringify(selectedAlert.payload || selectedAlert, null, 2)"></pre>
+          </div>
+        </template>
+
         <!-- Reps list -->
         <div class="space-y-1.5 max-h-[42vh] overflow-y-auto pr-1">
-          <template x-for="r in reps" :key="r.rep_id">
+          <template x-for="r in filteredReps()" :key="r.rep_id">
             <button @click="focusRep(r)"
               class="w-full flex items-center gap-3 bg-white rounded-xl border border-slate-100 px-3 py-2 text-left hover:border-orange-200 transition">
               <span class="mz-avatar flex-shrink-0" :style="'background:' + r.color" x-text="initials(r.name)"></span>
@@ -246,10 +270,11 @@
           <div class="text-[10px] font-bold uppercase text-slate-400 px-1 pb-1">Feed</div>
           <div class="space-y-1 max-h-44 overflow-y-auto pr-1">
             <template x-for="e in events" :key="e.id">
-              <div class="mz-event-card text-[11px] px-2 py-1 rounded-lg" :class="eventClass(e)">
+              <button class="mz-event-card text-[11px] px-2 py-1 rounded-lg w-full text-left hover:opacity-80"
+                      :class="eventClass(e)" @click="openAlert(e)">
                 <span x-text="e.icon"></span> <span class="font-semibold" x-text="e.title"></span>
                 <span class="text-slate-400" x-text="' · ' + e.timeAgo"></span>
-              </div>
+              </button>
             </template>
             <template x-if="events.length === 0">
               <div class="text-center text-xs text-slate-400 py-3">Sin eventos aún</div>
@@ -267,6 +292,12 @@
       kpis: { active: 0, idle: 0, alerts: 0 },
       connected: false,
       _store: makeStore(),
+      // Filter dropdowns persisted in localStorage so jumping back to live-ops
+      // remembers the selection.
+      branchFilter: localStorage.getItem('liveOps.branchFilter') || '',
+      branches: [],
+      selectedAlert: null,
+      selectedRep: null,
 
       async init() {
         const token = localStorage.getItem('token') || '';
@@ -274,6 +305,15 @@
           window.MarzamToast?.show('Sesión expirada', 'danger');
           return;
         }
+        // Load the user's visible branches for filter dropdown (best-effort).
+        try {
+          const team = await API.get('/team/cascade');
+          const set = new Set();
+          for (const u of team?.descendants || []) {
+            if (u.branch_id) set.add(JSON.stringify({ id: u.branch_id, name: u.branch_name || u.branch_id }));
+          }
+          this.branches = [...set].map((s) => JSON.parse(s));
+        } catch { /* not critical */ }
         _activeStream = openStream(token, ({ type, data }) => {
           this.connected = true;
           if (type === 'position') {
@@ -317,7 +357,20 @@
       focusRep(r) {
         if (!APP.map || !Number.isFinite(r.lat) || !Number.isFinite(r.lng)) return;
         APP.map.flyTo({ center: [r.lng, r.lat], zoom: 14, duration: 700 });
+        this.selectedRep = r;
       },
+      onBranchFilterChange() {
+        localStorage.setItem('liveOps.branchFilter', this.branchFilter || '');
+      },
+      filteredReps() {
+        if (!this.branchFilter) return this.reps;
+        return this.reps.filter((r) => r.branch_id === this.branchFilter);
+      },
+      openAlert(e) {
+        // Show event detail panel with full payload + rep context.
+        this.selectedAlert = e;
+      },
+      closeAlert() { this.selectedAlert = null; },
       eventClass(e) {
         if (e.severity === 'critical') return 'bg-rose-50 text-rose-700';
         if (e.severity === 'warn') return 'bg-amber-50 text-amber-700';

@@ -333,10 +333,13 @@ async function run({ limit = null } = {}) {
   await runBulkUpsertLoop(prospectQueue, 'dataplor_id', stats);
   await runBulkUpsertLoop(clientQueue, 'clave_mostrador', stats);
 
-  // Post-sync: derive `quadrant_derived` from final_score percentiles.
-  // Stays atomic with the snapshot of `final_score` we just wrote.
-  const derived = await recomputeQuadrantDerived();
-  return { name: JOB_NAME, ...stats, ...derived, duration_ms: Date.now() - startedAt };
+  // Post-sync: quadrant derivation is now frozen weekly via
+  // /api/admin/quadrants/snapshot (Vercel Cron, Sunday 02:00 CDMX) and read
+  // from `quadrant_snapshot`. Mutating `pharmacies.quadrant_derived` on every
+  // BQ sync used to shift the A/B/C/D tier of a prospect mid-week and break
+  // any plan that referenced the live column. We keep the helper for ad-hoc
+  // admin invocation but no longer call it from the sync.
+  return { name: JOB_NAME, ...stats, quadrant_derived_updated: 0, duration_ms: Date.now() - startedAt };
 }
 
 /**

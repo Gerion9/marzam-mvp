@@ -153,6 +153,18 @@
           </div>
         </template>
 
+        <!-- Variance bar chart + CSV export -->
+        <template x-if="perRep && perRep.length">
+          <div class="bg-white rounded-2xl border border-slate-100 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-[10px] font-bold uppercase text-slate-400">Plan vs Actual</div>
+              <a :href="'/api/visit-plans/' + planId + '/post-mortem.csv'" target="_blank"
+                 class="text-[10px] font-bold uppercase px-2 py-1 rounded bg-violet-100 text-violet-700">CSV</a>
+            </div>
+            <canvas id="post-mortem-variance" class="w-full" style="max-height:240px"></canvas>
+          </div>
+        </template>
+
         <!-- Per-rep ranking -->
         <template x-if="perRep && perRep.length">
           <div class="bg-white rounded-2xl border border-slate-100 p-2">
@@ -250,9 +262,43 @@
           this.totals = r.totals;
           this._perRepRaw = r.per_rep || [];
           this.perRep = this._applyPoblacionFilter(this._perRepRaw);
+          // Render variance chart on next tick (canvas mounts via x-if).
+          setTimeout(() => this._renderVariance(), 50);
         } catch (err) {
           window.MarzamToast?.show('Error: ' + (err.message || err), 'danger');
         }
+      },
+      _renderVariance() {
+        if (!window.Chart || !this.perRep?.length) return;
+        const el = document.getElementById('post-mortem-variance');
+        if (!el) return;
+        if (this._chart) { try { this._chart.destroy(); } catch {} }
+        const sorted = [...this.perRep].sort((a, b) => {
+          const va = (a.estimated_drive_minutes || 0) + (a.estimated_service_minutes || 0);
+          const vb = (b.estimated_drive_minutes || 0) + (b.estimated_service_minutes || 0);
+          return vb - va;
+        }).slice(0, 20);
+        const labels = sorted.map((r) => (r.visitor_name || '').split(' ').slice(0, 2).join(' '));
+        const planned = sorted.map((r) => (r.estimated_drive_minutes || 0) + (r.estimated_service_minutes || 0));
+        // Actual = on_time_count proxy * service_minutes + actual_visits * 45 (rough).
+        const actual = sorted.map((r) => (r.actual_visits_count || 0) * 45);
+        this._chart = new window.Chart(el.getContext('2d'), {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              { label: 'Plan (min)', data: planned, backgroundColor: '#0ea5e9aa' },
+              { label: 'Actual (min)', data: actual, backgroundColor: '#f59e0baa' },
+            ],
+          },
+          options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: 'top', labels: { font: { size: 10 } } } },
+            scales: { x: { ticks: { font: { size: 9 } } }, y: { ticks: { font: { size: 9 } } } },
+          },
+        });
       },
       _applyPoblacionFilter(rows) {
         if (!this.poblacionFilter) return rows;

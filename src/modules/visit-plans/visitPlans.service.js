@@ -90,8 +90,11 @@ async function reassignStop({ planId, assignmentId, newVisitorUserId, actorId, i
     err.status = 404;
     throw err;
   }
-  if (plan.status !== 'draft') {
-    const err = new Error('Only draft plans can be edited');
+  // Drag-drop is allowed on draft AND published plans (Fase B verification:
+  // gerente_ventas reassigning a stop on a published plan and the rep seeing
+  // it on /my-route). Archived plans are immutable.
+  if (plan.status === 'archived') {
+    const err = new Error('Cannot edit an archived plan');
     err.status = 409;
     throw err;
   }
@@ -138,13 +141,18 @@ async function reassignStop({ planId, assignmentId, newVisitorUserId, actorId, i
 }
 
 /**
- * Recompute route_order + ETAs for a single (rep, day) without touching other
- * users or other days. Used by reassignStop and by manual reorder endpoints.
+ * Recompute route_order + ETAs for a single (rep, day) using the cached
+ * driving-time matrix (NN + 2-opt). Polylines are pulled from cache when
+ * available — we DO NOT call computeRoute per arc here because this runs on
+ * every drag-drop and would burn the daily Routes API budget.
+ *
+ * On publish-time (planGenerator.generate), the polylines do get materialized
+ * via computeRoute — that's when the user has committed to spending money.
  */
 async function resequenceUserDay(trx, planId, visitorUserId, scheduledDate) {
   const routesMatrix = require('../../services/routesMatrix');
-  const securityPolygons = require('../../services/securityPolygons');
   const { orderStopsFromDepot, twoOptImprove } = require('../../utils/routeOrdering');
+  const { localDayHHMMToUTC } = require('../../utils/timezone');
 
   const u = await trx('users')
     .select('id', 'home_lat', 'home_lng', 'service_minutes_per_stop')
@@ -173,15 +181,16 @@ async function resequenceUserDay(trx, planId, visitorUserId, scheduledDate) {
   const serviceMinutes = u.service_minutes_per_stop || 45;
 
   let ordered = stops;
+  let durationsMatrix = null;
   if (home && stops.length >= 2) {
     const points = [home, ...stops.map((s) => ({ lat: s.lat, lng: s.lng }))];
     try {
       const matrix = await routesMatrix.computeMatrixCached(points, points, { preference: 'TRAFFIC_UNAWARE' });
-      const dur = Array.from({ length: points.length }, () => new Array(points.length).fill(Infinity));
-      for (const r of matrix) dur[r.originIndex][r.destinationIndex] = r.durationSeconds;
+      durationsMatrix = Array.from({ length: points.length }, () => new Array(points.length).fill(Infinity));
+      for (const r of matrix) durationsMatrix[r.originIndex][r.destinationIndex] = r.durationSeconds;
       stops.forEach((s, i) => { s.__seqIdx = i + 1; });
       const depotMarker = { __seqIdx: 0, lat: home.lat, lng: home.lng, __depot: true };
-      const costFn = (a, b) => dur[a.__seqIdx ?? 0][b.__seqIdx ?? 0];
+      const costFn = (a, b) => durationsMatrix[a.__seqIdx ?? 0][b.__seqIdx ?? 0];
       const nn = orderStopsFromDepot(depotMarker, stops, costFn);
       const opt = twoOptImprove([depotMarker, ...nn], costFn);
       ordered = opt.slice(1).map((s) => stops.find((x) => x.__seqIdx === s.__seqIdx));
@@ -190,28 +199,16 @@ async function resequenceUserDay(trx, planId, visitorUserId, scheduledDate) {
     }
   }
 
-  // Compute per-arc travel + polylines, write back.
-  let cursor = new Date(`${scheduledDate}T08:00:00.000Z`);
-  let prev = home;
+  // Use the matrix duration only — no computeRoute per arc.
+  let cursor = localDayHHMMToUTC(scheduledDate, '08:00');
+  let prevSeqIdx = 0;
   let routeOrder = 1;
   for (let idx = 0; idx < ordered.length; idx += 1) {
     const s = ordered[idx];
-    const stopPoint = { lat: s.lat, lng: s.lng };
     let travelSeconds = 0;
-    let polyline = null;
-    if (prev) {
-      try {
-        const route = await routesMatrix.computeRoute(prev, stopPoint);
-        if (route) {
-          travelSeconds = route.durationSeconds;
-          polyline = route.polyline;
-          if (polyline && await securityPolygons.polylineIntersectsCaution(polyline)) {
-            travelSeconds = Math.round(travelSeconds * securityPolygons.CAUTION_PENALTY);
-          }
-        }
-      } catch (err) {
-        console.warn(`[resequenceUserDay] route failed: ${err.message}`);
-      }
+    if (durationsMatrix && s.__seqIdx != null) {
+      const ms = durationsMatrix[prevSeqIdx][s.__seqIdx];
+      if (Number.isFinite(ms)) travelSeconds = ms;
     }
     const travelMinutes = Math.round(travelSeconds / 60);
     cursor = new Date(cursor.getTime() + travelSeconds * 1000);
@@ -224,14 +221,11 @@ async function resequenceUserDay(trx, planId, visitorUserId, scheduledDate) {
       expected_start_time: arrival,
       expected_travel_minutes: travelMinutes,
       expected_service_minutes: serviceMinutes,
+      // Clear polyline_to_next; will be repopulated next time the plan is
+      // materialized via generate() or via an explicit re-publish.
+      polyline_to_next: null,
     });
-    if (idx > 0) {
-      // Update previous row's polyline_to_next to this arc's polyline.
-      await trx('visit_plan_assignments').where({ id: ordered[idx - 1].id }).update({
-        polyline_to_next: polyline,
-      });
-    }
-    prev = stopPoint;
+    prevSeqIdx = s.__seqIdx ?? 0;
     routeOrder += 1;
   }
 }
@@ -276,22 +270,48 @@ async function preview({ ownerUserId: _ownerUserId, scopeUserIds, periodStart, p
 }
 
 async function publish(id, userId) {
-  const plan = await db('visit_plans').where({ id }).first();
-  if (!plan) {
-    const err = new Error('Plan not found');
-    err.status = 404;
-    throw err;
-  }
-  if (plan.owner_user_id !== userId) {
-    const err = new Error('Only owner can publish');
-    err.status = 403;
-    throw err;
-  }
-  const [updated] = await db('visit_plans').where({ id }).update({
-    status: 'published',
-    updated_at: db.fn.now(),
-  }).returning('*');
-  return updated;
+  return db.transaction(async (trx) => {
+    const plan = await trx('visit_plans').where({ id }).first();
+    if (!plan) {
+      const err = new Error('Plan not found');
+      err.status = 404; throw err;
+    }
+    if (plan.owner_user_id !== userId) {
+      const err = new Error('Only owner can publish');
+      err.status = 403; throw err;
+    }
+    if (plan.status === 'archived') {
+      const err = new Error('Cannot publish an archived plan');
+      err.status = 409; throw err;
+    }
+    // Serialize publishes against the same scope+period — a concurrent publish
+    // of two drafts must not leave both in 'published'. Same lock key as
+    // planGenerator.generate so generate-then-publish stays serialized too.
+    if (plan.scope_hash) {
+      const lockKey = require('crypto')
+        .createHash('md5')
+        .update(`${plan.scope_hash}|${plan.period_start instanceof Date ? plan.period_start.toISOString().slice(0, 10) : plan.period_start}|${plan.period_end instanceof Date ? plan.period_end.toISOString().slice(0, 10) : plan.period_end}`)
+        .digest();
+      const lockBig = lockKey.readBigInt64BE(0);
+      await trx.raw('SELECT pg_advisory_xact_lock(?::bigint)', [lockBig.toString()]);
+    }
+    // Atomically archive any other non-archived plan with the same scope+period.
+    // Without this, listAssignmentsForUser and the alerts engine would scan
+    // multiple "published" plans for the same rep+day and double-count.
+    if (plan.scope_hash) {
+      await trx('visit_plans')
+        .where({ scope_hash: plan.scope_hash, period_start: plan.period_start, period_end: plan.period_end })
+        .whereNot({ id })
+        .whereNull('archived_at')
+        .whereIn('status', ['draft', 'published'])
+        .update({ status: 'archived', archived_at: trx.fn.now(), updated_at: trx.fn.now() });
+    }
+    const [updated] = await trx('visit_plans').where({ id }).update({
+      status: 'published',
+      updated_at: trx.fn.now(),
+    }).returning('*');
+    return updated;
+  });
 }
 
 async function archive(id, userId) {
@@ -425,6 +445,9 @@ async function postMortem(planId, { actorId, isGlobal }) {
     throw err;
   }
 
+  // Per-rep aggregates: assignment status counts, expected vs actual minutes,
+  // on_time_pct (arrival within 15 min of expected), alerts fired, actual
+  // visits count (rows in visit_reports / visits in the window).
   const rows = await db('visit_plan_assignments as vpa')
     .where({ visit_plan_id: planId })
     .leftJoin('users as v', 'v.id', 'vpa.visitor_user_id')
@@ -434,21 +457,78 @@ async function postMortem(planId, { actorId, isGlobal }) {
       'v.role as visitor_role',
       db.raw('COUNT(*)::int AS assignments_planned'),
       db.raw("SUM(CASE WHEN vpa.status='done' THEN 1 ELSE 0 END)::int AS assignments_done"),
-      db.raw("SUM(CASE WHEN vpa.status='skipped' THEN 1 ELSE 0 END)::int AS assignments_skipped"),
+      db.raw("SUM(CASE WHEN vpa.status IN ('skipped','deviated') THEN 1 ELSE 0 END)::int AS assignments_skipped"),
       db.raw('SUM(COALESCE(vpa.expected_travel_minutes,0))::int AS estimated_drive_minutes'),
       db.raw('SUM(COALESCE(vpa.expected_service_minutes,0))::int AS estimated_service_minutes'),
       db.raw('MIN(vpa.actual_start_time) AS first_actual_start'),
       db.raw('MAX(vpa.actual_start_time) AS last_actual_start'),
+      db.raw(`
+        SUM(CASE
+          WHEN vpa.actual_start_time IS NOT NULL
+           AND vpa.expected_start_time IS NOT NULL
+           AND vpa.actual_start_time <= vpa.expected_start_time + INTERVAL '15 minutes'
+          THEN 1 ELSE 0 END
+        )::int AS on_time_count
+      `),
+      db.raw(`
+        SUM(CASE WHEN vpa.actual_start_time IS NOT NULL THEN 1 ELSE 0 END)::int AS started_count
+      `),
     )
     .groupBy('vpa.visitor_user_id', 'v.full_name', 'v.role');
 
-  const totals = rows.reduce((acc, r) => {
+  // Actual visits + alerts by rep within the plan period.
+  const repIds = rows.map((r) => r.visitor_user_id);
+  let visitsByRep = new Map();
+  let alertsByRep = new Map();
+  if (repIds.length) {
+    // visit_reports: optional table — guard with information_schema check.
+    try {
+      const v = await db('visit_reports as vr')
+        .whereIn('vr.rep_id', repIds)
+        .andWhere('vr.visited_at', '>=', plan.period_start)
+        .andWhere('vr.visited_at', '<=', `${plan.period_end} 23:59:59`)
+        .select('vr.rep_id', db.raw('COUNT(*)::int AS n'))
+        .groupBy('vr.rep_id');
+      for (const r of v) visitsByRep.set(r.rep_id, r.n);
+    } catch (err) {
+      console.warn(`[postMortem] visit_reports lookup skipped: ${err.message}`);
+    }
+    try {
+      const a = await db('alerts')
+        .whereIn('subject_user_id', repIds)
+        .andWhere('created_at', '>=', plan.period_start)
+        .andWhere('created_at', '<=', `${plan.period_end} 23:59:59`)
+        .select('subject_user_id', db.raw('COUNT(*)::int AS n'))
+        .groupBy('subject_user_id');
+      for (const r of a) alertsByRep.set(r.subject_user_id, r.n);
+    } catch (err) {
+      console.warn(`[postMortem] alerts lookup skipped: ${err.message}`);
+    }
+  }
+
+  const enriched = rows.map((r) => {
+    const actualVisits = visitsByRep.get(r.visitor_user_id) || 0;
+    const alertsFired = alertsByRep.get(r.visitor_user_id) || 0;
+    return {
+      ...r,
+      actual_visits_count: actualVisits,
+      alerts_fired: alertsFired,
+      completion_pct: r.assignments_planned ? +(r.assignments_done / r.assignments_planned * 100).toFixed(1) : 0,
+      on_time_pct: r.started_count ? +(r.on_time_count / r.started_count * 100).toFixed(1) : 0,
+    };
+  });
+
+  const totals = enriched.reduce((acc, r) => {
     acc.planned += r.assignments_planned;
     acc.done += r.assignments_done;
     acc.skipped += r.assignments_skipped;
+    acc.actual_visits += r.actual_visits_count;
+    acc.alerts_fired += r.alerts_fired;
     acc.estimated_minutes += (r.estimated_drive_minutes || 0) + (r.estimated_service_minutes || 0);
+    acc.on_time_count += r.on_time_count;
+    acc.started_count += r.started_count;
     return acc;
-  }, { planned: 0, done: 0, skipped: 0, estimated_minutes: 0 });
+  }, { planned: 0, done: 0, skipped: 0, actual_visits: 0, alerts_fired: 0, estimated_minutes: 0, on_time_count: 0, started_count: 0 });
 
   return {
     plan: {
@@ -462,11 +542,55 @@ async function postMortem(planId, { actorId, isGlobal }) {
     totals: {
       ...totals,
       completion_pct: totals.planned ? +(totals.done / totals.planned * 100).toFixed(1) : 0,
+      on_time_pct: totals.started_count ? +(totals.on_time_count / totals.started_count * 100).toFixed(1) : 0,
     },
-    per_rep: rows.map((r) => ({
-      ...r,
-      completion_pct: r.assignments_planned ? +(r.assignments_done / r.assignments_planned * 100).toFixed(1) : 0,
-    })),
+    per_rep: enriched,
+  };
+}
+
+/**
+ * Public wrapper around resequenceUserDay that handles auth + multi-day +
+ * polyline materialization for a single rep (used by the Plan Editor's
+ * "Recalcular ruta de este rep" button).
+ */
+async function resequenceUser({ planId, visitorUserId, actorId, isGlobal }) {
+  const plan = await db('visit_plans').where({ id: planId }).first();
+  if (!plan) {
+    const err = new Error('Plan not found'); err.status = 404; throw err;
+  }
+  if (!isGlobal && plan.owner_user_id !== actorId) {
+    const err = new Error('Only owner can resequence'); err.status = 403; throw err;
+  }
+  if (plan.status === 'archived') {
+    const err = new Error('Cannot edit archived plan'); err.status = 409; throw err;
+  }
+  // Get distinct scheduled_dates this rep has in this plan.
+  const dates = await db('visit_plan_assignments')
+    .where({ visit_plan_id: planId, visitor_user_id: visitorUserId })
+    .distinct('scheduled_date')
+    .pluck('scheduled_date');
+  if (!dates.length) return { resequenced_days: 0 };
+  await db.transaction(async (trx) => {
+    for (const d of dates) {
+      await resequenceUserDay(trx, planId, visitorUserId, d);
+    }
+  });
+  return { resequenced_days: dates.length };
+}
+
+/**
+ * Cost estimator — wraps planGenerator.estimateCost and includes a budget
+ * remaining check. Used by the Plan Editor before "Generar" / "Publicar".
+ */
+async function estimateCost(args) {
+  const planGenerator = require('./planGenerator');
+  const routesMatrix = require('../../services/routesMatrix');
+  const result = await planGenerator.estimateCost(args);
+  const budget = await routesMatrix.getDailyBudgetStatus();
+  return {
+    ...result,
+    budget,
+    can_afford: result.est_cost_usd <= budget.remaining_usd,
   };
 }
 
@@ -630,7 +754,7 @@ async function routePreview({ users, stops, date, service_minutes_per_stop: defa
               routesMatrix.persistPolyline(prevPoint, stopPoint, polyline).catch(() => {});
             }
           }
-        } catch (_err) { /* intentional fallthrough */ }
+        } catch { /* intentional fallthrough */ }
 
         if (!travelSeconds) {
           const km = haversineKm(prevPoint, stopPoint) * 1.4;
@@ -700,6 +824,8 @@ module.exports = {
   previewFull,
   routePreview,
   reassignStop,
+  resequenceUser,
+  estimateCost,
   listForUser,
   getById,
   publish,

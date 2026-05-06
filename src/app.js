@@ -38,6 +38,17 @@ const poblacionesRoutes = require('./modules/poblaciones/poblaciones.routes');
 const quotasRoutes = require('./modules/quotas/quotas.routes');
 const invitationsRoutes = require('./modules/invitations/invitations.routes');
 const liveRoutes = require('./modules/live/live.routes');
+const adminRoutes = require('./modules/admin/admin.routes');
+
+// Boot-time safety check: production must not run with scope filtering off.
+// Catches a class of "demo accidentally became prod" deploy mistakes.
+if (
+  process.env.SCOPE_FILTERING_ENABLED === 'false'
+  && process.env.NODE_ENV === 'production'
+) {
+  console.error('[boot] SCOPE_FILTERING_ENABLED=false in production — refusing to start.');
+  process.exit(1);
+}
 
 const app = express();
 
@@ -131,6 +142,7 @@ app.use('/api/poblaciones', poblacionesRoutes);
 app.use('/api/quotas', quotasRoutes);
 app.use('/api/admin/invitations', invitationsRoutes);
 app.use('/api/live', liveRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.get('/api/health', async (_req, res) => {
   const result = {

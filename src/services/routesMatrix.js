@@ -25,7 +25,6 @@
  * arcs of the published plan, to keep matrix calls in the Essentials SKU.
  */
 
-/* global fetch */
 const db = require('../config/database');
 const config = require('../config');
 const { encode: geohashEncode } = require('../utils/geohash');
@@ -39,6 +38,25 @@ const MAX_ELEMENTS_PER_CALL = 625;
 const CACHE_TTL_DAYS = 7;
 const HAVERSINE_CORRECTION = 1.4;       // road km / air km in CDMX (rough)
 const FALLBACK_KMH = 22;                // average driving speed when estimating
+
+// SKU pricing (Routes API, USD per 1000 elements/calls).
+const SKU_PRICE = {
+  TRAFFIC_UNAWARE: 5,   // Essentials
+  TRAFFIC_AWARE: 10,    // Pro
+  ROUTE_SINGLE: 5,      // Essentials
+};
+const DEFAULT_DAILY_BUDGET_USD = Number(process.env.ROUTES_API_DAILY_BUDGET_USD) || 50;
+
+// Custom error so the API can return 429 cleanly.
+class RoutesBudgetExceededError extends Error {
+  constructor(spent, budget) {
+    super(`Routes API daily budget exceeded ($${spent.toFixed(2)} / $${budget.toFixed(2)})`);
+    this.code = 'routes_budget_exceeded';
+    this.status = 429;
+    this.spent_usd = spent;
+    this.budget_usd = budget;
+  }
+}
 
 // ─── hour bucket discretization ─────────────────────────────────────────
 //   0=valle (10-13h, 21-7h), 1=pico-am (8-10h),
@@ -64,6 +82,66 @@ function haversineKm(a, b) {
   const lat2 = toRad(b.lat);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// ─── budget tracking ────────────────────────────────────────────────────
+
+/**
+ * Read today's spend (or {0,0,0} when no row exists). Day key is UTC date.
+ */
+async function getDailyBudgetStatus() {
+  const row = await db('routes_api_spend')
+    .where('day', db.raw("CURRENT_DATE AT TIME ZONE 'UTC'"))
+    .first();
+  const spent = Number(row?.est_cost_usd || 0);
+  const budget = DEFAULT_DAILY_BUDGET_USD;
+  return {
+    day: row?.day || new Date().toISOString().slice(0, 10),
+    spent_usd: spent,
+    budget_usd: budget,
+    remaining_usd: Math.max(0, budget - spent),
+    matrix_calls: row?.matrix_calls || 0,
+    matrix_elements: row?.matrix_elements || 0,
+    route_calls: row?.route_calls || 0,
+    rejected_calls: row?.rejected_calls || 0,
+  };
+}
+
+/**
+ * Throw RoutesBudgetExceededError if adding `addCostUsd` would push us over
+ * the daily limit. The check is a pre-flight; we recheck after the call when
+ * we record the actual cost.
+ */
+async function assertWithinBudget(addCostUsd) {
+  const s = await getDailyBudgetStatus();
+  if (s.spent_usd + addCostUsd > s.budget_usd) {
+    // Increment rejected counter so admin dashboard reflects pressure.
+    await db.raw(`
+      INSERT INTO routes_api_spend (day, rejected_calls)
+      VALUES (CURRENT_DATE, 1)
+      ON CONFLICT (day) DO UPDATE
+        SET rejected_calls = routes_api_spend.rejected_calls + 1,
+            last_call_at = NOW()
+    `);
+    throw new RoutesBudgetExceededError(s.spent_usd, s.budget_usd);
+  }
+}
+
+async function recordSpend({ matrixCalls = 0, matrixElements = 0, routeCalls = 0, sku = 'TRAFFIC_UNAWARE' }) {
+  const matrixCost = (matrixElements / 1000) * (SKU_PRICE[sku] || SKU_PRICE.TRAFFIC_UNAWARE);
+  const routeCost = (routeCalls / 1000) * SKU_PRICE.ROUTE_SINGLE;
+  const totalCost = +(matrixCost + routeCost).toFixed(4);
+  if (totalCost === 0 && matrixCalls === 0 && routeCalls === 0) return;
+  await db.raw(`
+    INSERT INTO routes_api_spend (day, matrix_calls, matrix_elements, route_calls, est_cost_usd, first_call_at, last_call_at)
+    VALUES (CURRENT_DATE, ?, ?, ?, ?, NOW(), NOW())
+    ON CONFLICT (day) DO UPDATE
+      SET matrix_calls    = routes_api_spend.matrix_calls    + EXCLUDED.matrix_calls,
+          matrix_elements = routes_api_spend.matrix_elements + EXCLUDED.matrix_elements,
+          route_calls     = routes_api_spend.route_calls     + EXCLUDED.route_calls,
+          est_cost_usd    = routes_api_spend.est_cost_usd    + EXCLUDED.est_cost_usd,
+          last_call_at    = NOW()
+  `, [matrixCalls, matrixElements, routeCalls, totalCost]);
 }
 
 function fallbackEstimate(origin, dest) {
@@ -145,6 +223,11 @@ async function callRoutesMatrixApi(origins, destinations, { preference = 'TRAFFI
   const apiKey = config.google.mapsApiKey;
   if (!apiKey) throw new Error('GOOGLE_MAPS_API_KEY is not set');
 
+  // Cost guard: estimate this call's cost before it goes out.
+  const elements = origins.length * destinations.length;
+  const estCost = (elements / 1000) * (SKU_PRICE[preference] || SKU_PRICE.TRAFFIC_UNAWARE);
+  await assertWithinBudget(estCost);
+
   const body = {
     origins: origins.map(buildWaypoint),
     destinations: destinations.map(buildWaypoint),
@@ -173,6 +256,12 @@ async function callRoutesMatrixApi(origins, destinations, { preference = 'TRAFFI
     throw err;
   }
   const json = await res.json();
+  // Record actual spend (best-effort — don't fail call if recording fails).
+  recordSpend({
+    matrixCalls: 1,
+    matrixElements: elements,
+    sku: preference,
+  }).catch((e) => console.warn(`[routesMatrix] recordSpend failed: ${e.message}`));
   // Response is a flat array of { originIndex, destinationIndex, ... }.
   return Array.isArray(json) ? json : [];
 }
@@ -368,6 +457,9 @@ async function computeRoute(origin, destination, opts = {}) {
   const apiKey = config.google.mapsApiKey;
   if (!apiKey) throw new Error('GOOGLE_MAPS_API_KEY is not set');
   const preference = opts.preference || 'TRAFFIC_UNAWARE';
+  // Cost guard: a single call costs ~$0.005 ($5/1000) but if we're at limit
+  // we still reject so we don't sneak past with arc-by-arc small calls.
+  await assertWithinBudget(SKU_PRICE.ROUTE_SINGLE / 1000);
   const body = {
     origin: buildWaypoint(origin),
     destination: buildWaypoint(destination),
@@ -391,6 +483,7 @@ async function computeRoute(origin, destination, opts = {}) {
     const text = await res.text();
     throw new Error(`Routes API single failed: ${res.status} ${text.slice(0, 240)}`);
   }
+  recordSpend({ routeCalls: 1, sku: preference }).catch((e) => console.warn(`[routesMatrix] recordSpend failed: ${e.message}`));
   const json = await res.json();
   const route = json.routes?.[0];
   if (!route) return null;
@@ -405,9 +498,11 @@ async function computeRoute(origin, destination, opts = {}) {
 }
 
 /**
- * Best-effort: store the polyline of a single arc in the cache so a future
- * matrix lookup for the same geohash7 pair gets the geometry too. Cheap and
- * idempotent.
+ * Store the polyline of a single arc in the cache so future matrix lookups
+ * for the same geohash7 pair pick it up. Cheap, idempotent.
+ *
+ * Direct version — throws on failure. Use `persistPolylineSafe` from hot
+ * paths so a transient DB failure doesn't break a plan generation.
  */
 async function persistPolyline(originLatLng, destLatLng, polyline, opts = {}) {
   const departureTime = opts.departureTime || new Date();
@@ -426,13 +521,38 @@ async function persistPolyline(originLatLng, destLatLng, polyline, opts = {}) {
     .update({ polyline });
 }
 
+/**
+ * Fire-and-retry-once wrapper. Used by planGenerator from inside the
+ * sequencing loop where a transient DB hiccup shouldn't tank the plan.
+ * Logs once to warn if the second attempt also fails.
+ */
+function persistPolylineSafe(originLatLng, destLatLng, polyline, opts = {}) {
+  setImmediate(async () => {
+    try {
+      await persistPolyline(originLatLng, destLatLng, polyline, opts);
+    } catch {
+      // One retry after 250ms, then warn and drop.
+      setTimeout(async () => {
+        try { await persistPolyline(originLatLng, destLatLng, polyline, opts); }
+        catch (err2) {
+          console.warn(`[routesMatrix] persistPolyline retry failed: ${err2.message}`);
+        }
+      }, 250);
+    }
+  });
+}
+
 async function purgeExpired() {
-  // 23 days satisfies the 30-day Google ToS limit on cached lat/lng-derived
-  // data with a 7-day safety margin. Run nightly.
+  // Use the actual `expires_at` column (TTL = 7 days). A separate weekly
+  // backstop deletes rows older than 30 days regardless, to satisfy Google
+  // ToS on derived lat/lng caches.
   const result = await db('route_matrix_cache')
-    .whereRaw("computed_at < NOW() - INTERVAL '23 days'")
+    .whereRaw('expires_at < NOW()')
     .del();
-  return { deleted: result };
+  const backstop = await db('route_matrix_cache')
+    .whereRaw("computed_at < NOW() - INTERVAL '30 days'")
+    .del();
+  return { deleted_expired: result, deleted_backstop: backstop };
 }
 
 module.exports = {
@@ -440,7 +560,10 @@ module.exports = {
   computeMatrixCached,
   computeRoute,
   persistPolyline,
+  persistPolylineSafe,
   purgeExpired,
+  getDailyBudgetStatus,
+  RoutesBudgetExceededError,
   // exported for tests
   _hourBucket: hourBucket,
   _dayType: dayType,

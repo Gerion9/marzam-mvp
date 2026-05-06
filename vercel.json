@@ -29,11 +29,27 @@
     },
     {
       "path": "/api/alerts/_evaluate",
-      "schedule": "*/10 * * * *"
+      "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/admin/bq-sync/_purge-route-cache",
-      "schedule": "0 4 * * *"
+      "path": "/api/admin/cron/purge-route-cache",
+      "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/admin/cron/purge-tracking",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/admin/cron/geocode-backfill",
+      "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/admin/quadrants/snapshot",
+      "schedule": "0 8 * * 0"
+    },
+    {
+      "path": "/api/admin/cron/purge-live-outbox",
+      "schedule": "15 9 * * *"
     }
   ]
 }

@@ -5,9 +5,12 @@
  */
 const OfflineQueue = (() => {
   const DB_NAME = 'marzam_offline';
-  const DB_VERSION = 2;
+  // Bumped to v3 to add the generic `pending_ops` store used by my-route.js
+  // (start/deviate). Existing v2 stores are preserved by the upgrade path.
+  const DB_VERSION = 3;
   const STORE_VISITS = 'pending_visits';
   const STORE_ASSIGNMENT = 'cached_assignment';
+  const STORE_OPS = 'pending_ops';
   const MAX_RETRIES = 10;
   const MAX_PHOTO_DIMENSION = 1280;
   const PHOTO_QUALITY = 0.7;
@@ -44,6 +47,10 @@ const OfflineQueue = (() => {
         }
         if (!db.objectStoreNames.contains(STORE_ASSIGNMENT)) {
           db.createObjectStore(STORE_ASSIGNMENT, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(STORE_OPS)) {
+          const opsStore = db.createObjectStore(STORE_OPS, { keyPath: 'id' });
+          opsStore.createIndex('createdAt', 'createdAt', { unique: false });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -308,6 +315,117 @@ const OfflineQueue = (() => {
     }
   }
 
+  // ── Generic operation queue (start / deviate / arbitrary POST) ──────────
+  // Used by my-route.js when navigator.onLine is false. Each op is replayed
+  // via fetch on `online` event. Idempotency is best-effort: server endpoints
+  // that update assignment status are themselves idempotent (start checks
+  // actual_start_time IS NOT NULL; deviate sets a status that's safe to
+  // re-apply).
+
+  async function enqueueOp(op) {
+    if (!op || !op.path || !op.method) throw new Error('enqueueOp requires {method, path, body?}');
+    const db = await openDB();
+    const id = _generateId();
+    const record = {
+      id,
+      method: op.method.toUpperCase(),
+      path: op.path,
+      body: op.body || null,
+      createdAt: Date.now(),
+      retries: 0,
+    };
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_OPS, 'readwrite');
+      tx.objectStore(STORE_OPS).put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    return record;
+  }
+
+  async function listPendingOps() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_OPS, 'readonly');
+      const req = tx.objectStore(STORE_OPS).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function _deleteOp(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_OPS, 'readwrite');
+      tx.objectStore(STORE_OPS).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function _bumpOpRetry(id) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_OPS, 'readwrite');
+      const store = tx.objectStore(STORE_OPS);
+      const req = store.get(id);
+      req.onsuccess = () => {
+        const row = req.result;
+        if (!row) { resolve(); return; }
+        row.retries = (row.retries || 0) + 1;
+        store.put(row);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
+  // Drain replays all pending ops via the global API helper if present,
+  // otherwise via fetch. Resolves with a summary {drained, failed}.
+  let _draining = false;
+  async function drain() {
+    if (_draining) return { drained: 0, failed: 0, skipped: true };
+    if (!navigator.onLine) return { drained: 0, failed: 0, skipped: true };
+    _draining = true;
+    try {
+      const ops = await listPendingOps();
+      let drained = 0;
+      let failed = 0;
+      for (const op of ops) {
+        try {
+          const apiHelper = window.API;
+          if (apiHelper && typeof apiHelper[op.method.toLowerCase()] === 'function') {
+            await apiHelper[op.method.toLowerCase()](op.path, op.body || undefined);
+          } else {
+            const res = await fetch(`/api${op.path}`, {
+              method: op.method,
+              headers: op.body ? { 'Content-Type': 'application/json' } : undefined,
+              body: op.body ? JSON.stringify(op.body) : undefined,
+              credentials: 'include',
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          }
+          await _deleteOp(op.id);
+          drained += 1;
+        } catch (err) {
+          await _bumpOpRetry(op.id);
+          if ((op.retries || 0) + 1 >= MAX_RETRIES) {
+            await _deleteOp(op.id); // give up so the queue doesn't grow unbounded
+          }
+          failed += 1;
+        }
+      }
+      return { drained, failed };
+    } finally {
+      _draining = false;
+    }
+  }
+
+  async function pendingOpsCount() {
+    const ops = await listPendingOps();
+    return ops.length;
+  }
+
   return {
     openDB,
     enqueueVisit,
@@ -323,5 +441,23 @@ const OfflineQueue = (() => {
     pendingCount,
     getStorageEstimate,
     MAX_RETRIES,
+    // Generic op queue (start / deviate / arbitrary POSTs)
+    enqueue: enqueueOp,
+    enqueueOp,
+    listPendingOps,
+    pendingOpsCount,
+    drain,
   };
 })();
+
+// Expose globally so views (my-route.js, etc.) can use the queue without
+// importing. Also auto-drain on page load if we're already online.
+if (typeof window !== 'undefined') {
+  window.MarzamOfflineQueue = OfflineQueue;
+  window.addEventListener('online', () => {
+    OfflineQueue.drain().catch(() => { /* logged inside drain */ });
+  });
+  if (navigator.onLine) {
+    setTimeout(() => OfflineQueue.drain().catch(() => {}), 1500);
+  }
+}

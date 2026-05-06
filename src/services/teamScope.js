@@ -72,8 +72,19 @@ async function getDescendants(userId) {
 
 /**
  * Check whether `actorId` is an ancestor of `targetId` in the management chain.
- * A director can also manage anyone in the same branch even without an explicit
- * manager_id link (covers reps that haven't been wired into a supervisor yet).
+ *
+ * Strict mode: only the explicit `manager_id` chain counts. The previous
+ * implementation had a "same branch is enough for director" fallback that
+ * allowed a director to generate plans for reps under a different supervisor
+ * just because they shared a branch — leaking scope in plan generation. That
+ * fallback is gone.
+ *
+ * Admins are not handled here (they bypass scope checks at the route layer
+ * via `req.user.is_global`).
+ *
+ * The legacy fallback can be re-enabled per-environment with
+ * `LEGACY_BRANCH_FALLBACK=true` so existing seed data without proper manager
+ * chains still works during rollout, but it logs a warn so we know it fired.
  */
 async function canActorManage(actorId, targetId) {
   if (actorId === targetId) return false;
@@ -93,12 +104,15 @@ async function canActorManage(actorId, targetId) {
     cursor = parent?.manager_id || null;
   }
 
-  // fallback: same branch + actor is director_sucursal
+  // Legacy branch fallback — gated by env. Logs every hit so operators can
+  // audit whether a branch leak path is still in use.
   if (
-    normalizeRole(actor.role) === ROLES.DIRECTOR_SUCURSAL
+    process.env.LEGACY_BRANCH_FALLBACK === 'true'
+    && normalizeRole(actor.role) === ROLES.DIRECTOR_SUCURSAL
     && actor.branch_id
     && target.branch_id === actor.branch_id
   ) {
+    console.warn(`[teamScope] LEGACY_BRANCH_FALLBACK granted manage on actor=${actorId} target=${targetId}`);
     return true;
   }
   return false;

@@ -9,6 +9,16 @@ const liveBus = require('../live/live.service');
 
 const DISTANCE_WARNING_THRESHOLD_M = 500;
 
+// Mexico bounding box (loose). Pings outside this are rejected to avoid
+// (0,0) garbage from misconfigured devices and global VPN exits.
+const MX_BBOX = { minLng: -119, maxLng: -86, minLat: 14, maxLat: 33 };
+
+function inMxBbox(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= MX_BBOX.minLat && lat <= MX_BBOX.maxLat
+    && lng >= MX_BBOX.minLng && lng <= MX_BBOX.maxLng;
+}
+
 // Lazy require to avoid circular load order with visit-sessions module.
 function visitSessionsService() {
   return require('../visit-sessions/visitSessions.service');
@@ -40,6 +50,13 @@ async function recordVisitForActiveSession(repId) {
 }
 
 async function recordPing({ rep_id, rep_name, assignment_id, verification_id, lat, lng, accuracy_meters }) {
+  // Reject obvious garbage early (0,0 sentinel, GPS jitter to other continents)
+  if (!inMxBbox(lat, lng)) {
+    const err = new Error(`Coordinates out of MX bbox: lat=${lat}, lng=${lng}`);
+    err.status = 400;
+    err.code = 'coords_out_of_bbox';
+    throw err;
+  }
   const repNameSnapshot = rep_name
     || (isExternalDataMode() ? accessDirectory.getUserById(rep_id)?.full_name : null)
     || 'Unknown Rep';
@@ -78,26 +95,44 @@ async function recordPing({ rep_id, rep_name, assignment_id, verification_id, la
     })
     .returning('*');
   await pingActiveSession(rep_id);
-  // First-ping bootstrapping: if the rep has no home_lat yet AND we have a
-  // reasonably accurate fix (≤200 m), use this ping as their depot. Manager
-  // can always override later via POST /api/users/me/home.
-  // Only set when accuracy is good to avoid pinning the depot to a 1km
-  // GPS hop the first time the app opens. If accuracy_meters is unknown,
-  // we still trust it (browsers sometimes omit accuracy).
+  // First-ping bootstrapping: degraded fallback only.
+  //
+  // Phase D shifts home_lat/lng population to a proactive geocoder run on
+  // import (src/services/geocoder.js + nightly Vercel Cron). The reactive
+  // bootstrap below now ONLY fires when the user has no home AND no
+  // home_geocode_source — so it can't overwrite a manual or geocoder-set
+  // home with a noisier first GPS ping.
   try {
     if (Number.isFinite(lat) && Number.isFinite(lng)
         && (accuracy_meters == null || accuracy_meters <= 200)) {
-      const u = await db('users').select('id', 'home_lat').where({ id: rep_id }).first();
-      if (u && u.home_lat == null) {
-        await db('users').where({ id: rep_id }).update({
+      let columnsAvailable = true;
+      let u;
+      try {
+        u = await db('users')
+          .select('id', 'home_lat', 'home_geocode_source')
+          .where({ id: rep_id }).first();
+      } catch (e) {
+        // Migration 066 may not be applied yet — fall through to legacy logic.
+        if (/column .* does not exist/.test(String(e.message || ''))) {
+          columnsAvailable = false;
+          u = await db('users').select('id', 'home_lat').where({ id: rep_id }).first();
+        } else { throw e; }
+      }
+      const allow = !u?.home_lat && (!columnsAvailable || u?.home_geocode_source == null || u?.home_geocode_source === 'gps_bootstrap');
+      if (u && allow) {
+        const update = {
           home_lat: lat,
           home_lng: lng,
           home_geohash7: require('../../utils/geohash').encode(lat, lng, 7),
-        });
+        };
+        if (columnsAvailable) {
+          update.home_geocoded_at = db.fn.now();
+          update.home_geocode_source = 'gps_bootstrap';
+        }
+        await db('users').where({ id: rep_id }).update(update);
       }
     }
   } catch (err) {
-    // Never fail the ping ingest because of home bootstrapping.
     if (process.env.NODE_ENV !== 'production') {
       console.warn(`[tracking] home bootstrap failed: ${err.message}`);
     }

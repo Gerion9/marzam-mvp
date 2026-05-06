@@ -1,5 +1,45 @@
 const service = require('./visitPlans.service');
 const accessDirectory = require('../../services/accessDirectory');
+const { ROLE_PRIMARY_PARETO, PARETO_CLASSES } = require('./planGenerator');
+const { normalizeRole } = require('../../constants/roles');
+
+/**
+ * Validate the pareto_filter array passed in the request.
+ *
+ * Rules:
+ *   1. Must be a subset of PARETO_CLASSES (A/B/C). 'D' is prospecto-only and
+ *      doesn't exist in marzam_clients.pareto.
+ *   2. For non-admin actors, must intersect the union of allowed paretos for
+ *      the scope users' roles (otherwise the plan would be guaranteed empty).
+ *      Caller passes scopeUserRoles via the second arg.
+ */
+function validateParetoFilter(req, paretoFilter, scopeUserRoles = []) {
+  if (!paretoFilter) return null;
+  if (!Array.isArray(paretoFilter)) return 'pareto_filter must be an array';
+  for (const p of paretoFilter) {
+    if (!PARETO_CLASSES.includes(p)) {
+      return `pareto_filter contains '${p}' which is not a valid Pareto class (must be one of ${PARETO_CLASSES.join(',')})`;
+    }
+  }
+  if (req.user?.is_global) return null;
+  if (!scopeUserRoles.length) return null;
+  const allowedUnion = new Set();
+  for (const role of scopeUserRoles) {
+    const r = normalizeRole(role);
+    for (const p of (ROLE_PRIMARY_PARETO[r] || [])) allowedUnion.add(p);
+  }
+  const intersects = paretoFilter.some((p) => allowedUnion.has(p));
+  if (!intersects) {
+    return `pareto_filter ${JSON.stringify(paretoFilter)} doesn't overlap with scope users' allowed paretos ${JSON.stringify([...allowedUnion])}`;
+  }
+  return null;
+}
+
+async function loadScopeUserRoles(scopeUserIds) {
+  const db = require('../../config/database');
+  const rows = await db('users').whereIn('id', scopeUserIds).select('role');
+  return rows.map((r) => r.role);
+}
 
 async function list(req, res, next) {
   try {
@@ -33,10 +73,13 @@ async function create(req, res, next) {
     if (!granularity || !periodStart || !periodEnd) {
       return res.status(400).json({ error: 'granularity, period_start, period_end required' });
     }
+    const canonicalIds = scopeUserIds.map((id) => accessDirectory.toCanonicalId(id));
+    const scopeUserRoles = await loadScopeUserRoles(canonicalIds);
+    const paretoErr = validateParetoFilter(req, paretoFilter, scopeUserRoles);
+    if (paretoErr) return res.status(400).json({ error: paretoErr });
     const result = await service.generate({
       ownerUserId: req.user.id,
-      // Tolerate stale virtual ids in scope_user_ids by translating each one.
-      scopeUserIds: scopeUserIds.map((id) => accessDirectory.toCanonicalId(id)),
+      scopeUserIds: canonicalIds,
       granularity,
       periodStart,
       periodEnd,
@@ -93,9 +136,13 @@ async function previewFull(req, res, next) {
     if (!periodStart || !periodEnd) {
       return res.status(400).json({ error: 'period_start, period_end required' });
     }
+    const canonicalIds = scopeUserIds.map((id) => accessDirectory.toCanonicalId(id));
+    const scopeUserRoles = await loadScopeUserRoles(canonicalIds);
+    const paretoErr = validateParetoFilter(req, paretoFilter, scopeUserRoles);
+    if (paretoErr) return res.status(400).json({ error: paretoErr });
     const result = await service.previewFull({
       ownerUserId: req.user.id,
-      scopeUserIds: scopeUserIds.map((id) => accessDirectory.toCanonicalId(id)),
+      scopeUserIds: canonicalIds,
       granularity: granularity || 'weekly',
       periodStart,
       periodEnd,
@@ -103,6 +150,55 @@ async function previewFull(req, res, next) {
       branchId,
       name,
       routeStartHHMM,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
+async function costEstimate(req, res, next) {
+  try {
+    const {
+      scope_user_ids: scopeUserIds,
+      granularity,
+      period_start: periodStart,
+      period_end: periodEnd,
+      pareto_filter: paretoFilter,
+      branch_id: branchId,
+      route_start_hhmm: routeStartHHMM,
+    } = req.body || {};
+    if (!Array.isArray(scopeUserIds) || !scopeUserIds.length) {
+      return res.status(400).json({ error: 'scope_user_ids is required' });
+    }
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({ error: 'period_start, period_end required' });
+    }
+    const canonicalIds = scopeUserIds.map((id) => accessDirectory.toCanonicalId(id));
+    const scopeUserRoles = await loadScopeUserRoles(canonicalIds);
+    const paretoErr = validateParetoFilter(req, paretoFilter, scopeUserRoles);
+    if (paretoErr) return res.status(400).json({ error: paretoErr });
+    const result = await service.estimateCost({
+      ownerUserId: req.user.id,
+      scopeUserIds: canonicalIds,
+      granularity: granularity || 'weekly',
+      periodStart,
+      periodEnd,
+      paretoFilter,
+      branchId,
+      routeStartHHMM,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
+async function resequenceUser(req, res, next) {
+  try {
+    const planId = req.params.id;
+    const userId = accessDirectory.toCanonicalId(req.params.userId);
+    const result = await service.resequenceUser({
+      planId,
+      visitorUserId: userId,
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
     });
     res.json(result);
   } catch (err) { next(err); }
@@ -129,6 +225,45 @@ async function postMortem(req, res, next) {
       isGlobal: req.user.is_global,
     });
     res.json(result);
+  } catch (err) { next(err); }
+}
+
+async function postMortemCsv(req, res, next) {
+  try {
+    const result = await service.postMortem(req.params.id, {
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
+    });
+    const headers = [
+      'rep_id', 'rep_name', 'role',
+      'planned', 'done', 'skipped',
+      'actual_visits', 'alerts_fired',
+      'expected_drive_min', 'expected_service_min',
+      'first_actual_start', 'last_actual_start',
+      'completion_pct', 'on_time_pct',
+    ];
+    const escape = (v) => {
+      if (v == null) return '';
+      const s = String(v);
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+    const lines = [headers.join(',')];
+    for (const r of (result.per_rep || [])) {
+      lines.push([
+        r.visitor_user_id, r.visitor_name, r.visitor_role,
+        r.assignments_planned, r.assignments_done, r.assignments_skipped,
+        r.actual_visits_count, r.alerts_fired,
+        r.estimated_drive_minutes, r.estimated_service_minutes,
+        r.first_actual_start, r.last_actual_start,
+        r.completion_pct, r.on_time_pct,
+      ].map(escape).join(','));
+    }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="post-mortem-${req.params.id}.csv"`);
+    res.send(lines.join('\n'));
   } catch (err) { next(err); }
 }
 
@@ -233,4 +368,7 @@ module.exports = {
   deviateAssignment,
   postMortem,
   replayRepDay,
+  costEstimate,
+  resequenceUser,
+  postMortemCsv,
 };

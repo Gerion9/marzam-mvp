@@ -73,6 +73,11 @@ async function levelAtPoints(points) {
  * @param {string} encodedPolyline — Google encoded polyline format
  * @returns {Promise<boolean>} true if the polyline intersects ANY caution polygon
  */
+// Counter so /api/health can surface "caution polygon checks degrading" as a
+// boot-time warning when ST_LineFromEncodedPolyline isn't available.
+let polylineFallbackCount = 0;
+let polylineFallbackLastError = null;
+
 async function polylineIntersectsCaution(encodedPolyline) {
   if (!encodedPolyline) return false;
   try {
@@ -89,11 +94,56 @@ async function polylineIntersectsCaution(encodedPolyline) {
     `, [encodedPolyline]);
     return (result.rows?.length || 0) > 0;
   } catch (err) {
-    // ST_LineFromEncodedPolyline may not exist on older PostGIS. Treat as no
-    // intersection rather than failing the whole plan generation.
-    console.warn(`[securityPolygons] polylineIntersectsCaution skipped: ${err.message}`);
+    polylineFallbackCount += 1;
+    polylineFallbackLastError = err.message;
+    // ST_LineFromEncodedPolyline requires PostGIS 3.0+. On older installs we
+    // fall back to a no-intersection result so plans still generate, but the
+    // fallback is now logged and surfaced via getDegradationStatus().
+    if (process.env.POSTGIS_3_REQUIRED === 'true') {
+      throw new Error(`PostGIS ST_LineFromEncodedPolyline missing — caution polygons disabled. Original error: ${err.message}`);
+    }
+    if (polylineFallbackCount === 1) {
+      console.warn(`[securityPolygons] polylineIntersectsCaution falling back (set POSTGIS_3_REQUIRED=true to fail loud): ${err.message}`);
+    }
     return false;
   }
+}
+
+function getDegradationStatus() {
+  return {
+    polyline_fallback_count: polylineFallbackCount,
+    polyline_fallback_last_error: polylineFallbackLastError,
+  };
+}
+
+/**
+ * Bbox-scoped GeoJSON FeatureCollection for the Plan Editor map overlay.
+ * Returns only colonias whose geometry intersects the bbox; clipping is the
+ * client's job (MapLibre handles partial polygons fine).
+ *
+ * @param {{minLng,minLat,maxLng,maxLat}} bbox
+ * @param {string[]} levels  — subset of 'acceptable' | 'caution' | 'not_acceptable'
+ */
+async function geoJsonForBbox(bbox, levels = ['caution', 'not_acceptable']) {
+  const { minLng, minLat, maxLng, maxLat } = bbox || {};
+  if (![minLng, minLat, maxLng, maxLat].every(Number.isFinite)) {
+    throw new Error('bbox required: minLng, minLat, maxLng, maxLat');
+  }
+  const rows = await db.raw(`
+    SELECT name, security_level,
+           ST_AsGeoJSON(geom)::jsonb AS geometry
+      FROM colonias
+     WHERE geom IS NOT NULL
+       AND security_level = ANY(?::text[])
+       AND ST_Intersects(geom, ST_MakeEnvelope(?, ?, ?, ?, 4326))
+     LIMIT 5000
+  `, [levels, minLng, minLat, maxLng, maxLat]);
+  const features = (rows.rows || []).map((r) => ({
+    type: 'Feature',
+    properties: { name: r.name, level: r.security_level },
+    geometry: r.geometry,
+  }));
+  return { type: 'FeatureCollection', features };
 }
 
 module.exports = {
@@ -101,4 +151,6 @@ module.exports = {
   levelAtPoint,
   levelAtPoints,
   polylineIntersectsCaution,
+  geoJsonForBbox,
+  getDegradationStatus,
 };

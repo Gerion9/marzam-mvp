@@ -211,14 +211,24 @@ async function evaluateRouteNotStarted() {
   // Look at today's published plans where the user has assignments and the
   // earliest expected_start_time has passed by more than `grace` minutes
   // without any actual_start_time set.
+  // Important: scheduled_date is a `date` column representing the rep's
+  // CDMX-local working day. We compare against `current_date AT TIME ZONE
+  // 'America/Mexico_City'` so the rule fires on the correct calendar day for
+  // the rep, not the UTC day.
+  // expected_start_time is TIMESTAMPTZ, so the now()-grace comparison is a
+  // straight UTC subtraction — no need to convert it. (Phase A timezone fix
+  // already ensures that 08:00 CDMX is correctly stored as 14:00 UTC.)
+  // We also exclude archived plans so reps don't get alerted against an
+  // older plan that was superseded by re-publish.
   const rows = await db.raw(`
     SELECT vpa.visitor_user_id AS user_id,
            MIN(vpa.expected_start_time) AS expected_start
       FROM visit_plan_assignments vpa
       JOIN visit_plans vp ON vp.id = vpa.visit_plan_id
      WHERE vp.status = 'published'
+       AND vp.archived_at IS NULL
        AND vp.hard_schedule = TRUE
-       AND vpa.scheduled_date = current_date
+       AND vpa.scheduled_date = (now() AT TIME ZONE 'America/Mexico_City')::date
        AND vpa.expected_start_time IS NOT NULL
        AND vpa.actual_start_time  IS NULL
      GROUP BY vpa.visitor_user_id

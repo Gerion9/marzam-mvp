@@ -1,36 +1,108 @@
 /**
- * In-memory event bus for live operations (SSE).
+ * Durable event bus for live operations (SSE) — Phase D rewrite.
  *
- * Producers (tracking pings, alerts engine, assignment status changes) call
- * `publish(event)` to push events. Consumers (manager dashboards via SSE)
- * call `subscribe({ audienceUserId, isGlobal })` to register an EventEmitter
- * listener that the SSE handler streams to the browser.
+ * Producers call `publish(event)` to append to `live_event_outbox` (migration 065).
+ * The trigger fires `pg_notify('live_events', <id>)` so every Node process
+ * connected to the database — including future horizontally-scaled instances —
+ * receives the new id, fetches the row, and fans out to its local SSE
+ * subscribers.
  *
- * Single-process: this works for one Node instance. If horizontally scaled,
- * swap this in-memory bus for Redis pub/sub (the public API stays the same).
+ * Subscribers call `subscribe({ userId, isGlobal, lastEventId }, onEvent)`.
+ * On connect we replay any missed rows whose id > lastEventId; afterwards a
+ * LISTEN'd connection pushes new events as they arrive.
  *
- * Event shape:
- *   { type: 'position'|'alert'|'assignment_status', payload: {...}, ts: ms,
- *     subjectUserId?, audienceUserId? }
+ * Outbox rows older than 24h are pruned by the daily purge cron.
  *
- * Filtering: each subscriber receives events whose `audienceUserId` is
- *   - null/undefined (broadcast)
- *   - equal to the subscriber's userId
- *   - in the subscriber's manageeIds set (so a manager sees their reps' events)
- * is_global subscribers receive everything.
+ * Backwards-compat: if migration 065 hasn't run, we degrade gracefully to the
+ * old in-memory EventEmitter so dev environments keep working during rollout.
  */
 
 const { EventEmitter } = require('events');
 const teamScope = require('../../services/teamScope');
+const db = require('../../config/database');
 
 const bus = new EventEmitter();
-bus.setMaxListeners(200);
+bus.setMaxListeners(500);
 
 const RECENT_BUFFER_MAX = 500;
-const recent = []; // last N events for replay-on-reconnect
+const recent = []; // local cache for cheap replay
 
-function publish(event) {
+let outboxAvailable = null; // null = unknown, true/false after first probe
+let listenerStarted = false;
+
+async function probeOutbox() {
+  try {
+    await db.raw("SELECT to_regclass('live_event_outbox') AS t");
+    const row = await db.raw("SELECT to_regclass('live_event_outbox') AS t");
+    outboxAvailable = !!row.rows?.[0]?.t;
+  } catch {
+    outboxAvailable = false;
+  }
+  return outboxAvailable;
+}
+
+async function startPgListener() {
+  if (listenerStarted) return;
+  if (outboxAvailable === null) await probeOutbox();
+  if (!outboxAvailable) return;
+  // Get a dedicated connection from the pool and LISTEN. Knex doesn't expose
+  // raw LISTEN cleanly, so we acquire via the pg client directly.
+  try {
+    const client = await db.client.pool.acquire().promise;
+    await client.query('LISTEN live_events');
+    client.on('notification', async (msg) => {
+      const id = Number(msg.payload);
+      if (!Number.isFinite(id)) return;
+      try {
+        const row = await db('live_event_outbox').where({ id }).first();
+        if (!row) return;
+        const ev = {
+          id: row.id,
+          ts: new Date(row.created_at).getTime(),
+          type: row.event_type,
+          subjectUserId: row.subject_user_id,
+          audienceUserId: row.audience_user_id,
+          payload: row.payload || {},
+        };
+        recent.push(ev);
+        if (recent.length > RECENT_BUFFER_MAX) recent.shift();
+        bus.emit('event', ev);
+      } catch (err) {
+        console.warn(`[live] notify fetch failed: ${err.message}`);
+      }
+    });
+    listenerStarted = true;
+  } catch (err) {
+    // Fall back to in-memory bus for this process.
+    console.warn(`[live] pg LISTEN unavailable, in-memory only: ${err.message}`);
+    outboxAvailable = false;
+  }
+}
+
+async function publish(event) {
   const enriched = { ...event, ts: event.ts || Date.now() };
+  if (outboxAvailable === null) await probeOutbox();
+  if (outboxAvailable) {
+    try {
+      // Insert into outbox; the trigger fires pg_notify.
+      const [row] = await db('live_event_outbox').insert({
+        event_type: enriched.type,
+        subject_user_id: enriched.subjectUserId || null,
+        audience_user_id: enriched.audienceUserId || null,
+        payload: enriched.payload || {},
+      }).returning('id');
+      // Local emit too (so the listener in this process doesn't miss it
+      // if the LISTEN hasn't started yet).
+      enriched.id = typeof row === 'object' ? row.id : row;
+      recent.push(enriched);
+      if (recent.length > RECENT_BUFFER_MAX) recent.shift();
+      bus.emit('event', enriched);
+      return enriched;
+    } catch (err) {
+      console.warn(`[live] outbox insert failed, in-memory only: ${err.message}`);
+      // fall through to in-memory
+    }
+  }
   recent.push(enriched);
   if (recent.length > RECENT_BUFFER_MAX) recent.shift();
   bus.emit('event', enriched);
@@ -38,9 +110,9 @@ function publish(event) {
 }
 
 async function subscribe({ userId, isGlobal, lastEventId }, onEvent) {
-  // Resolve managee set once at subscribe-time. Live updates to the team
-  // hierarchy during a live session are rare; reps don't switch managers
-  // mid-day. We accept slight staleness.
+  if (outboxAvailable === null) await probeOutbox();
+  if (!listenerStarted) await startPgListener();
+
   let manageeIds = new Set();
   if (!isGlobal) {
     try {
@@ -51,10 +123,34 @@ async function subscribe({ userId, isGlobal, lastEventId }, onEvent) {
     }
   }
 
-  // Replay buffered events newer than lastEventId (timestamp ms).
-  const cutoff = lastEventId ? Number(lastEventId) : 0;
-  for (const ev of recent) {
-    if (ev.ts > cutoff && allowed(ev, isGlobal, manageeIds, userId)) onEvent(ev);
+  // Replay missed events.
+  if (outboxAvailable && lastEventId) {
+    try {
+      const cutoff = Number(lastEventId);
+      const rows = await db('live_event_outbox')
+        .where('id', '>', cutoff)
+        .orderBy('id', 'asc')
+        .limit(2000);
+      for (const row of rows) {
+        const ev = {
+          id: row.id,
+          ts: new Date(row.created_at).getTime(),
+          type: row.event_type,
+          subjectUserId: row.subject_user_id,
+          audienceUserId: row.audience_user_id,
+          payload: row.payload || {},
+        };
+        if (allowed(ev, isGlobal, manageeIds, userId)) onEvent(ev);
+      }
+    } catch (err) {
+      console.warn(`[live] outbox replay failed: ${err.message}`);
+    }
+  } else {
+    // In-memory replay (degraded).
+    const cutoff = lastEventId ? Number(lastEventId) : 0;
+    for (const ev of recent) {
+      if (ev.ts > cutoff && allowed(ev, isGlobal, manageeIds, userId)) onEvent(ev);
+    }
   }
 
   const handler = (ev) => {

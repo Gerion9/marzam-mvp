@@ -185,7 +185,13 @@ async function setCreditDecision({ id, decision, notes, actorId, isGlobal }) {
   if (!['approved', 'rejected'].includes(decision)) err(422, 'decisión inválida');
   const row = await getById(id);
   if (!row) err(404, 'Onboarding no encontrado');
-  if (!isGlobal && row.created_by !== actorId) err(403, 'No puedes decidir crédito en esta alta');
+  // Authorization: creator OR a manager up the chain (supervisor / gerente /
+  // director) can decide. Admins always pass via isGlobal.
+  if (!isGlobal && row.created_by !== actorId) {
+    const { canActorManage } = require('../../services/teamScope');
+    const canOverride = await canActorManage(actorId, row.created_by);
+    if (!canOverride) err(403, 'No puedes decidir crédito en esta alta');
+  }
   if (row.status !== 'pending_credit_review') err(422, 'La alta no está en revisión de crédito');
 
   const next = decision === 'approved' ? 'approved_credit' : 'rejected';
