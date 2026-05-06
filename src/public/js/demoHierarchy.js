@@ -1419,12 +1419,33 @@
         const { scope_user_ids = [], period_start } = body || {};
         const date = period_start || new Date().toISOString().slice(0, 10);
 
-        // Only route reps (not supervisors/gerentes — they don't have stop lists).
-        const reps = STORE.users.filter(
-          (u) => u.role === ROLES.REPRESENTANTE
-            && (scope_user_ids.length === 0 || scope_user_ids.includes(u.id))
-            && u.is_active !== false,
+        // Resolución de scope con fallback robusto.
+        //
+        // Caso A — IDs sintéticos del demo (`u-rep-001`, `u-rep-real-N`):
+        //   matchean directamente con STORE.users.id. Filtramos como antes.
+        //
+        // Caso B — UUIDs reales (`d191d82a-...`) que vienen del endpoint
+        //   /team/descendants real (cuando el demo no intercepta esa ruta o
+        //   cuando el usuario logueado es un demo-overlay sobre un user real
+        //   en BD): NO matchean ningún u.id sintético. En ese caso, en vez
+        //   de retornar 0 visitas (UX rota: "alcance vacío"), tomamos N reps
+        //   sintéticos del STORE — donde N = min(scope_user_ids.length, total
+        //   de reps demo) — para representar el alcance solicitado. Esto
+        //   permite que el demo siempre genere assignments y rutas cuando el
+        //   usuario pide "Generar plan", aunque los IDs no matcheen 1:1.
+        const allDemoReps = STORE.users.filter(
+          (u) => u.role === ROLES.REPRESENTANTE && u.is_active !== false,
         );
+        let reps = allDemoReps.filter(
+          (u) => scope_user_ids.length === 0 || scope_user_ids.includes(u.id),
+        );
+        if (!reps.length && scope_user_ids.length > 0 && allDemoReps.length > 0) {
+          // Fallback Caso B: no hubo match por ID. Tomamos hasta scope.length
+          // reps demo (cap razonable para mantener viabilidad del solver).
+          const targetCount = Math.min(scope_user_ids.length, allDemoReps.length);
+          reps = allDemoReps.slice(0, targetCount);
+          console.info('[demoHierarchy] preview-full: scope con UUIDs reales no match — usando ' + reps.length + ' reps demo como proxy');
+        }
         if (!reps.length) return { plan: { config: { working_days: 1 } }, assignments: [] };
 
         const users = reps.map((r) => ({

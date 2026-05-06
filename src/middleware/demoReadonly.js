@@ -39,6 +39,17 @@ const ALWAYS_ALLOW_PATHS = [
   '/api/health',
   // Pure computation — no DB writes. Safe for demo users; enables routing sandbox.
   '/api/visit-plans/preview-routing',
+  // Read-only previews: a pesar de ser POST (porque mandan body con scope/period),
+  // NO persisten nada — solo calculan el plan o el costo estimado y retornan.
+  // Bloquearlos rompe la UX del demo (Plan Editor muestra "Sin visitas generadas"
+  // porque el middleware retorna un mock que no tiene assignments). El frontend
+  // (demoHierarchy.js) los intercepta cuando `me` resuelve, pero cuando el
+  // usuario demo es un overlay sobre un user con UUID real (o `me` queda null
+  // por race con DEMO_H.ready), la request cae al backend — y debe poder
+  // ejecutar el preview real para que el editor muestre rutas.
+  '/api/visit-plans/preview-full',
+  '/api/visit-plans/preview/cost-estimate',
+  '/api/visit-plans/preview',
 ];
 
 function isDemoUser(user) {

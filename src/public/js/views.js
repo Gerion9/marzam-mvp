@@ -1944,68 +1944,127 @@
       return;
     }
 
-    // Sub-tabs en el orden del ciclo PDCA (Plan-Do-Check-Act):
-    //   Cuotas + Ajustes  → reglas (Plan)
-    //   Crear plan        → ejecución (Do)
-    //   Avance            → monitoreo (Check)
-    //   Análisis          → auditoría (Act)
-    //
-    // Cada sub-tab tiene:
-    //   - label   visible en la pill
-    //   - sub     micro-copy debajo cuando hay espacio (md:)
-    //   - tip     tooltip enriquecido al pasar el mouse
-    const SUBTABS = [
+    // Stepper PDCA de 4 pasos (Plan-Do-Check-Act). Cada paso agrupa 1+
+    // sub-tabs internos para preservar `_planActiveSubtab` y el branching
+    // existente (defaults/overrides/generar/compliance/resultados). El paso
+    // 1 fusiona Cuotas+Ajustes con un sub-toggle interno porque son dos
+    // vistas del mismo concepto (cuotas de visitas/día).
+    const STEPS = [
       {
-        id: 'defaults', label: 'Cuotas',
-        sub: 'visitas/día base',
-        tip: 'Define cuántas visitas por día debe hacer cada rol contra cada PARETO (A/B/C). Aplica a toda la sucursal — los ajustes individuales se hacen en la siguiente pestaña.',
+        n: 1, id: 'configurar', label: 'Configurar',
+        hint: 'Cuántas visitas, cuánta gente',
+        children: ['defaults', 'overrides'],
+        tip: 'Define las reglas base: cuántas visitas/día por rol y categoría de farmacia, más ajustes individuales por persona. Es la BASE de todo lo que viene después.',
       },
       {
-        id: 'overrides', label: 'Ajustes',
-        sub: 'override por persona',
-        tip: 'Sobrescribe las cuotas de un individuo concreto sin cambiar el default de toda la sucursal. Útil para vacaciones, capacitación, baja temporal o pushes específicos.',
+        n: 2, id: 'generar', label: 'Generar',
+        hint: 'Asignar farmacias y fechas',
+        children: ['generar'],
+        tip: 'Crea el plan operativo: selecciona reps, define el rango de fechas, revisa la previsualización en mapa con rutas reales y publícalo.',
       },
       {
-        id: 'generar', label: 'Crear plan',
-        sub: 'asignar farmacias',
-        tip: 'Genera el plan operativo: selecciona reps, define el rango de fechas, revisa la previsualización en el mapa con polylines reales y publica.',
+        n: 3, id: 'seguir', label: 'Seguir',
+        hint: 'Cómo va el mes',
+        children: ['compliance'],
+        tip: 'Monitoreo del mes en curso: meta de cada persona vs lo que lleva ejecutado. Edita el target inline si necesitas ajustar.',
       },
       {
-        id: 'compliance', label: 'Avance',
-        sub: 'cumplimiento del mes',
-        tip: 'Cómo va el mes en curso por subordinado: meta mensual de farmacias nuevas + clientes existentes vs lo ejecutado. Editable por persona.',
-      },
-      {
-        id: 'resultados', label: 'Análisis',
-        sub: 'post-plan',
-        tip: 'Auditoría de un plan ya cerrado: cumplimiento real, ranking por rep, replay GPS con time scrubber para ver el día minuto a minuto.',
+        n: 4, id: 'cerrar', label: 'Cerrar',
+        hint: 'Qué pasó al final',
+        children: ['resultados'],
+        tip: 'Auditoría de planes cerrados: cumplimiento real, ranking por rep, replay GPS minuto a minuto del día seleccionado.',
       },
     ];
 
-    const subtabsHtml = SUBTABS.map((t) => `
-      <button class="subtab-btn ${_planActiveSubtab === t.id ? 'active' : ''} flex-1 flex-shrink-0 min-w-0 py-1.5 px-2 rounded-lg transition relative group" data-subtab="${t.id}" title="${escapeHtml(t.tip)}">
-        <span class="block text-[11px] sm:text-xs font-bold leading-tight whitespace-nowrap">${t.label}</span>
-        <span class="block text-[9px] font-medium opacity-70 leading-tight whitespace-nowrap mt-0.5 hidden md:block">${t.sub}</span>
-        <!-- Custom tooltip card on hover (richer than native title) -->
-        <span class="hidden group-hover:block pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50 w-60 bg-slate-800 text-slate-100 text-[11px] font-medium leading-snug rounded-lg shadow-xl p-2.5 text-left">
-          <span class="block font-bold text-white mb-1">${t.label}</span>
-          ${escapeHtml(t.tip)}
-          <span class="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-800 rotate-45"></span>
-        </span>
-      </button>
-    `).join('');
+    // Helper: qué paso visual contiene el sub-tab activo.
+    const activeStep = STEPS.find((s) => s.children.includes(_planActiveSubtab)) || STEPS[0];
+
+    const stepperHtml = STEPS.map((s, i) => {
+      const isActive = activeStep.id === s.id;
+      const isPast = activeStep.n > s.n;
+      const stateCls = isActive ? 'plan-step--active' : (isPast ? 'plan-step--past' : '');
+      const numContent = isPast ? '✓' : s.n;
+      return `
+        <button class="plan-step ${stateCls} group" data-step="${s.id}" title="${escapeHtml(s.tip)}">
+          <span class="plan-step__num">${numContent}</span>
+          <span class="plan-step__label">
+            <span class="plan-step__title">${s.label}</span>
+            <span class="plan-step__hint">${escapeHtml(s.hint)}</span>
+          </span>
+          ${i < STEPS.length - 1 ? '<span class="plan-step__connector" aria-hidden="true"></span>' : ''}
+          <span class="hidden group-hover:block pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-2 z-[60] w-60 bg-slate-800 text-slate-100 text-[11px] font-medium leading-snug rounded-lg shadow-xl p-2.5 text-left">
+            <span class="block font-bold text-white mb-1">${s.n}. ${s.label}</span>
+            ${escapeHtml(s.tip)}
+            <span class="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-800 rotate-45"></span>
+          </span>
+        </button>
+      `;
+    }).join('');
+
+    // Sub-toggle interno solo en paso 1 (Configurar): conmuta entre Cuotas
+    // base (defaults) y Ajustes individuales (overrides). En el resto de
+    // pasos no aplica porque cada uno tiene un solo child.
+    const subToggleHtml = (activeStep.id === 'configurar') ? `
+      <div class="plan-substoggle">
+        <button class="plan-substoggle__btn ${_planActiveSubtab === 'defaults' ? 'active' : ''}" data-subtab="defaults" title="Cuotas que aplican a TODA la sucursal por defecto">
+          <span class="plan-substoggle__title">Cuotas base</span>
+          <span class="plan-substoggle__hint">aplica a toda la sucursal</span>
+        </button>
+        <button class="plan-substoggle__btn ${_planActiveSubtab === 'overrides' ? 'active' : ''}" data-subtab="overrides" title="Sobrescribe las cuotas de una persona específica (vacaciones, capacitación, push)">
+          <span class="plan-substoggle__title">Ajustes individuales</span>
+          <span class="plan-substoggle__hint">override por persona</span>
+        </button>
+      </div>
+    ` : '';
+
+    // Matriz read-only de cadencia: antes vivía al top, abrumando al user.
+    // Ahora va como `<details>` colapsado al PIE del paso 1 — sigue siendo
+    // referencia accesible pero no compite con la matriz editable de abajo.
+    const cadenceReferenceHtml = (activeStep.id === 'configurar') ? `
+      <details class="bg-white border border-slate-200 rounded-2xl mt-4 overflow-hidden">
+        <summary class="px-4 py-3 cursor-pointer text-xs font-bold text-slate-700 uppercase tracking-wider select-none flex items-center justify-between hover:bg-slate-50">
+          <span class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            Reglas de cadencia base (referencia)
+          </span>
+          <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"/></svg>
+        </summary>
+        <div class="p-3">
+          <p class="text-[11px] text-slate-500 mb-2 leading-snug">
+            Quién visita qué tipo de farmacia y cada cuánto. Esta tabla es <b>solo informativa</b> — para ajustar valores, edita la matriz "Tu cuota diaria" arriba.
+          </p>
+          ${rulesMatrixHtml()}
+        </div>
+      </details>
+    ` : '';
 
     body.innerHTML = `
-      ${rulesMatrixHtml()}
+      <!-- Stepper de navegación PDCA -->
+      <nav class="plan-stepper" role="tablist" aria-label="Pasos del flujo Plan & Metas">
+        ${stepperHtml}
+      </nav>
 
-      <div class="flex bg-slate-100 rounded-xl p-1 mb-4 overflow-x-auto no-scrollbar">
-        ${subtabsHtml}
-      </div>
+      ${subToggleHtml}
 
       <div id="plan-subbody"></div>
+
+      ${cadenceReferenceHtml}
     `;
 
-    body.querySelectorAll('.subtab-btn').forEach((btn) => {
+    body.querySelectorAll('.plan-step').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const stepId = btn.dataset.step;
+        const step = STEPS.find((s) => s.id === stepId);
+        if (!step) return;
+        if (activeStep.id === stepId) return; // ya activo
+        // Al cambiar de paso, cae al primer child del paso (típicamente
+        // defaults para configurar, generar para generar, etc.).
+        _planActiveSubtab = step.children[0];
+        renderPlan(body);
+      });
+    });
+
+    body.querySelectorAll('.plan-substoggle__btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         _planActiveSubtab = btn.dataset.subtab;
         renderPlan(body);
@@ -2173,15 +2232,27 @@
     <div class="cuotas-grid">
       <!-- ── LEFT COLUMN: zone selector + equipo card ─────────────── -->
       <div class="cuotas-left">
-        <!-- ── Zone selector ───────────────────────────────────────── -->
+        <!-- Zone selector: layout vertical (label arriba + select 100% abajo)
+             para evitar que un option largo expanda la columna izquierda
+             del grid y se monte sobre la card de la derecha. -->
         <div class="bg-white border border-slate-200 rounded-2xl p-3 mb-4">
-          <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-            <label class="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Entidad federativa</label>
-            <select id="capacity-zone" class="flex-1 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
-              <option value="">Toda la sucursal · ${activeCount} personas</option>
-              ${zonesOpts}
-            </select>
+          <div class="flex items-center gap-1.5 mb-2">
+            <svg class="w-3.5 h-3.5 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <label for="capacity-zone" class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Entidad federativa</label>
+            <span class="ml-auto text-[10px] font-semibold text-slate-400 tabular-nums" title="Personas activas en este alcance">${activeCount} pers.</span>
+          </div>
+          <select id="capacity-zone" class="w-full text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 outline-none truncate">
+            <option value="">Toda la sucursal</option>
+            ${zonesOpts}
+          </select>
+        </div>
+
+        <!-- ── Header de sub-paso 1.A ───────────────────────────────── -->
+        <div class="plan-substep-header">
+          <span class="plan-substep-badge">1.A</span>
+          <div class="plan-substep-text">
+            <h3 class="plan-substep-title">Tu equipo</h3>
+            <p class="plan-substep-hint">Cuánta gente tienes hoy y cuánta deberías tener para cubrir bien la zona.</p>
           </div>
         </div>
 
@@ -2197,20 +2268,60 @@
               <thead>
                 <tr class="border-b border-slate-100">
                   <th class="text-left py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase">Rol</th>
-                  <th class="text-center py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase">Real</th>
-                  <th class="text-center py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase">Meta</th>
-                  <th class="text-center py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase">Gap</th>
-                  <th class="text-center py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase">Días</th>
+                  <th class="th-with-tip text-center py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase relative group cursor-help" tabindex="0">
+                    Hoy
+                    <svg class="th-tip-icon inline w-2.5 h-2.5 text-slate-300 ml-0.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                    <span class="th-tip-card hidden group-hover:block group-focus:block pointer-events-none">
+                      <span class="th-tip-card__title">Hoy <span class="th-tip-card__alias">(antes "Real")</span></span>
+                      Cuántas personas activas tienes en este rol y zona ahora mismo. Viene del padrón de RH — no se edita aquí.
+                    </span>
+                  </th>
+                  <th class="th-with-tip text-center py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase relative group cursor-help" tabindex="0">
+                    Plantilla ideal
+                    <svg class="th-tip-icon inline w-2.5 h-2.5 text-slate-300 ml-0.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                    <span class="th-tip-card hidden group-hover:block group-focus:block pointer-events-none">
+                      <span class="th-tip-card__title">Plantilla ideal <span class="th-tip-card__alias">(antes "Meta")</span></span>
+                      Cuántas personas DEBERÍAS tener para cubrir bien la zona. Es tu objetivo de contratación. Subir este número aumenta las visitas/mes posibles.
+                    </span>
+                  </th>
+                  <th class="th-with-tip text-center py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase relative group cursor-help" tabindex="0">
+                    Faltan
+                    <svg class="th-tip-icon inline w-2.5 h-2.5 text-slate-300 ml-0.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                    <span class="th-tip-card hidden group-hover:block group-focus:block pointer-events-none">
+                      <span class="th-tip-card__title">Faltan <span class="th-tip-card__alias">(antes "Gap")</span></span>
+                      Diferencia entre tu plantilla ideal y lo que tienes hoy. En rojo cuando hay vacantes por cubrir.
+                    </span>
+                  </th>
+                  <th class="th-with-tip text-center py-1.5 px-1 text-[10px] font-bold text-slate-500 uppercase relative group cursor-help" tabindex="0">
+                    Días en calle
+                    <svg class="th-tip-icon inline w-2.5 h-2.5 text-slate-300 ml-0.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                    <span class="th-tip-card hidden group-hover:block group-focus:block pointer-events-none">
+                      <span class="th-tip-card__title">Días en calle / mes <span class="th-tip-card__alias">(antes "Días")</span></span>
+                      Cuántos días al mes cada persona pisa farmacias (no días laborales totales). Default 22. Bajar este número = menos capacidad real.
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody id="cap-team-body"></tbody>
             </table>
           </div>
+          <p class="text-[10px] text-slate-400 mt-2 leading-snug">
+            Define cuánta gente tienes vs cuánta necesitas. Esto alimenta la <b>estimación de visitas</b> de la derecha.
+          </p>
         </div>
       </div><!-- end cuotas-left -->
 
       <!-- ── RIGHT COLUMN: matrix + estimation + by-state + actions ─ -->
       <div class="cuotas-right">
+        <!-- ── Header de sub-paso 1.B ───────────────────────────────── -->
+        <div class="plan-substep-header">
+          <span class="plan-substep-badge">1.B</span>
+          <div class="plan-substep-text">
+            <h3 class="plan-substep-title">Tu cuota diaria</h3>
+            <p class="plan-substep-hint">Cuántas visitas por día puede hacer cada persona, según el tipo de farmacia (A/B/C de Marzam vs A/B/C/D de prospectos nuevos).</p>
+          </div>
+        </div>
+
         <!-- ── Matriz visitas/día 4×7 ────────────────────────────────── -->
         <div class="bg-white border border-slate-200 rounded-2xl p-4 mb-4">
           <h4 class="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Visitas/día por categoría</h4>
@@ -2232,6 +2343,15 @@
             </table>
           </div>
           <p class="text-[10px] text-slate-400 mt-2 leading-snug">Todas las celdas son editables. Cambios se guardan automáticamente.</p>
+        </div>
+
+        <!-- ── Header de sub-paso 1.C ───────────────────────────────── -->
+        <div class="plan-substep-header">
+          <span class="plan-substep-badge plan-substep-badge--accent">1.C</span>
+          <div class="plan-substep-text">
+            <h3 class="plan-substep-title">Resultado estimado</h3>
+            <p class="plan-substep-hint">Visitas/día × personas × días = visitas/mes. Se recalcula en vivo con cada cambio que hagas arriba.</p>
+          </div>
         </div>
 
         <!-- ── Card Estimación ────────────────────────────────────────── -->
@@ -2264,8 +2384,24 @@
           <!-- Need bar -->
           <div id="preview-need-bar"></div>
           <div id="preview-breakdown" class="grid grid-cols-4 gap-1 mt-2 pt-2 border-t border-blue-200/60"></div>
-          <p class="text-[9px] text-blue-700/70 mt-2 text-center leading-snug" id="preview-formula">
-            ≈ visitas_día × personas × días_dedicados
+          <!-- Fórmula viva: variables clickeables/hover apuntan a su origen.
+               Los IDs preview-fv-* los actualiza repaint() en tiempo real. -->
+          <p class="plan-formula" id="preview-formula">
+            ≈
+            <span class="plan-formula-var plan-formula-var--blue" id="preview-fv-vd"
+                  data-target="visits-per-day" tabindex="0" role="button"
+                  title="Visitas/día sumadas en la matriz 1.B. Hover destaca dónde se calcula.">—</span>
+            <span class="plan-formula-op">×</span>
+            <span class="plan-formula-var plan-formula-var--green" id="preview-fv-pp"
+                  data-target="people" tabindex="0" role="button"
+                  title="Personas activas en el equipo (Hoy). Viene de la tabla 1.A.">—</span>
+            <span class="plan-formula-op">×</span>
+            <span class="plan-formula-var plan-formula-var--orange" id="preview-fv-dd"
+                  data-target="days" tabindex="0" role="button"
+                  title="Días en calle/mes (default 22). Editable en la tabla 1.A columna 'Días en calle'.">—</span>
+            <span class="plan-formula-op">=</span>
+            <b class="plan-formula-result" id="preview-fv-total">—</b>
+            <span class="plan-formula-unit">visitas/mes</span>
           </p>
         </div>
 
@@ -2307,30 +2443,50 @@
         <!-- ── Buttons ────────────────────────────────────────────────── -->
         <div class="flex gap-3 mt-2">
           <button id="btn-force-save" class="flex-1 btn btn-secondary py-2.5 text-sm font-semibold hidden">Guardar configuración</button>
-          <button id="btn-generate-plan" class="flex-1 btn btn-primary py-3 font-bold text-sm">Crear plan ahora →</button>
+          <button id="btn-generate-plan" class="flex-1 btn btn-primary py-3 font-bold text-sm">Listo · Generar plan ahora →</button>
         </div>
         <p class="text-[10px] text-slate-400 text-center mt-2">Las visitas ya completadas se preservan al regenerar.</p>
       </div><!-- end cuotas-right -->
     </div><!-- end cuotas-grid -->
+
+    <!-- ── CTA sticky bottom: visible al hacer scroll en el paso 1 ─── -->
+    <div class="plan-cta-sticky" id="plan-cta-sticky">
+      <button id="btn-generate-plan-sticky" class="plan-cta-sticky__btn">
+        <span>Listo · Generar plan ahora</span>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </button>
+    </div>
     `;
 
     // ── 3. Populate team card ──────────────────────────────────────────────
     const teamBody = wrap.querySelector('#cap-team-body');
     function renderTeamRows() {
       teamBody.innerHTML = ROLES_DEF.map((role) => {
-        const cap = capByRole[role] || { real_headcount: 0, target_headcount: 0, days_per_month: 22, gap: 0 };
+        const cap = capByRole[role] || { real_headcount: 0, target_headcount: 0, days_per_month: 22, gap: 0, db_id: null };
         const canEdit = canEditRole(role);
-        const gapColor = cap.gap > 0 ? 'text-red-600 font-bold' : 'text-slate-400';
+        // Default sensato cuando NO hay registro guardado en role_capacity_targets
+        // (db_id === null): mostramos real_headcount como Plantilla ideal, no 0.
+        // El gap también se ajusta para no decir "+N" cuando todavía no hay meta.
+        const hasSavedTarget = cap.db_id != null && (cap.target_headcount || 0) > 0;
+        const displayedTarget = hasSavedTarget ? cap.target_headcount : cap.real_headcount;
+        const displayedGap = hasSavedTarget ? Math.max(0, cap.target_headcount - cap.real_headcount) : 0;
+        const gapColor = displayedGap > 0 ? 'text-red-600 font-bold' : 'text-slate-400';
+        const isSuggestion = !hasSavedTarget && cap.real_headcount > 0;
+        const inputTitle = isSuggestion
+          ? 'Sugerido: igual a tu plantilla actual. Edita para fijar tu meta de contratación.'
+          : '';
+        const inputCls = isSuggestion ? 'border-dashed text-slate-500' : '';
         return `
           <tr class="border-b border-slate-50 ${canEdit ? '' : 'opacity-60'}">
             <td class="py-1.5 px-1 font-semibold text-slate-700 truncate max-w-[5rem]" title="${ROLE_LABEL[role] || role}">${ROLE_LABEL[role] || role}</td>
             <td class="py-1.5 px-1 text-center tabular-nums text-slate-600">${cap.real_headcount}</td>
             <td class="py-1.5 px-1 text-center">
-              <input type="number" min="0" max="999" value="${cap.target_headcount}"
-                class="cap-hc-input w-full text-center border border-slate-200 rounded px-1 py-0.5 text-xs tabular-nums ${canEdit ? '' : 'bg-slate-50 pointer-events-none'}"
-                data-role="${role}" ${canEdit ? '' : 'disabled'}>
+              <input type="number" min="0" max="999" value="${displayedTarget}"
+                class="cap-hc-input w-full text-center border ${inputCls} border-slate-200 rounded px-1 py-0.5 text-xs tabular-nums ${canEdit ? '' : 'bg-slate-50 pointer-events-none'}"
+                data-role="${role}" data-suggested="${isSuggestion ? '1' : '0'}"
+                title="${inputTitle}" ${canEdit ? '' : 'disabled'}>
             </td>
-            <td class="py-1.5 px-1 text-center tabular-nums text-sm ${gapColor}">${cap.gap > 0 ? '+' + cap.gap : '—'}</td>
+            <td class="py-1.5 px-1 text-center tabular-nums text-sm ${gapColor}">${displayedGap > 0 ? '+' + displayedGap : '—'}</td>
             <td class="py-1.5 px-1 text-center">
               <input type="number" min="0" max="31" value="${cap.days_per_month}"
                 class="cap-days-input w-full text-center border border-slate-200 rounded px-1 py-0.5 text-xs tabular-nums ${canEdit ? '' : 'bg-slate-50 pointer-events-none'}"
@@ -2360,6 +2516,10 @@
                 if (body.target_headcount !== undefined) capByRole[role].target_headcount = updated.target_headcount ?? body.target_headcount;
                 if (body.days_per_month !== undefined) capByRole[role].days_per_month = updated.days_per_month ?? body.days_per_month;
                 capByRole[role].gap = Math.max(0, (capByRole[role].target_headcount || 0) - (capByRole[role].real_headcount || 0));
+                // El upsert siempre devuelve el row con id; reflejarlo localmente
+                // marca la fila como "ya configurada" y quita el estilo dasheado
+                // de sugerencia en el próximo renderTeamRows().
+                if (updated?.id) capByRole[role].db_id = updated.id;
               }
             } catch { /* silent */ }
             repaint();
@@ -2461,14 +2621,67 @@
     });
 
     // ── 7. Buttons ─────────────────────────────────────────────────────────
-    wrap.querySelector('#btn-generate-plan').addEventListener('click', () => {
+    const goToGenerate = () => {
       window.MarzamPlanZone = _capacityZone;
       if (_capacityZone) {
         window.MarzamPlanPreloadConfig = { poblacion: _capacityZone };
       }
       _planActiveSubtab = 'generar';
       renderPlan(document.getElementById('panel-body'));
-    });
+    };
+    wrap.querySelector('#btn-generate-plan').addEventListener('click', goToGenerate);
+    // Mismo CTA pero clonado al pie con position:sticky para que esté siempre
+    // visible al hacer scroll en la página densa de Configurar.
+    const stickyBtn = wrap.querySelector('#btn-generate-plan-sticky');
+    if (stickyBtn) stickyBtn.addEventListener('click', goToGenerate);
+
+    // ── 8. Hover handler de la fórmula viva ───────────────────────────────
+    // Cada <span class="plan-formula-var" data-target="..."> cuando recibe
+    // hover/focus dispara highlight visual en la card o celdas origen para
+    // que el usuario entienda DE DÓNDE sale cada número de la fórmula:
+    //   visits-per-day → matriz 1.B (#matrix-table)
+    //   people         → tabla 1.A columnas Hoy + Plantilla ideal
+    //   days           → tabla 1.A columna Días en calle
+    // Usamos event delegation sobre el <p#preview-formula> para no fugar
+    // listeners cada vez que repaint() reescribe contenido interno.
+    const formulaEl = wrap.querySelector('#preview-formula');
+    if (formulaEl) {
+      const targetMap = {
+        'visits-per-day': () => wrap.querySelectorAll('#matrix-table'),
+        people: () => wrap.querySelectorAll('#cap-team-body td:nth-child(2), #cap-team-body td:nth-child(3)'),
+        days: () => wrap.querySelectorAll('#cap-team-body td:nth-child(5)'),
+      };
+      const clearHighlight = () => {
+        wrap.querySelectorAll('.plan-formula-target--active').forEach((el) => {
+          el.classList.remove('plan-formula-target--active');
+        });
+      };
+      const applyHighlight = (key) => {
+        clearHighlight();
+        const getter = targetMap[key];
+        if (!getter) return;
+        const els = getter();
+        els.forEach((el) => el.classList.add('plan-formula-target--active'));
+        if (els.length > 0) {
+          els[0].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        }
+      };
+      formulaEl.addEventListener('mouseover', (ev) => {
+        const v = ev.target.closest('.plan-formula-var');
+        if (!v) return;
+        applyHighlight(v.dataset.target);
+      });
+      formulaEl.addEventListener('mouseout', (ev) => {
+        const v = ev.target.closest('.plan-formula-var');
+        if (!v) return;
+        clearHighlight();
+      });
+      formulaEl.addEventListener('focusin', (ev) => {
+        const v = ev.target.closest('.plan-formula-var');
+        if (v) applyHighlight(v.dataset.target);
+      });
+      formulaEl.addEventListener('focusout', clearHighlight);
+    }
 
     // Initial paint
     repaint();
@@ -2558,6 +2771,31 @@
     set('preview-total', totalVisits.toLocaleString());
     set('preview-nuevas-visits', Math.round(totalNuevas).toLocaleString());
     set('preview-freq', avgFreq !== '—' ? avgFreq + 'x/mes' : '—');
+
+    // ── Fórmula viva: cada variable es interactiva y refleja el origen.
+    //   visitas/día (vd) = avg ponderado de visitas/día por persona del team
+    //   personas (pp)   = headcount total efectivo (target o real)
+    //   días (dd)       = días/mes promedio ponderado por headcount
+    // El producto vd × pp × dd ≈ totalVisits (consistente con la fórmula).
+    let totalPersonas = 0;
+    let weightedDays = 0;
+    for (const role of ROLES_DEF) {
+      const cap = capByRole[role] || {};
+      const realHC = zoneTeam.filter((u) => u.role === role && !isVacancy(u)).length
+        || Number(cap.real_headcount) || 0;
+      const hc = Number(cap.target_headcount) || realHC;
+      const dpm = Number(cap.days_per_month) || WORKING_DAYS_PER_MONTH;
+      totalPersonas += hc;
+      weightedDays += hc * dpm;
+    }
+    const avgDays = totalPersonas > 0 ? Math.round(weightedDays / totalPersonas) : WORKING_DAYS_PER_MONTH;
+    const avgVisitsPerDay = (totalPersonas > 0 && avgDays > 0)
+      ? (totalVisits / (totalPersonas * avgDays))
+      : 0;
+    set('preview-fv-vd', avgVisitsPerDay > 0 ? avgVisitsPerDay.toFixed(1) : '0');
+    set('preview-fv-pp', totalPersonas.toLocaleString());
+    set('preview-fv-dd', avgDays);
+    set('preview-fv-total', totalVisits.toLocaleString());
 
     // Coverage with color
     const covEl = qs('preview-coverage');

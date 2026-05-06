@@ -158,7 +158,7 @@ async function getById(id, { userId, isGlobal }) {
  * Editor UI can render polylines on the map and let the manager iterate
  * before committing.
  */
-async function previewFull({ ownerUserId, scopeUserIds, granularity = 'weekly', periodStart, periodEnd, paretoFilter, branchId, name, routeStartHHMM }) {
+async function previewFull({ ownerUserId, scopeUserIds, granularity = 'weekly', periodStart, periodEnd, paretoFilter, branchId, name, routeStartHHMM, actorIsGlobal = false }) {
   return planGenerator.previewGenerate({
     ownerUserId,
     scopeUserIds,
@@ -169,6 +169,7 @@ async function previewFull({ ownerUserId, scopeUserIds, granularity = 'weekly', 
     branchId,
     name,
     routeStartHHMM,
+    actorIsGlobal,
   });
 }
 

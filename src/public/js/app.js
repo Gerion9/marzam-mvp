@@ -458,7 +458,21 @@
   // ──────────────────────────────────────────────────────────
   // Tab switching
   // ──────────────────────────────────────────────────────────
+  /**
+   * Limpia el estado dejado por la vista anterior antes de pintar la
+   * nueva. Sin esto, el SSE de Live Ops sigue reconectando, los layers
+   * del mapa de Post-mortem se quedan superpuestos y la capa de
+   * farmacias permanece visible en vistas donde no aplica — todo eso
+   * fue lo que el QA reportó como "old content visible during navigation".
+   */
+  function cleanupActiveView() {
+    try { window.MarzamViews?.cleanupLiveOps?.(); } catch (e) { console.warn('[app] cleanupLiveOps failed', e); }
+    try { window.MarzamViews?.cleanupPostMortem?.(); } catch (e) { console.warn('[app] cleanupPostMortem failed', e); }
+    try { window.MarzamPharmaciesMap?.hide?.(); } catch (e) { console.warn('[app] hide pharmacies map failed', e); }
+  }
+
   async function selectTab(tabId) {
+    cleanupActiveView();
     APP.activeTab = tabId;
     document.querySelectorAll('.nav-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tabId));
     setPanelTitle(tabId);
@@ -674,9 +688,13 @@
   window.MarzamToast = {
     show(text, kind = 'info') {
       const t = document.createElement('div');
+      // 'danger' es alias histórico de 'error' (rojo). 'warning' es ámbar:
+      // sale en lugar de gris cuando algo no es un fallo pero tampoco es éxito
+      // (ej. "Sin visitas generadas — ajusta y reintenta").
       t.className = `fixed top-20 left-1/2 -translate-x-1/2 z-[300] px-4 py-2.5 rounded-xl shadow-2xl font-semibold text-sm backdrop-blur-md ${
         kind === 'success' ? 'bg-emerald-500/95 text-white' :
-        kind === 'error' ? 'bg-rose-500/95 text-white' :
+        (kind === 'error' || kind === 'danger') ? 'bg-rose-500/95 text-white' :
+        kind === 'warning' ? 'bg-amber-500/95 text-white' :
         'bg-slate-800/95 text-white'
       }`;
       t.textContent = text;

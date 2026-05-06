@@ -217,10 +217,14 @@
           </div>
         </div>
 
-        <!-- Connection status -->
-        <div class="flex items-center gap-2 text-[11px]" :class="connected ? 'text-emerald-600' : 'text-amber-600'">
-          <span class="inline-block w-2 h-2 rounded-full" :class="connected ? 'bg-emerald-500 mz-pulse-active' : 'bg-amber-500'"></span>
-          <span x-text="connected ? 'Conectado en vivo' : 'Reconectando…'"></span>
+        <!-- Connection status — en demo el SSE no existe, así que en vez
+             de "Reconectando…" perpetuo (que se lee como bug), mostramos
+             que el modo demo no tiene tracking real. -->
+        <div class="flex items-center gap-2 text-[11px]"
+             :class="isDemo ? 'text-violet-600' : (connected ? 'text-emerald-600' : 'text-amber-600')">
+          <span class="inline-block w-2 h-2 rounded-full"
+                :class="isDemo ? 'bg-violet-500' : (connected ? 'bg-emerald-500 mz-pulse-active' : 'bg-amber-500')"></span>
+          <span x-text="isDemo ? 'Modo demo · sin tracking real' : (connected ? 'Conectado en vivo' : 'Reconectando…')"></span>
         </div>
 
         <!-- Branch filter -->
@@ -291,6 +295,7 @@
       events: [],
       kpis: { active: 0, idle: 0, alerts: 0 },
       connected: false,
+      isDemo: !!(window.APP && window.APP.isDemo),
       _store: makeStore(),
       // Filter dropdowns persisted in localStorage so jumping back to live-ops
       // remembers the selection.
@@ -314,6 +319,10 @@
           }
           this.branches = [...set].map((s) => JSON.parse(s));
         } catch { /* not critical */ }
+        // En demo no hay backend SSE — abrir el stream sólo dispararía
+        // backoff exponencial sin tope. Mejor mostrar la pill "Modo demo
+        // · sin tracking real" y dejar el feed vacío con su empty state.
+        if (this.isDemo) return;
         _activeStream = openStream(token, ({ type, data }) => {
           this.connected = true;
           if (type === 'position') {
@@ -385,6 +394,18 @@
   });
   if (window.Alpine?.data) window.Alpine.data('liveOps', liveOpsComponent);
 
+  // Cleanup expuesto al app shell para que `selectTab` cierre el SSE y
+  // limpie las capas del mapa cuando el usuario sale de "En vivo" hacia
+  // cualquier otra vista. Sin esto, el EventSource sigue reconectando
+  // y los marcadores live se quedan superpuestos sobre la siguiente vista
+  // (raíz del bug "old content visible during navigation" del QA report).
+  function cleanupLiveOps() {
+    if (_activeStream) { try { _activeStream.close(); } catch { /* noop */ } _activeStream = null; }
+    if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
+    clearLayers();
+  }
+
   window.MarzamViews = window.MarzamViews || {};
   window.MarzamViews.renderLiveOps = renderLiveOps;
+  window.MarzamViews.cleanupLiveOps = cleanupLiveOps;
 })();

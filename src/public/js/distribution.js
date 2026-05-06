@@ -74,13 +74,21 @@
 
     container.innerHTML = `
       <div>
+        <div class="plan-substep-header" style="margin-bottom: 1rem;">
+          <span class="plan-substep-badge plan-substep-badge--accent" style="background: linear-gradient(135deg,#dcfce7 0%,#bbf7d0 100%); color:#15803d;">3</span>
+          <div class="plan-substep-text">
+            <h3 class="plan-substep-title">Seguir el mes en curso</h3>
+            <p class="plan-substep-hint">Cómo va cada persona contra su meta. Editas el target inline; el avance se calcula del padrón de visitas hechas.</p>
+          </div>
+        </div>
+
         <div class="bg-gradient-to-br from-slate-50 to-white border border-slate-200 rounded-2xl p-3 mb-3">
           <div class="flex items-start gap-2">
             <span class="text-base leading-none mt-0.5">🎯</span>
             <p class="text-[11px] text-slate-600 leading-snug">
               <b class="text-slate-800">Meta del período por subordinado.</b>
               Es la <b>vara de cumplimiento</b>: cuántas <b>nuevas</b> y cuántos <b>clientes</b> esperas
-              de cada uno este mes.  El plan generado en <b>Cuotas</b> ya distribuye visitas día a día;
+              de cada uno este mes. El plan generado en <b>Configurar</b> ya distribuye visitas día a día;
               estas metas son por las que evalúas el resultado.
             </p>
           </div>

@@ -23,6 +23,12 @@
     });
   }
 
+  // Expuesto para que el app shell limpie polylines plan/real al salir
+  // del paso "Cerrar plan". Si no se limpia, los plot quedan persistentes
+  // sobre el mapa de las otras vistas (Mis rutas, Mi equipo, etc.).
+  window.MarzamViews = window.MarzamViews || {};
+  window.MarzamViews.cleanupPostMortem = clearLayers;
+
   function decodePolyline(str, precision = 5) {
     if (!str) return [];
     const factor = 10 ** precision;
@@ -112,6 +118,15 @@
     clearLayers();
     body.innerHTML = `
       <div x-data="postMortem()" x-init="init()" class="space-y-3">
+        <!-- Header del paso 4 — Cerrar plan -->
+        <div class="plan-substep-header" style="margin-bottom: 0.85rem;">
+          <span class="plan-substep-badge plan-substep-badge--accent" style="background: linear-gradient(135deg,#fae8ff 0%,#f5d0fe 100%); color:#7c3aed;">4</span>
+          <div class="plan-substep-text">
+            <h3 class="plan-substep-title">Cerrar plan: qué pasó vs qué se planeó</h3>
+            <p class="plan-substep-hint">Solo planes ya cerrados aparecen aquí. Selecciona uno para ver el ranking, varianza y replay GPS minuto a minuto.</p>
+          </div>
+        </div>
+
         <!-- Filtro Entidad Federativa: corta el ranking per-rep al subset
              que sirve a la EF activa. Heredado de window.MarzamPlanZone. -->
         <div class="bg-white rounded-2xl border border-slate-100 p-3 text-xs">

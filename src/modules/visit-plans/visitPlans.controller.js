@@ -86,6 +86,7 @@ async function create(req, res, next) {
       paretoFilter,
       branchId,
       name,
+      actorIsGlobal: !!req.user.is_global,
     });
     res.status(201).json(result);
   } catch (err) { next(err); }
@@ -150,6 +151,11 @@ async function previewFull(req, res, next) {
       branchId,
       name,
       routeStartHHMM,
+      // is_global del JWT: bypasses canActorManage en planGenerator. Necesario
+      // para directores con UUID virtual del access directory que no tienen
+      // row en `users` table — el check de scope ya se hizo en `authorize` y
+      // los usuarios no-global tampoco pasarían el rbac de previewFull.
+      actorIsGlobal: !!req.user.is_global,
     });
     res.json(result);
   } catch (err) { next(err); }
@@ -185,6 +191,7 @@ async function costEstimate(req, res, next) {
       paretoFilter,
       branchId,
       routeStartHHMM,
+      actorIsGlobal: !!req.user.is_global,
     });
     res.json(result);
   } catch (err) { next(err); }

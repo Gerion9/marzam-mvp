@@ -30,6 +30,24 @@
 
   function colorFor(idx) { return REP_COLORS[idx % REP_COLORS.length]; }
 
+  // Helper: ¿hay al menos UN target > 0 en el snapshot?
+  // Estructura per-day desde mig 074: { userId: { dayIso: { marzam: {A,B,C}, prospecto: {A,B,C,D} } } }.
+  // Antes había un bug que iteraba un nivel arriba y siempre devolvía false,
+  // disparando "sin metas de visita" aunque la matriz 1.B sí tuviera valores.
+  function _anyTargetInSnap(snap) {
+    if (!snap || typeof snap !== 'object') return false;
+    for (const byDay of Object.values(snap)) {
+      if (!byDay || typeof byDay !== 'object') continue;
+      for (const t of Object.values(byDay)) {
+        const m = t?.marzam || {};
+        const p = t?.prospecto || {};
+        if ((m.A || 0) + (m.B || 0) + (m.C || 0) > 0) return true;
+        if ((p.A || 0) + (p.B || 0) + (p.C || 0) + (p.D || 0) > 0) return true;
+      }
+    }
+    return false;
+  }
+
   function decodePolyline(str, precision = 5) {
     if (!str) return [];
     const factor = 10 ** precision;
@@ -180,6 +198,19 @@
   }
 
   function fmtMin(min) { if (!min || isNaN(min)) return '0m'; const h = Math.floor(min/60); const m = min%60; return h ? `${h}h ${m}m` : `${m}m`; }
+  // Total time across all reps formatted for the hero card. Days
+  // assumption: if > 8h*60min we surface "X días-rep equivalentes" as
+  // a secondary read so the manager sees "no es 50h corridas, son 6
+  // reps × 8h aprox".
+  function fmtTimeTotal(min) {
+    if (!min || isNaN(min)) return '0 min';
+    const h = Math.floor(min / 60);
+    const m = Math.round(min % 60);
+    if (h < 1) return `${m} min`;
+    if (h < 24) return `${h}h ${m}m`;
+    const d = (h / 8).toFixed(1);
+    return `${h}h (~${d} jornadas-rep)`;
+  }
   function initials(name) { return (name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0].toUpperCase()).join(''); }
 
   /**
@@ -277,6 +308,61 @@
   async function renderPlanEditor(body) {
     body.innerHTML = `
       <div x-data="planEditor()" x-init="init()" class="space-y-3">
+        <!-- Header del paso 2 -->
+        <div class="plan-substep-header" style="margin-bottom: 0.5rem;">
+          <span class="plan-substep-badge" style="background:#fed7aa; color:#c2410c;">2</span>
+          <div class="plan-substep-text">
+            <h3 class="plan-substep-title">Generar plan: asignar farmacias y fechas</h3>
+            <p class="plan-substep-hint">Selecciona el equipo, define el período y revisa la previsualización en el mapa antes de publicar.</p>
+          </div>
+        </div>
+
+        <!-- ── Banda 1: Antes de generar (pre-flight checklist) ──── -->
+        <div class="plan-band plan-band--preflight">
+          <div class="plan-band__header">
+            <span class="plan-band__num">1</span>
+            <div>
+              <div class="plan-band__title">Antes de generar</div>
+              <div class="plan-band__hint">Revisa que todo esté listo. Las advertencias en ámbar no bloquean, las rojas sí.</div>
+            </div>
+          </div>
+          <ul class="plan-preflight">
+            <li class="plan-preflight__item" :class="zoneFilter ? 'is-ok' : 'is-warn'">
+              <span class="plan-preflight__check" x-text="zoneFilter ? '✓' : '○'"></span>
+              <span class="plan-preflight__text">
+                <b>Zona</b>: <span x-text="zoneFilter || 'Toda la sucursal (sin filtro)'"></span>
+              </span>
+            </li>
+            <li class="plan-preflight__item" :class="(periodStart && periodEnd) ? 'is-ok' : 'is-bad'">
+              <span class="plan-preflight__check" x-text="(periodStart && periodEnd) ? '✓' : '✗'"></span>
+              <span class="plan-preflight__text">
+                <b>Período</b>: <span x-text="(periodStart && periodEnd) ? (periodStart + ' → ' + periodEnd) : 'Falta seleccionar fechas'"></span>
+              </span>
+            </li>
+            <li class="plan-preflight__item" :class="scopeUserIds.length > 0 ? 'is-ok' : 'is-bad'">
+              <span class="plan-preflight__check" x-text="scopeUserIds.length > 0 ? '✓' : '✗'"></span>
+              <span class="plan-preflight__text">
+                <b>Equipo</b>: <span x-text="scopeUserIds.length > 0 ? (scopeUserIds.length + ' rep(s) seleccionado(s)') : 'Selecciona al menos un rep abajo'"></span>
+              </span>
+            </li>
+            <li class="plan-preflight__item" :class="repsWithoutHomeCount > 0 ? 'is-warn' : 'is-ok'" x-show="scopeUserIds.length > 0">
+              <span class="plan-preflight__check" x-text="repsWithoutHomeCount > 0 ? '⚠' : '✓'"></span>
+              <span class="plan-preflight__text">
+                <b>Domicilio rep</b>: <span x-text="repsWithoutHomeCount > 0 ? (repsWithoutHomeCount + ' sin domicilio · usaré primer GPS') : 'Todos con domicilio guardado'"></span>
+              </span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- ── Banda 2: Configuración + Generar ──── -->
+        <div class="plan-band plan-band--config">
+          <div class="plan-band__header">
+            <span class="plan-band__num">2</span>
+            <div>
+              <div class="plan-band__title">Configurar y generar</div>
+              <div class="plan-band__hint">Ajusta período y selección, luego presiona Generar para ver la previsualización.</div>
+            </div>
+          </div>
         <!-- Configuration -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
           <div class="grid grid-cols-2 gap-3 text-xs">
@@ -528,28 +614,50 @@
                 <span x-text="phase"></span>
               </span>
             </button>
-            <button @click="publish()" :disabled="!preview || publishing"
-              class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2.5 px-4 rounded-xl shadow disabled:opacity-40">
-              <span x-show="!publishing">Publicar</span>
-              <span x-show="publishing">Publicando…</span>
-            </button>
           </div>
         </div>
+        </div><!-- end plan-band--config -->
 
-        <!-- Top-level metrics -->
+        <!-- ── Banda 3: Publicar (solo cuando hay preview) ──── -->
         <template x-if="preview">
-          <div class="grid grid-cols-3 gap-2 text-center text-xs">
-            <div class="bg-white rounded-xl p-2 border border-slate-100">
-              <div class="text-slate-400 font-semibold uppercase tracking-wide text-[10px]">Visitas</div>
-              <div class="text-lg font-black text-slate-800" x-text="preview.metrics?.assignments_count || 0"></div>
+          <div class="plan-band plan-band--publish">
+            <div class="plan-band__header">
+              <span class="plan-band__num">3</span>
+              <div>
+                <div class="plan-band__title">Revisar y publicar</div>
+                <div class="plan-band__hint">Antes de publicar, revisa el resumen abajo. Una vez publicado los reps lo verán en su app.</div>
+              </div>
             </div>
-            <div class="bg-white rounded-xl p-2 border border-slate-100">
-              <div class="text-slate-400 font-semibold uppercase tracking-wide text-[10px]">Min ruta</div>
-              <div class="text-lg font-black text-slate-800" x-text="(preview.metrics?.total_drive_minutes||0) + (preview.metrics?.total_service_minutes||0)"></div>
-            </div>
-            <div class="bg-white rounded-xl p-2 border border-slate-100">
-              <div class="text-slate-400 font-semibold uppercase tracking-wide text-[10px]">⚠ Caution</div>
-              <div class="text-lg font-black text-rose-600" x-text="preview.metrics?.caution_arcs || 0"></div>
+
+            <!-- Hero card de métricas (antes 3 KPIs minúsculos) -->
+            <div class="plan-hero">
+              <div class="plan-hero__main">
+                <div class="plan-hero__num" x-text="(preview.metrics?.assignments_count || 0).toLocaleString()"></div>
+                <div class="plan-hero__label">visitas planificadas</div>
+              </div>
+              <div class="plan-hero__grid">
+                <div>
+                  <div class="plan-hero__sub" x-text="fmtTimeTotal((preview.metrics?.total_drive_minutes||0) + (preview.metrics?.total_service_minutes||0))"></div>
+                  <div class="plan-hero__sublabel">tiempo total estimado</div>
+                </div>
+                <div>
+                  <div class="plan-hero__sub" x-text="(preview.metrics?.unique_pharmacies || preview.metrics?.assignments_count || 0)"></div>
+                  <div class="plan-hero__sublabel">farmacias distintas</div>
+                </div>
+                <div>
+                  <div class="plan-hero__sub" :class="(preview.metrics?.caution_arcs || 0) > 0 ? 'text-rose-600' : ''" x-text="preview.metrics?.caution_arcs || 0"></div>
+                  <div class="plan-hero__sublabel">arcos con cautela</div>
+                </div>
+              </div>
+              <button @click="publish()" :disabled="!preview || publishing"
+                class="plan-hero__publish">
+                <span x-show="!publishing">Publicar plan ahora</span>
+                <span x-show="publishing" class="flex items-center justify-center gap-2">
+                  <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+                  Publicando…
+                </span>
+              </button>
+              <p class="plan-hero__caveat">Una vez publicado, los reps reciben sus rutas en la app móvil.</p>
             </div>
           </div>
         </template>
@@ -876,6 +984,22 @@
             });
             this.hierarchy.ungrouped_supervisors.forEach((s) => { this.expandedSupervisors[s.id] = true; });
           }
+
+          // Auto-selección defensiva: si llegamos al editor sin scope precargado
+          // (típico al venir del sticky CTA "Listo · Generar plan ahora" del
+          // paso 1), pre-seleccionamos todos los reps válidos de la zona activa.
+          // Esto refleja la intención natural del usuario ("configuré para esta
+          // sucursal → quiero generar plan para esta sucursal") y evita que dé
+          // click a Generar con scope vacío y reciba "alcance llegó vacío".
+          if (this.scopeUserIds.length === 0 && this.teamUsers.length > 0) {
+            this.selectAll();
+            if (this.scopeUserIds.length > 0) {
+              console.info('[plan-editor] auto-select reps de zona:', {
+                zone: this.zoneFilter || '(toda la sucursal)',
+                count: this.scopeUserIds.length,
+              });
+            }
+          }
         } catch (err) {
           console.warn('[plan-editor] init failed', err);
         } finally {
@@ -1000,18 +1124,87 @@
           && this.periodStart && this.periodEnd && this.periodStart <= this.periodEnd;
       },
       hasTargets() {
-        const snap = this.preview?.plan?.config?.targets_snapshot || {};
-        return Object.values(snap).some(
-          (t) => ['A', 'B', 'C'].some((p) => (t?.marzam?.[p] || 0) > 0)
-              || ['A', 'B', 'C', 'D'].some((p) => (t?.prospecto?.[p] || 0) > 0),
-        );
+        return _anyTargetInSnap(this.preview?.plan?.config?.targets_snapshot);
       },
       hasClients() {
         const counts = this.preview?.plan?.config?.candidate_counts || {};
         return (counts.A || 0) + (counts.B || 0) + (counts.C || 0) + (counts.prospects || 0) > 0;
       },
       async generatePreview() {
+        // Hard-guard reactivo: aunque el botón está :disabled cuando el scope
+        // está vacío, Alpine.js puede tener race conditions si el usuario hace
+        // click antes que termine de cargar teamUsers o si la lista cambió por
+        // un cambio de zona. En lugar de fallar silenciosamente al backend con
+        // "el alcance llegó vacío", intentamos auto-seleccionar reps de zona.
+        if (!Array.isArray(this.scopeUserIds) || !this.scopeUserIds.length) {
+          if (this.teamUsers.length > 0) {
+            this.selectAll();
+          }
+          if (!this.scopeUserIds.length) {
+            window.MarzamToast?.show(
+              `Selecciona al menos un rep abajo · no hay candidatos en ${this.zoneFilter || 'la sucursal actual'}`,
+              'warning'
+            );
+            return;
+          }
+          window.MarzamToast?.show(
+            `Pre-seleccionados ${this.scopeUserIds.length} rep(s) de ${this.zoneFilter || 'toda la sucursal'} · puedes ajustar abajo o regenerar`,
+            'info'
+          );
+        }
         if (!this.canGenerate()) return;
+
+        // Pre-flight: validar que los IDs sean UUIDs reales antes de pegar al
+        // backend. En MODO DEMO el endpoint /team/descendants devuelve usuarios
+        // sintéticos (u-rep-001, u-rep-real-N, code:UEA01) que NO existen en
+        // la tabla `users` de la BD real. Pegarle al backend con esos IDs es
+        // un round-trip inútil que termina en "0 resolved → 0 assignments".
+        // En vez de eso, detectamos el caso aquí y damos un diagnóstico claro
+        // (incluido si APP está en modo demo, para confirmar el síntoma).
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const realUuidIds = this.scopeUserIds.filter((id) => UUID_RE.test(String(id)));
+        const syntheticIds = this.scopeUserIds.filter((id) => !UUID_RE.test(String(id)));
+        if (realUuidIds.length === 0 && syntheticIds.length > 0) {
+          const isDemo = !!window.APP?.isDemo
+            || localStorage.getItem('marzam_demo') === '1';
+          console.warn('[plan-editor] scope sin UUIDs reales — abortando POST al backend:', {
+            isDemo,
+            sample_ids: syntheticIds.slice(0, 5),
+            total_synthetic: syntheticIds.length,
+            user: window.APP?.user ? {
+              id: window.APP.user.id,
+              email: window.APP.user.email,
+              role: window.APP.user.role,
+              data_scope: window.APP.user.data_scope,
+            } : null,
+          });
+          if (isDemo) {
+            window.MarzamToast?.show(
+              `Modo demo: el generador de plan necesita usuarios reales (UUIDs) en BD. Los ${syntheticIds.length} reps que ves son sintéticos del demo y no se pueden enviar al solver. Para probar el plan, usa una cuenta no-demo.`,
+              'danger'
+            );
+          } else {
+            window.MarzamToast?.show(
+              `Los ${syntheticIds.length} reps seleccionados no tienen UUID en BD (probablemente están solo en marzam_clients por código). Pídele a IT que dé de alta a estos reps en la tabla users para poder generar plan.`,
+              'danger'
+            );
+          }
+          return;
+        }
+        if (syntheticIds.length > 0 && realUuidIds.length > 0) {
+          // Mezclados: avisar pero seguir con los reales.
+          console.info('[plan-editor] scope mezclado — usando solo IDs UUID:', {
+            real: realUuidIds.length,
+            synthetic: syntheticIds.length,
+            synthetic_sample: syntheticIds.slice(0, 3),
+          });
+          window.MarzamToast?.show(
+            `Solo se enviarán ${realUuidIds.length}/${this.scopeUserIds.length} reps al backend (los demás son sintéticos sin UUID en BD)`,
+            'warning'
+          );
+          this.scopeUserIds = realUuidIds;
+        }
+
         this.loading = true;
         this.phase = 'Resolviendo metas…';
         try {
@@ -1056,17 +1249,78 @@
           if (!assignments.length) {
             const snap = result.plan?.config?.targets_snapshot || {};
             const counts = result.plan?.config?.candidate_counts || {};
-            const anyTarget = Object.values(snap).some(
-              (t) => ['A', 'B', 'C'].some((p) => (t?.marzam?.[p] || 0) > 0)
-                  || ['A', 'B', 'C', 'D'].some((p) => (t?.prospecto?.[p] || 0) > 0),
-            );
-            const anyClient = (counts.A || 0) + (counts.B || 0) + (counts.C || 0) + (counts.prospects || 0) > 0;
-            const hint = !anyTarget
-              ? ' · sin metas de visita — configúralas en la pestaña Cuotas'
-              : !anyClient
-                ? ' · sin clientes/prospectos disponibles para el período'
-                : '';
-            window.MarzamToast?.show(`Sin visitas generadas${hint}`, 'danger');
+            const unassigned = result.plan?.config?.unassigned || [];
+            // PR: scope_resolution viene del backend (planGenerator) — distingue
+            // "el frontend no mandó IDs" de "el backend no encontró usuarios
+            // activos para esos IDs en `users` (modo demo / IDs sintéticos /
+            // usuarios inactivos)". Sin esto el toast era ambiguo.
+            const scopeRes = result.plan?.config?.scope_resolution || {};
+            const requestedCount = scopeRes.requested_count ?? (this.scopeUserIds?.length || 0);
+            const resolvedCount = scopeRes.resolved_count ?? Object.keys(snap).length;
+            const unresolvedSample = Array.isArray(scopeRes.unresolved_sample) ? scopeRes.unresolved_sample : [];
+
+            // Diagnóstico granular: no nos quedamos con un boolean. Contamos
+            // cuántos usuarios del scope tienen al menos un target > 0 PARA
+            // SU PROPIO ROL. Esto distingue:
+            //   • "scope no se resolvió en BD" → IDs sintéticos / inactivos
+            //   • "matriz vacía"               → ningún user tiene targets activos
+            //   • "matriz OK pero rol-mismatch"→ la matriz tiene cosas pero
+            //     no para los roles del scope
+            //   • "matriz OK + roles OK"       → problema de farmacias o ventana
+            const totalUsers = Object.keys(snap).length;
+            let usersWithTargets = 0;
+            const perUserDetail = {};
+            for (const [uid, byDay] of Object.entries(snap)) {
+              let userHas = false;
+              for (const t of Object.values(byDay || {})) {
+                const m = t?.marzam || {};
+                const p = t?.prospecto || {};
+                const sumM = (m.A || 0) + (m.B || 0) + (m.C || 0);
+                const sumP = (p.A || 0) + (p.B || 0) + (p.C || 0) + (p.D || 0);
+                if (sumM + sumP > 0) { userHas = true; break; }
+              }
+              perUserDetail[uid] = userHas;
+              if (userHas) usersWithTargets += 1;
+            }
+            const anyTarget = usersWithTargets > 0;
+            const totalClients = (counts.A || 0) + (counts.B || 0) + (counts.C || 0);
+            const totalProspects = counts.prospects || 0;
+            const anyClient = totalClients + totalProspects > 0;
+
+            // Diagnóstico completo a consola — pega esto si necesitas ayuda.
+            console.warn('[plan-editor] Sin visitas generadas — diagnóstico:', {
+              scope_sent_from_frontend: this.scopeUserIds?.length || 0,
+              scope_resolution_backend: { requestedCount, resolvedCount, unresolvedSample },
+              snapshot_users: totalUsers,
+              users_with_targets: usersWithTargets,
+              candidate_counts: counts,
+              unassigned_count: Array.isArray(unassigned) ? unassigned.length : 0,
+              per_user_has_targets: perUserDetail,
+              targets_snapshot: snap,
+              first_scope_id_sample: this.scopeUserIds?.slice(0, 3) || [],
+            });
+
+            let hint; let toastKind = 'warning';
+            if (requestedCount === 0) {
+              hint = ' · el frontend no envió IDs — selecciona al menos un rep en la lista de abajo';
+            } else if (resolvedCount === 0) {
+              // Caso CRÍTICO: el frontend mandó IDs pero el backend no encontró
+              // ningún usuario activo en la tabla `users`. Típico del modo demo
+              // donde los reps son sintéticos y no están persistidos.
+              hint = ` · enviaste ${requestedCount} ID(s) pero la BD no encontró ninguno (probablemente son usuarios sintéticos del demo o están inactivos). Muestra: ${unresolvedSample.slice(0, 2).join(', ')}…`;
+              toastKind = 'danger';
+            } else if (resolvedCount < requestedCount) {
+              // Algunos sí, otros no. Avisamos pero seguimos diagnosticando.
+              const lost = requestedCount - resolvedCount;
+              hint = ` · solo ${resolvedCount}/${requestedCount} usuarios existen activos en BD (${lost} no se encontraron) y ninguno generó visitas — revisa que tus reps estén activos`;
+            } else if (!anyTarget) {
+              hint = ` · 0 de ${totalUsers} usuarios del alcance tienen metas configuradas — ve a Plan & Metas → 1.B Tu cuota diaria y pon celdas > 0 para los roles que estás incluyendo`;
+            } else if (!anyClient) {
+              hint = ` · ${usersWithTargets}/${totalUsers} usuarios sí tienen metas, pero 0 farmacias/prospectos elegibles en el período (Marzam=${totalClients}, prospectos=${totalProspects}) — verifica el padrón o amplía el período`;
+            } else {
+              hint = ` · ${usersWithTargets}/${totalUsers} usuarios con metas, ${totalClients + totalProspects} farmacias candidatas, pero el solver no asignó nada — revisa que los reps tengan home_lat o que el período tenga días laborales`;
+            }
+            window.MarzamToast?.show(`Sin visitas generadas${hint}`, toastKind);
           } else {
             window.MarzamToast?.show(`Plan tentativo listo · revisa el mapa${costNote}`, 'success');
           }
@@ -1109,6 +1363,7 @@
       repColor(idx) { return colorFor(idx); },
       initials,
       fmtMin,
+      fmtTimeTotal,
       toggleExpand(userId) { this.expanded = { ...this.expanded, [userId]: !this.expanded[userId] }; },
       onDragStop(ev, assignment) {
         ev.dataTransfer.setData('text/plain', JSON.stringify({ key: assignment.__key, id: assignment.id, src: assignment.visitor_user_id }));

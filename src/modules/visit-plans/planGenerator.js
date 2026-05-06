@@ -1211,6 +1211,15 @@ async function buildPlan(args, trx, mode) {
     branchId = null,
     name = null,
     routeStartHHMM = DEFAULT_ROUTE_START_HHMM,
+    // is_global del JWT del actor. Cuando es true (admin / director_sucursal,
+    // ver constants/roles.js#GLOBAL_ROLES), saltamos el check fila-por-fila de
+    // canActorManage. Esto se alinea con el patrón usado en el resto del
+    // codebase (visitSessions, analytics, alerts) donde `is_global` siempre
+    // bypassea el scope check. Sin esto, un director con id virtual (UUID v5
+    // del access directory, sin row en `users`) no puede planear NADA porque
+    // canActorManage() no encuentra al actor en BD y devuelve false para
+    // todos los targets.
+    actorIsGlobal = false,
   } = args;
 
   if (!Array.isArray(scopeUserIds) || !scopeUserIds.length) {
@@ -1223,11 +1232,15 @@ async function buildPlan(args, trx, mode) {
   }
 
   // Authorization — every scope_user must be the owner himself OR a managee.
-  for (const sid of scopeUserIds) {
-    if (sid === ownerUserId) continue;
-    if (!await canActorManage(ownerUserId, sid)) {
-      const err = new Error(`User ${ownerUserId} cannot generate plan for ${sid}`);
-      err.status = 403; throw err;
+  // Global actors (admin / director_sucursal) bypass the per-row check, igual
+  // que en visit-sessions / analytics / alerts (ver header del campo).
+  if (!actorIsGlobal) {
+    for (const sid of scopeUserIds) {
+      if (sid === ownerUserId) continue;
+      if (!await canActorManage(ownerUserId, sid)) {
+        const err = new Error(`User ${ownerUserId} cannot generate plan for ${sid}`);
+        err.status = 403; throw err;
+      }
     }
   }
 
@@ -1361,6 +1374,17 @@ async function buildPlan(args, trx, mode) {
     mode, coeffsByUserId, breakRulesByUserId, paretoOverrides,
   });
 
+  // Diagnóstico de resolución de scope: el frontend manda IDs y el backend
+  // los normaliza con accessDirectory.toCanonicalId, luego whereIn sobre users
+  // filtra por is_active. Si los IDs canónicos no existen en `users` o están
+  // inactivos, scopeUsers queda vacío y el plan no produce assignments. Sin
+  // este metadata el toast del editor no podía distinguir "scope llegó vacío"
+  // de "scope no se resolvió en BD".
+  const resolvedUserIds = new Set(scopeUsers.map((u) => u.id));
+  const unresolvedIds = (Array.isArray(scopeUserIds) ? scopeUserIds : [])
+    .filter((id) => !resolvedUserIds.has(id))
+    .slice(0, 10); // cap para no inflar response
+
   const config = {
     targets_snapshot: targets,
     working_days: days.length,
@@ -1377,6 +1401,11 @@ async function buildPlan(args, trx, mode) {
       ...droppedProspects,
     ],
     unassigned,
+    scope_resolution: {
+      requested_count: Array.isArray(scopeUserIds) ? scopeUserIds.length : 0,
+      resolved_count: scopeUsers.length,
+      unresolved_sample: unresolvedIds,
+    },
   };
   // Snapshot coefficients per-user so historical reports use the values that
   // were active at plan time (cost_coefficients edits don't retroactively change

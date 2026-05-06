@@ -199,6 +199,17 @@
   /* Right column: ensure tables expand to full available width */
   .cuotas-right { min-width: 0; }
   .cuotas-right table { width: 100%; }
+
+  /* Left column: also allow shrinking. Sin esto, un <select> con un
+     option largo (ej. "Toda la sucursal · 140 personas") forzaría a la
+     columna a crecer más allá de los 300px del track, montándose sobre
+     la card "Tu cuota diaria" de la derecha. */
+  .cuotas-left { min-width: 0; }
+  .cuotas-left #capacity-zone {
+    min-width: 0;
+    max-width: 100%;
+    text-overflow: ellipsis;
+  }
 }
 
 /* ── Analytics — filters sidebar + content — 2-col at ≥720px ─ */
@@ -248,4 +259,581 @@
 /* Hide total column on wide (it's shown only on mobile) */
 @container panelbody (min-width: 561px) {
   .by-state-nuevas-total  { display: none !important; }
+}
+
+/* =============================================================
+   Plan & Metas — Stepper, sub-steps, sub-toggle, sticky CTA
+   El stepper de 4 pasos PDCA reemplaza la pill bar plana de
+   sub-tabs.  Sub-pasos numerados (1.A/1.B/1.C) dan jerarquía
+   intra-paso.  Sub-toggle conmuta dentro del paso 1.
+   ============================================================= */
+
+/* ── Stepper de pasos ─────────────────────────────────────────── */
+.plan-stepper {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0.5rem 0.25rem;
+  margin-bottom: 1rem;
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.plan-stepper::-webkit-scrollbar { display: none; }
+
+.plan-step {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 100px;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.75rem;
+  background: transparent;
+  border: 0;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  transition: background 0.18s ease, transform 0.18s ease;
+  text-align: left;
+}
+.plan-step:hover { background: rgba(229,115,10,0.06); }
+.plan-step:focus-visible {
+  outline: 2px solid #e5730a;
+  outline-offset: -2px;
+}
+
+.plan-step__num {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  border: 2px solid transparent;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.plan-step__label {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+.plan-step__title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #475569;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.plan-step__hint {
+  font-size: 9px;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-step__connector {
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  width: 12px;
+  height: 2px;
+  background: #cbd5e1;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+/* Active state — orange focal */
+.plan-step--active .plan-step__num {
+  background: #e5730a;
+  color: #ffffff;
+  border-color: #e5730a;
+  box-shadow: 0 4px 10px -2px rgba(229,115,10,0.4);
+}
+.plan-step--active .plan-step__title { color: #1b365d; }
+.plan-step--active .plan-step__hint  { color: #e5730a; }
+.plan-step--active {
+  background: rgba(229,115,10,0.08);
+}
+
+/* Past state — green check (numContent = '✓' viene desde JS) */
+.plan-step--past .plan-step__num {
+  background: #ecfdf5;
+  color: #10b981;
+  border-color: #a7f3d0;
+  font-size: 14px;
+}
+.plan-step--past .plan-step__title { color: #475569; }
+
+/* Stepper en mobile — hint se oculta para no romper layout */
+@container panelbody (max-width: 560px) {
+  .plan-step { min-width: 84px; padding: 0.5rem 0.55rem; gap: 0.4rem; }
+  .plan-step__hint { display: none; }
+  .plan-step__num { width: 24px; height: 24px; font-size: 11px; }
+  .plan-step__title { font-size: 11px; }
+}
+
+/* ── Tooltip card del stepper (group-hover) ──────────────────── */
+.plan-step .group-hover\:block,
+.plan-step .group-focus\:block { /* fallback if Tailwind not present */ }
+
+/* ── Sub-toggle dentro del paso 1 (Cuotas ↔ Ajustes) ───────── */
+.plan-substoggle {
+  display: flex;
+  gap: 0.5rem;
+  background: #f1f5f9;
+  border-radius: 0.875rem;
+  padding: 0.25rem;
+  margin-bottom: 1rem;
+}
+.plan-substoggle__btn {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.55rem 0.75rem;
+  background: transparent;
+  border: 0;
+  border-radius: 0.625rem;
+  cursor: pointer;
+  transition: background 0.18s ease, box-shadow 0.18s ease;
+  line-height: 1.1;
+}
+.plan-substoggle__btn:hover { background: rgba(255,255,255,0.6); }
+.plan-substoggle__btn.active {
+  background: #ffffff;
+  box-shadow: 0 2px 8px -2px rgba(15,23,42,0.12);
+}
+.plan-substoggle__title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #1b365d;
+  letter-spacing: -0.01em;
+}
+.plan-substoggle__hint {
+  font-size: 10px;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+.plan-substoggle__btn.active .plan-substoggle__title { color: #e5730a; }
+
+/* ── Headers numerados intra-paso (1.A · Tu equipo, 1.B ...) ── */
+.plan-substep-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin: 0.25rem 0 0.85rem 0.15rem;
+}
+.plan-substep-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 24px;
+  padding: 0 0.5rem;
+  border-radius: 6px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.plan-substep-badge--accent {
+  background: linear-gradient(135deg, #dbeafe 0%, #c7d2fe 100%);
+  color: #1d4ed8;
+}
+.plan-substep-text {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.plan-substep-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1b365d;
+  margin: 0;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+.plan-substep-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  margin: 2px 0 0 0;
+  line-height: 1.35;
+}
+
+/* ── Tooltip enriquecido en headers de tabla (Hoy/Plantilla/...) ── */
+.th-with-tip { padding-right: 0.4rem !important; }
+.th-tip-icon { vertical-align: -1px; opacity: 0.6; }
+.th-with-tip:hover .th-tip-icon { opacity: 1; }
+.th-tip-card {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 100%;
+  margin-top: 0.4rem;
+  z-index: 60;
+  width: 220px;
+  padding: 0.55rem 0.7rem;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-transform: none;
+  letter-spacing: normal;
+  text-align: left;
+  border-radius: 0.55rem;
+  box-shadow: 0 10px 24px -6px rgba(15,23,42,0.4);
+}
+.th-tip-card::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 8px;
+  height: 8px;
+  background: #1e293b;
+}
+.th-tip-card__title {
+  display: block;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 0.25rem;
+  font-size: 11px;
+}
+.th-tip-card__alias {
+  font-weight: 500;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* ── CTA sticky bottom: visible al hacer scroll en paso 1 ───── */
+.plan-cta-sticky {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  margin: 1rem -1.25rem -1.25rem;
+  padding: 0.75rem 1.25rem 0.85rem;
+  background: linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.95) 35%, #ffffff 100%);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(226,232,240,0.6);
+  pointer-events: none; /* let scroll pass through transparent area */
+}
+.plan-cta-sticky__btn {
+  pointer-events: auto;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: linear-gradient(135deg, #e5730a 0%, #fb923c 100%);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.005em;
+  border: 0;
+  border-radius: 0.875rem;
+  box-shadow: 0 10px 24px -8px rgba(229,115,10,0.55);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.plan-cta-sticky__btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px -8px rgba(229,115,10,0.6);
+}
+.plan-cta-sticky__btn:active {
+  transform: translateY(0);
+}
+
+/* =============================================================
+   Plan Editor — Bandas numeradas, pre-flight, hero card
+   ============================================================= */
+.plan-band {
+  border-radius: 1rem;
+  padding: 1rem;
+  margin-bottom: 0.85rem;
+  border: 1px solid;
+}
+.plan-band--preflight {
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  border-color: #e2e8f0;
+}
+.plan-band--config {
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 30%, #ffffff 100%);
+  border-color: #fde68a;
+}
+.plan-band--publish {
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 30%, #ffffff 100%);
+  border-color: #6ee7b7;
+}
+.plan-band__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 0.65rem;
+}
+.plan-band__num {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(15,23,42,0.08);
+  color: #1b365d;
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.plan-band--config .plan-band__num { background: #fde68a; color: #b45309; }
+.plan-band--publish .plan-band__num { background: #6ee7b7; color: #047857; }
+
+.plan-band__title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1b365d;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+.plan-band__hint {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 1px;
+  line-height: 1.35;
+}
+
+/* ── Pre-flight checklist ─────────────────────────────────────── */
+.plan-preflight {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.plan-preflight__item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.7rem;
+  background: rgba(255,255,255,0.85);
+  border: 1px solid rgba(226,232,240,0.7);
+  border-radius: 0.6rem;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.plan-preflight__item.is-ok    { border-left: 3px solid #10b981; }
+.plan-preflight__item.is-warn  { border-left: 3px solid #f59e0b; background: #fffbeb; }
+.plan-preflight__item.is-bad   { border-left: 3px solid #ef4444; background: #fef2f2; }
+.plan-preflight__check {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.plan-preflight__item.is-ok    .plan-preflight__check { background: #d1fae5; color: #047857; }
+.plan-preflight__item.is-warn  .plan-preflight__check { background: #fef3c7; color: #b45309; }
+.plan-preflight__item.is-bad   .plan-preflight__check { background: #fecaca; color: #b91c1c; }
+.plan-preflight__text { color: #334155; }
+.plan-preflight__text b { color: #1b365d; }
+
+/* ── Hero card de Publicar ────────────────────────────────────── */
+.plan-hero {
+  background: #ffffff;
+  border: 1px solid rgba(110,231,183,0.5);
+  border-radius: 0.85rem;
+  padding: 1rem 1rem 0.85rem;
+  text-align: center;
+  box-shadow: 0 4px 14px -4px rgba(16,185,129,0.18);
+}
+.plan-hero__main {
+  margin-bottom: 0.65rem;
+}
+.plan-hero__num {
+  font-size: 38px;
+  font-weight: 900;
+  color: #064e3b;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.plan-hero__label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #047857;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 0.25rem;
+}
+.plan-hero__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin: 0.85rem 0;
+  padding: 0.65rem 0.5rem;
+  border-top: 1px dashed rgba(110,231,183,0.6);
+  border-bottom: 1px dashed rgba(110,231,183,0.6);
+}
+.plan-hero__sub {
+  font-size: 16px;
+  font-weight: 800;
+  color: #1b365d;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.plan-hero__sublabel {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+.plan-hero__publish {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  border: 0;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  box-shadow: 0 8px 18px -6px rgba(16,185,129,0.45);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  margin-top: 0.25rem;
+}
+.plan-hero__publish:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px -6px rgba(16,185,129,0.55);
+}
+.plan-hero__publish:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+.plan-hero__caveat {
+  font-size: 10px;
+  color: #6b7280;
+  margin-top: 0.55rem;
+}
+
+/* =============================================================
+   Fórmula viva (Plan & Metas · paso 1.C)
+   - Cada variable es un chip clickeable con color por categoría.
+   - Hover dispara highlight de la card/celda origen vía JS
+     (data-target="visits-per-day|people|days") agregando la clase
+     .plan-formula-target--active al elemento marcado por el JS.
+   ============================================================= */
+.plan-formula {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  margin: 0.85rem 0 0.25rem;
+  padding-top: 0.65rem;
+  border-top: 1px dashed rgba(147, 197, 253, 0.55);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #1e3a8a;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.plan-formula-op {
+  color: #93c5fd;
+  font-weight: 800;
+  font-size: 11px;
+  user-select: none;
+}
+.plan-formula-var {
+  display: inline-flex;
+  align-items: baseline;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.4rem;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: -0.01em;
+  cursor: help;
+  border-bottom: 2px dotted currentColor;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.plan-formula-var:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px -3px currentColor;
+}
+.plan-formula-var--blue {
+  color: #1d4ed8;
+  background: rgba(219, 234, 254, 0.65);
+}
+.plan-formula-var--green {
+  color: #047857;
+  background: rgba(209, 250, 229, 0.7);
+}
+.plan-formula-var--orange {
+  color: #c2410c;
+  background: rgba(254, 215, 170, 0.7);
+}
+.plan-formula-result {
+  display: inline-flex;
+  align-items: baseline;
+  padding: 0.18rem 0.55rem;
+  border-radius: 0.45rem;
+  background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%);
+  color: #ffffff;
+  font-weight: 900;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  box-shadow: 0 4px 12px -3px rgba(29, 78, 216, 0.45);
+}
+.plan-formula-unit {
+  color: #64748b;
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+}
+
+/* Resaltado del origen de cada variable: el JS añade esta clase
+   sobre el elemento que da contexto a la variable que se está
+   hoverando. Reusamos el pulse verde existente pero suavizado. */
+.plan-formula-target--active {
+  position: relative;
+  outline: 2px solid #f59e0b;
+  outline-offset: 3px;
+  border-radius: 0.5rem;
+  animation: plan-formula-glow 1.4s ease-in-out infinite;
+}
+@keyframes plan-formula-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.35); }
+  50%      { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
 }
