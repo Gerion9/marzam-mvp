@@ -165,10 +165,55 @@
 
   let _watchId = null;
   let _etaTimer = null;
+  let _liveStream = null;
+  let _liveReconnect = null;
+
+  function closeLiveStream() {
+    if (_liveStream) { try { _liveStream.close(); } catch { /* noop */ } _liveStream = null; }
+    if (_liveReconnect) { clearTimeout(_liveReconnect); _liveReconnect = null; }
+  }
+
+  /**
+   * Open an SSE connection to /api/live/stream (EventSource cannot set
+   * Authorization headers — we pass the token via query string, which the
+   * route accepts). On `plan_published` events we toast and trigger an
+   * assignments reload via the supplied callback. The connection auto-reconnects
+   * with a 5-second backoff if the proxy or the serverless gateway closes it
+   * (Vercel SSE timeout is ~15 min).
+   */
+  function startLiveStream({ onPlanPublished }) {
+    closeLiveStream();
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    const url = `/api/live/stream?token=${encodeURIComponent(token)}`;
+    let es;
+    try { es = new EventSource(url); } catch { return; }
+    _liveStream = es;
+    es.addEventListener('plan_published', (ev) => {
+      let data = {};
+      try { data = JSON.parse(ev.data || '{}'); } catch { /* keep empty */ }
+      const stops = data.stops || 0;
+      const day = data.first_day || data.period_start || '';
+      const msg = stops
+        ? `Te asignaron una nueva ruta (${stops} parada${stops === 1 ? '' : 's'}${day ? ' · ' + day : ''})`
+        : 'Te asignaron una nueva ruta';
+      window.MarzamToast?.show(msg, 'success');
+      if (typeof onPlanPublished === 'function') onPlanPublished(data);
+    });
+    es.onerror = () => {
+      // Schedule a single reconnect; native EventSource also retries internally,
+      // but Vercel sometimes closes the upstream and the browser stays in
+      // CONNECTING forever — so we explicitly reopen after a backoff.
+      try { es.close(); } catch { /* noop */ }
+      _liveStream = null;
+      _liveReconnect = setTimeout(() => startLiveStream({ onPlanPublished }), 5000);
+    };
+  }
 
   async function renderMyRouteRich(body) {
     if (_watchId) { try { navigator.geolocation.clearWatch(_watchId); } catch { /* noop */ } _watchId = null; }
     if (_etaTimer) { clearInterval(_etaTimer); _etaTimer = null; }
+    closeLiveStream();
     clearLayers();
 
     body.innerHTML = `
@@ -326,11 +371,34 @@
           this._refreshMap();
           this._watchPosition();
           this._scheduleEtaRefresh();
+          this._startLive();
         } catch (err) {
           console.error('[my-route] init failed', err);
         } finally {
           this.loading = false;
         }
+      },
+      _startLive() {
+        const self = this;
+        startLiveStream({
+          onPlanPublished: async () => {
+            try {
+              const today = todayIso();
+              const data = await API.get(`/visit-plans/assignments?from=${today}&to=${today}`);
+              self.stops = (data || []).map((s) => ({
+                ...s,
+                lat: s.lat != null ? Number(s.lat) : null,
+                lng: s.lng != null ? Number(s.lng) : null,
+              })).sort((a, b) => (a.route_order || 0) - (b.route_order || 0));
+              self.nextIdx = Math.max(0, self.stops.findIndex((s) => s.status !== 'done' && s.status !== 'skipped'));
+              if (self.nextIdx < 0) self.nextIdx = 0;
+              self._refreshMap();
+              self._refreshEta();
+            } catch (err) {
+              console.warn('[my-route] reload after plan_published failed', err);
+            }
+          },
+        });
       },
       _refreshMap() { drawRoute(APP.map, this.stops, this.mePos); },
       _watchPosition() {

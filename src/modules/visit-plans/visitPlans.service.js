@@ -510,7 +510,7 @@ async function preview({ ownerUserId: _ownerUserId, scopeUserIds, periodStart, p
 }
 
 async function publish(id, userId) {
-  return db.transaction(async (trx) => {
+  const result = await db.transaction(async (trx) => {
     const plan = await trx('visit_plans').where({ id }).first();
     if (!plan) {
       const err = new Error('Plan not found');
@@ -550,8 +550,52 @@ async function publish(id, userId) {
       status: 'published',
       updated_at: trx.fn.now(),
     }).returning('*');
-    return updated;
+
+    // Per-rep SSE notification: list distinct visitors + their stop counts so
+    // the rep's UI can show "Te asignaron N paradas para HOY" and refresh.
+    const audience = await trx('visit_plan_assignments')
+      .where({ visit_plan_id: id })
+      .select('visitor_user_id')
+      .count({ stops: '*' })
+      .min({ first_day: 'scheduled_date' })
+      .max({ last_day: 'scheduled_date' })
+      .groupBy('visitor_user_id');
+
+    return { updated, audience };
   });
+
+  // Emit AFTER the transaction commits so subscribers see a row that actually
+  // exists. Best-effort: a bus publish failure must not break the publish call.
+  const liveBus = require('../live/live.service');
+  for (const row of result.audience) {
+    try {
+      await liveBus.publish({
+        type: 'plan_published',
+        audienceUserId: row.visitor_user_id,
+        payload: {
+          plan_id: id,
+          plan_name: result.updated.name || null,
+          period_start: result.updated.period_start instanceof Date
+            ? result.updated.period_start.toISOString().slice(0, 10)
+            : String(result.updated.period_start || '').slice(0, 10),
+          period_end: result.updated.period_end instanceof Date
+            ? result.updated.period_end.toISOString().slice(0, 10)
+            : String(result.updated.period_end || '').slice(0, 10),
+          first_day: row.first_day instanceof Date
+            ? row.first_day.toISOString().slice(0, 10)
+            : String(row.first_day || '').slice(0, 10),
+          last_day: row.last_day instanceof Date
+            ? row.last_day.toISOString().slice(0, 10)
+            : String(row.last_day || '').slice(0, 10),
+          stops: Number(row.stops) || 0,
+        },
+      });
+    } catch (err) {
+      console.warn(`[visitPlans.publish] live publish failed for ${row.visitor_user_id}: ${err.message}`);
+    }
+  }
+
+  return result.updated;
 }
 
 async function archive(id, userId) {
