@@ -23,6 +23,12 @@ router.patch('/:id/archive', authenticate, authorize({ roles: MANAGER_ROLES }), 
 router.post('/:id/reassign-stop', authenticate, authorize({ roles: MANAGER_ROLES }), controller.reassignStop);
 router.post('/:id/users/:userId/resequence', authenticate, authorize({ roles: MANAGER_ROLES }), controller.resequenceUser);
 
+// Intraday reoptimizer: rep breakdown / urgent insert / cap-exceeded recovery.
+// Only available on PUBLISHED plans — never mutates draft plans (those go through
+// the normal generate flow). See migrations 074, 075 + intradayReoptimizer.js.
+router.post('/:id/reoptimize-day', authenticate, authorize({ roles: MANAGER_ROLES }), controller.reoptimizeDay);
+router.get('/:id/reoptimizations', authenticate, controller.listReoptimizations);
+
 // Post-mortem: plan-vs-real metrics + per-rep replay for the time scrubber.
 router.get('/:id/post-mortem', authenticate, controller.postMortem);
 router.get('/:id/post-mortem.csv', authenticate, controller.postMortemCsv);

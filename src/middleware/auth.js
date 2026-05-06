@@ -5,11 +5,17 @@ const accessDirectory = require('../services/accessDirectory');
 
 function authenticate(req, res, next) {
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
+  // EventSource (SSE) cannot set custom headers, so we accept ?token= as a
+  // fallback. Header is preferred and used when present.
+  let token;
+  if (header && header.startsWith('Bearer ')) {
+    token = header.split(' ')[1];
+  } else if (typeof req.query.token === 'string' && req.query.token) {
+    token = req.query.token;
+  } else {
     return res.status(401).json({ error: 'Missing or invalid authorization header' });
   }
 
-  const token = header.split(' ')[1];
   try {
     const payload = jwt.verify(token, config.jwt.secret);
     const scope = {

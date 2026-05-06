@@ -628,6 +628,153 @@
             <div class="text-amber-600 mt-1">Algunos reps no alcanzan su cuota Pareto con el pool actual. Revisa capacidad o filtra por sucursal.</div>
           </div>
         </template>
+
+        <!-- ── PR8: Emergency button (only when plan is published) ───────── -->
+        <template x-if="preview?.plan?.status === 'published'">
+          <div class="flex items-center gap-2">
+            <button @click="openEmergencyPanel('breakdown')"
+              class="flex-1 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold py-2 rounded-xl">
+              🚨 Reportar avería
+            </button>
+            <button @click="openEmergencyPanel('urgent')"
+              class="flex-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-700 text-xs font-bold py-2 rounded-xl">
+              ⚡ Pedido urgente
+            </button>
+          </div>
+        </template>
+
+        <!-- ── PR8: Cost meta chip (extended) ────────────────────────────── -->
+        <template x-if="preview && costMeta.cache_hit_rate !== null">
+          <div class="bg-slate-50 border border-slate-200 rounded-xl p-2 text-[11px] text-slate-600 flex flex-wrap gap-x-3 gap-y-1"
+               :title="'Cache hit ' + costMeta.cache_hit_rate + '%, modo ' + costMeta.traffic_mode + ', solver ' + costMeta.solver_strategy">
+            <span><b>Cache:</b> <span x-text="costMeta.cache_hit_rate + '%'"></span></span>
+            <span><b>Tráfico:</b> <span x-text="costMeta.traffic_mode"></span></span>
+            <span><b>Solver:</b> <span x-text="costMeta.solver_strategy"></span></span>
+            <template x-if="costMeta.variance_minutes !== null">
+              <span :class="costMeta.variance_minutes > (costMeta.gap_threshold_min || 90) ? 'text-amber-700 font-bold' : ''">
+                <b>Δ inter-rep:</b> <span x-text="costMeta.variance_minutes + ' min'"></span>
+              </span>
+            </template>
+          </div>
+        </template>
+
+        <!-- ── PR8: cap_exceeded modal ───────────────────────────────────── -->
+        <template x-if="capModal.open">
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" @click.self="capModal.open = false">
+            <div class="bg-white rounded-2xl p-5 max-w-md w-full mx-4 shadow-xl space-y-3">
+              <h3 class="text-lg font-black text-rose-700">⚠ Cap excedido</h3>
+              <div class="text-xs text-slate-600">
+                <div>El rep <b x-text="capModal.payload?.rep?.full_name || capModal.payload?.rep?.id"></b> ya tiene
+                  <b x-text="capModal.payload?.rep?.current_minutes"></b> min asignados.</div>
+                <div>Esta reasignación lo llevaría a <b x-text="capModal.payload?.rep?.projected_minutes"></b> min (cap <span x-text="capModal.payload?.rep?.cap_minutes"></span>).</div>
+              </div>
+              <div class="text-xs font-bold text-slate-700 pt-2">Alternativas con headroom:</div>
+              <div class="space-y-1.5">
+                <template x-for="alt in (capModal.payload?.alternatives || [])" :key="alt.user_id">
+                  <button @click="pickCapAlternative(alt.user_id)"
+                    class="w-full text-left flex items-center justify-between bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg px-3 py-2 text-xs">
+                    <span class="font-bold text-emerald-800" x-text="alt.full_name"></span>
+                    <span class="text-emerald-600">
+                      <span x-text="alt.headroom_min + ' min libres'"></span> · <span x-text="alt.distance_km + ' km'"></span>
+                    </span>
+                  </button>
+                </template>
+                <template x-if="!capModal.payload?.alternatives?.length">
+                  <div class="text-xs text-slate-400 italic">Ningún rep con capacidad disponible.</div>
+                </template>
+              </div>
+              <div class="flex gap-2 pt-2">
+                <button @click="capModal.open = false"
+                  class="flex-1 text-xs font-bold py-2 rounded-xl bg-slate-100 text-slate-700">Cancelar</button>
+                <button @click="forceCapReassign()"
+                  class="flex-1 text-xs font-bold py-2 rounded-xl bg-rose-600 text-white">Forzar reasignación</button>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- ── PR8: Emergency drawer (breakdown / urgent) ────────────────── -->
+        <template x-if="emergency.open">
+          <div class="fixed inset-0 z-50 flex items-stretch justify-end bg-black/40" @click.self="closeEmergencyPanel()">
+            <div class="bg-white w-full max-w-md h-full overflow-y-auto p-5 space-y-3 shadow-xl">
+              <div class="flex items-center justify-between">
+                <h3 class="text-lg font-black" x-text="emergency.kind === 'breakdown' ? '🚨 Reportar avería' : '⚡ Pedido urgente'"></h3>
+                <button @click="closeEmergencyPanel()" class="text-slate-400 hover:text-slate-600">✕</button>
+              </div>
+
+              <label class="block text-xs font-bold text-slate-700">Fecha
+                <input type="date" x-model="emergency.date"
+                  class="mt-1 w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
+              </label>
+
+              <template x-if="emergency.kind === 'breakdown'">
+                <label class="block text-xs font-bold text-slate-700">Rep con avería
+                  <select x-model="emergency.broken_user_id"
+                    class="mt-1 w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                    <option value="">— Selecciona —</option>
+                    <template x-for="rep in repCards" :key="rep.user_id">
+                      <option :value="rep.user_id" x-text="rep.full_name"></option>
+                    </template>
+                  </select>
+                </label>
+              </template>
+
+              <template x-if="emergency.kind === 'urgent'">
+                <div class="space-y-2">
+                  <label class="block text-xs font-bold text-slate-700">Pharmacy ID o Marzam Client ID
+                    <input type="text" x-model="emergency.urgent_stop.pharmacy_id" placeholder="pharmacy_id"
+                      class="mt-1 w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
+                    <input type="text" x-model="emergency.urgent_stop.marzam_client_id" placeholder="marzam_client_id"
+                      class="mt-1 w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5"/>
+                  </label>
+                  <label class="block text-xs font-bold text-slate-700">Rep preferido (opcional)
+                    <select x-model="emergency.urgent_stop.preferred_user_id"
+                      class="mt-1 w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                      <option value="">— Cualquiera con capacidad —</option>
+                      <template x-for="rep in repCards" :key="rep.user_id">
+                        <option :value="rep.user_id" x-text="rep.full_name"></option>
+                      </template>
+                    </select>
+                  </label>
+                </div>
+              </template>
+
+              <button @click="submitEmergency()" :disabled="emergency.loading"
+                class="w-full bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 rounded-xl">
+                <span x-show="!emergency.loading">Reoptimizar día</span>
+                <span x-show="emergency.loading">Reoptimizando…</span>
+              </button>
+
+              <template x-if="emergency.error">
+                <div class="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg p-2" x-text="emergency.error"></div>
+              </template>
+
+              <template x-if="emergency.summary">
+                <div class="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-lg p-2 space-y-1">
+                  <div class="font-bold">✓ Reoptimización aplicada</div>
+                  <div>Locked hard: <b x-text="emergency.summary.locked_hard"></b></div>
+                  <div>Locked soft: <b x-text="emergency.summary.locked_soft"></b></div>
+                  <div>Movidos: <b x-text="emergency.summary.moved"></b></div>
+                  <div x-show="emergency.summary.no_capacity > 0" class="text-amber-700 font-bold">⚠ Sin capacidad: <span x-text="emergency.summary.no_capacity"></span></div>
+                  <div class="text-emerald-600 italic"><span x-text="emergency.summary.ms_elapsed"></span> ms</div>
+                </div>
+              </template>
+
+              <template x-if="emergency.diff && emergency.diff.length">
+                <div class="space-y-1.5">
+                  <div class="text-xs font-bold text-slate-700">Diff antes/después</div>
+                  <template x-for="d in emergency.diff" :key="d.assignment_id">
+                    <div class="text-[11px] border border-slate-100 rounded p-1.5 bg-slate-50">
+                      <div class="font-bold text-slate-700"><span x-text="d.kind"></span></div>
+                      <div class="text-slate-500" x-text="(d.was?.visitor_user_id || '?') + ' → ' + (d.now?.visitor_user_id || '?')"></div>
+                      <div class="text-slate-400" x-text="'order ' + (d.was?.route_order || '?') + ' → ' + (d.now?.route_order || '?')"></div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
       </div>
     `;
   }
@@ -658,6 +805,28 @@
       costEstimate: null,
       budgetStatus: null,
       showOverlays: false,
+      // PR8: cache hit/miss + solver telemetry shown in the chip tooltip.
+      costMeta: {
+        cache_hit_rate: null,
+        traffic_mode: null,
+        solver_strategy: null,
+        variance_minutes: null,
+      },
+      // PR8: emergency drawer state (rep breakdown / urgent insert).
+      emergency: {
+        open: false,
+        kind: 'breakdown',
+        broken_user_id: null,
+        urgent_stop: { pharmacy_id: null, marzam_client_id: null, preferred_user_id: null, after_assignment_id: null },
+        date: null,
+        diff: null,
+        summary: null,
+        loading: false,
+        error: null,
+      },
+      // PR8: cap_exceeded modal with alternatives surfaced from 409 reassign-stop.
+      capModal: { open: false, payload: null, originalDrop: null },
+      reoptHistory: [],
 
       async init() {
         // ── Read preload config from Cuotas tab (if any) ──────────────────
@@ -875,6 +1044,8 @@
           this.repCards = this._buildRepCards();
           this.phase = 'Dibujando mapa…';
           drawPreview(APP.map, this.preview, this._repMeta);
+          // PR8: surface solver/cache telemetry from result.metrics for the tooltip.
+          this._captureCostMeta(result.metrics);
           const cost = result._cost;
           const costNote = (cost && cost.estimated_usd != null)
             ? ` · ~$${Number(cost.estimated_usd).toFixed(4)} USD Google API`
@@ -957,34 +1128,145 @@
         //  2) edit on a draft/published plan — call /:id/reassign-stop, refetch
         const planId = this.preview?.plan?.id;
         if (planId && a.id) {
-          try {
-            await API.post(`/visit-plans/${planId}/reassign-stop`, {
-              assignment_id: a.id,
-              new_visitor_user_id: destUserId,
-            });
-            // Refetch plan to get the recomputed ETAs and route_orders.
-            const fresh = await API.get(`/visit-plans/${planId}`);
-            this.preview = {
-              ...this.preview,
-              plan: fresh,
-              assignments: (fresh.assignments || []).map((x, i) => ({
-                ...x,
-                __key: `${x.visitor_user_id}|${x.scheduled_date}|${x.route_order}|${i}`,
-                __lat: null, __lng: null,
-              })),
-            };
-            this.repCards = this._buildRepCards();
-            drawPreview(APP.map, this.preview, this._repMeta);
-            window.MarzamToast?.show('Stop reasignado y persistido', 'success');
-          } catch (err) {
-            const msg = err?.error || err?.message || 'Error';
-            window.MarzamToast?.show(`No se pudo reasignar: ${msg}`, 'danger');
-          }
+          await this._reassignStopOrAlternatives(planId, a.id, destUserId, false);
         } else {
           a.visitor_user_id = destUserId;
           this.repCards = this._buildRepCards();
           drawPreview(APP.map, this.preview, this._repMeta);
           window.MarzamToast?.show('Stop reasignado (preview)', 'info');
+        }
+      },
+      /**
+       * Helper used by onDropRep and the cap-exceeded modal "Forzar" button.
+       * Catches 409 cap_exceeded and shows the alternatives modal; on force=true
+       * accepts the reassignment unconditionally.
+       */
+      async _reassignStopOrAlternatives(planId, assignmentId, destUserId, force) {
+        try {
+          await API.post(`/visit-plans/${planId}/reassign-stop${force ? '?force=true' : ''}`, {
+            assignment_id: assignmentId,
+            new_visitor_user_id: destUserId,
+            force: !!force,
+          });
+          const fresh = await API.get(`/visit-plans/${planId}`);
+          this.preview = {
+            ...this.preview,
+            plan: fresh,
+            assignments: (fresh.assignments || []).map((x, i) => ({
+              ...x,
+              __key: `${x.visitor_user_id}|${x.scheduled_date}|${x.route_order}|${i}`,
+              __lat: null, __lng: null,
+            })),
+          };
+          this.repCards = this._buildRepCards();
+          drawPreview(APP.map, this.preview, this._repMeta);
+          this.capModal.open = false;
+          window.MarzamToast?.show(force ? 'Stop reasignado (forzado, sobre cap)' : 'Stop reasignado y persistido', force ? 'warning' : 'success');
+        } catch (err) {
+          // 409 cap_exceeded surfaces the alternatives modal.
+          if (err?.code === 'cap_exceeded' || err?.error?.code === 'cap_exceeded' || err?.alternatives) {
+            const payload = err.alternatives ? err : (err.error || err);
+            this.capModal = {
+              open: true,
+              payload,
+              originalDrop: { planId, assignmentId, destUserId },
+            };
+            return;
+          }
+          const msg = err?.error || err?.message || 'Error';
+          window.MarzamToast?.show(`No se pudo reasignar: ${msg}`, 'danger');
+        }
+      },
+      /** User picked an alternative rep from the cap-exceeded modal. */
+      async pickCapAlternative(altUserId) {
+        const od = this.capModal.originalDrop;
+        if (!od) { this.capModal.open = false; return; }
+        await this._reassignStopOrAlternatives(od.planId, od.assignmentId, altUserId, false);
+      },
+      /** User chose to force the original reassignment despite cap_exceeded. */
+      async forceCapReassign() {
+        const od = this.capModal.originalDrop;
+        if (!od) { this.capModal.open = false; return; }
+        await this._reassignStopOrAlternatives(od.planId, od.assignmentId, od.destUserId, true);
+      },
+      _captureCostMeta(metrics) {
+        if (!metrics) return;
+        const cb = metrics.cost_breakdown || {};
+        const total = (cb.fresh || 0) + (cb.cached || 0) + (cb.estimated_fallback || 0);
+        this.costMeta = {
+          cache_hit_rate: total ? +((cb.cached || 0) / total * 100).toFixed(1) : null,
+          traffic_mode: cb.traffic_aware_used ? 'TRAFFIC_AWARE' : 'TRAFFIC_UNAWARE',
+          solver_strategy: metrics.solver?.strategy || 'legacy',
+          variance_minutes: metrics.balance?.gap_after ?? null,
+          gap_threshold_min: metrics.balance?.gap_threshold_min ?? null,
+          n_max_per_route: metrics.solver?.n_max_per_route ?? null,
+        };
+      },
+      // ── Emergency drawer (PR8 / migrations 074-075) ──────────────────────
+      openEmergencyPanel(kind = 'breakdown') {
+        if (!this.preview?.plan?.id) {
+          window.MarzamToast?.show('Publica el plan antes de usar emergencia', 'info');
+          return;
+        }
+        this.emergency = {
+          open: true,
+          kind,
+          broken_user_id: null,
+          urgent_stop: { pharmacy_id: null, marzam_client_id: null, preferred_user_id: null, after_assignment_id: null },
+          date: new Date().toISOString().slice(0, 10),
+          diff: null, summary: null, loading: false, error: null,
+        };
+      },
+      closeEmergencyPanel() { this.emergency.open = false; },
+      async submitEmergency() {
+        const planId = this.preview?.plan?.id;
+        if (!planId) return;
+        this.emergency.loading = true;
+        this.emergency.error = null;
+        try {
+          const body = { date: this.emergency.date };
+          if (this.emergency.kind === 'breakdown') {
+            if (!this.emergency.broken_user_id) throw new Error('Selecciona el rep con avería');
+            body.broken_user_id = this.emergency.broken_user_id;
+          } else {
+            const us = this.emergency.urgent_stop;
+            if (!us.pharmacy_id && !us.marzam_client_id) {
+              throw new Error('Selecciona la farmacia o el cliente urgente');
+            }
+            body.urgent_stop = us;
+          }
+          const r = await API.post(`/visit-plans/${planId}/reoptimize-day`, body);
+          this.emergency.diff = r.diff || [];
+          this.emergency.summary = r.summary || null;
+          // Refresh plan view.
+          const fresh = await API.get(`/visit-plans/${planId}`);
+          this.preview = {
+            ...this.preview,
+            plan: fresh,
+            assignments: (fresh.assignments || []).map((x, i) => ({
+              ...x,
+              __key: `${x.visitor_user_id}|${x.scheduled_date}|${x.route_order}|${i}`,
+              __lat: null, __lng: null,
+            })),
+          };
+          this.repCards = this._buildRepCards();
+          drawPreview(APP.map, this.preview, this._repMeta);
+          window.MarzamToast?.show(`Reoptimización aplicada (${r.summary?.moved || 0} stops movidos, ${r.summary?.no_capacity || 0} sin capacidad)`, 'success');
+          this.loadReoptHistory();
+        } catch (err) {
+          this.emergency.error = err?.error || err?.message || 'Error';
+        } finally {
+          this.emergency.loading = false;
+        }
+      },
+      async loadReoptHistory() {
+        const planId = this.preview?.plan?.id;
+        if (!planId) return;
+        try {
+          this.reoptHistory = await API.get(`/visit-plans/${planId}/reoptimizations`);
+        } catch (err) {
+          console.warn('[plan-editor] reopt history fetch failed', err);
+          this.reoptHistory = [];
         }
       },
       async recalculateRep(userId) {

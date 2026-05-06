@@ -50,6 +50,10 @@
     {
       "path": "/api/admin/cron/purge-live-outbox",
       "schedule": "15 9 * * *"
+    },
+    {
+      "path": "/api/admin/cron/parse-opening-hours",
+      "schedule": "0 3 * * *"
     }
   ]
 }

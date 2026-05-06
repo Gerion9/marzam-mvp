@@ -48,10 +48,12 @@ async function levelAtPoints(points) {
   if (!points.length) return new Map();
   const out = new Map();
   // Build a VALUES list and join on ST_Contains. Single round-trip.
+  // NOTE: knex 3.x trips on `$N` positional placeholders with array bindings —
+  // it scans the SQL and errors "Expected N bindings, saw 0". Use `?` style.
   const params = [];
   const placeholders = points.map((p, i) => {
     params.push(i, p.lng, p.lat);
-    return `($${i * 3 + 1}::int, $${i * 3 + 2}::double precision, $${i * 3 + 3}::double precision)`;
+    return '(?::int, ?::double precision, ?::double precision)';
   }).join(',');
   const sql = `
     WITH pts(idx, lng, lat) AS (VALUES ${placeholders})

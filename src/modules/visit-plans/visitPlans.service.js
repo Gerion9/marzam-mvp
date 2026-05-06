@@ -4,6 +4,101 @@ const { canActorManage } = require('../../services/teamScope');
 const routesMatrix = require('../../services/routesMatrix');
 const securityPolygons = require('../../services/securityPolygons');
 const { orderStopsFromDepot, twoOptImprove } = require('../../utils/routeOrdering');
+const intradayReoptimizer = require('./intradayReoptimizer');
+
+const ENABLE_CAP_VALIDATION_REASSIGN = process.env.PLAN_ENABLE_CAP_VALIDATION === 'true';
+
+function haversineKmService(a, b) {
+  const R = 6371;
+  const toRad = (x) => (x * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * Compute current minutes used by a rep on a given day (sum of expected_travel +
+ * expected_service across non-deviated assignments). Used by tryFitForReassign.
+ */
+async function currentMinutesByRep(planId, repId, date) {
+  const r = await db('visit_plan_assignments')
+    .where({ visit_plan_id: planId, visitor_user_id: repId, scheduled_date: date })
+    .whereNot('status', 'deviated')
+    .sum({
+      total_travel: db.raw('COALESCE(expected_travel_minutes, 0)'),
+      total_service: db.raw('COALESCE(expected_service_minutes, 0)'),
+    })
+    .first();
+  return {
+    totalMin: Number(r?.total_travel || 0) + Number(r?.total_service || 0),
+    travelMin: Number(r?.total_travel || 0),
+  };
+}
+
+/**
+ * Find top-N alternative reps for a stop that can't fit in its current rep's cap.
+ *
+ * Score = headroom_min × 0.6 + (1 / distance_km) × 4. Vetoes reps that would still
+ * exceed cap after adding the stop's expected minutes.
+ *
+ * Returns [{ user_id, full_name, role, headroom_min, distance_km, score }] sorted desc.
+ */
+async function findReassignAlternatives({ planId, scheduledDate, assignmentId, excludeUserId, topN = 3 }) {
+  const target = await db('visit_plan_assignments as vpa')
+    .where('vpa.id', assignmentId)
+    .leftJoin('marzam_clients as mc', 'mc.id', 'vpa.marzam_client_id')
+    .leftJoin('pharmacies as p', 'p.id', 'mc.pharmacy_id')
+    .leftJoin('pharmacies as pp', 'pp.id', 'vpa.pharmacy_id')
+    .select(
+      'vpa.expected_service_minutes',
+      'vpa.expected_travel_minutes',
+      db.raw('COALESCE(ST_X(p.coordinates::geometry), ST_X(pp.coordinates::geometry)) AS lng'),
+      db.raw('COALESCE(ST_Y(p.coordinates::geometry), ST_Y(pp.coordinates::geometry)) AS lat'),
+    )
+    .first();
+  if (!target || target.lat == null) return [];
+
+  const stopPoint = { lat: Number(target.lat), lng: Number(target.lng) };
+  const expectedAddMin = Number(target.expected_service_minutes || 45) + Number(target.expected_travel_minutes || 30);
+
+  // Candidates: every distinct rep already in this plan that day except the excluded one.
+  const candidateIds = await db('visit_plan_assignments')
+    .where({ visit_plan_id: planId, scheduled_date: scheduledDate })
+    .whereNot('visitor_user_id', excludeUserId)
+    .distinct('visitor_user_id')
+    .pluck('visitor_user_id');
+  if (!candidateIds.length) return [];
+
+  const reps = await db('users')
+    .whereIn('id', candidateIds)
+    .andWhere({ is_active: true })
+    .select('id', 'full_name', 'role', 'home_lat', 'home_lng', 'daily_minutes_cap');
+
+  const out = [];
+  for (const rep of reps) {
+    if (rep.home_lat == null || rep.home_lng == null) continue;
+    const cap = rep.daily_minutes_cap || 480;
+    const cur = await currentMinutesByRep(planId, rep.id, scheduledDate);
+    const headroom = cap - cur.totalMin;
+    if (headroom < expectedAddMin) continue;
+    const home = { lat: Number(rep.home_lat), lng: Number(rep.home_lng) };
+    const distKm = haversineKmService(home, stopPoint);
+    const score = headroom * 0.6 + (1 / Math.max(distKm, 0.5)) * 4;
+    out.push({
+      user_id: rep.id,
+      full_name: rep.full_name,
+      role: rep.role,
+      headroom_min: Math.round(headroom),
+      distance_km: Math.round(distKm * 10) / 10,
+      score: Math.round(score * 100) / 100,
+    });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, topN);
+}
 
 async function listForUser({ userId, isGlobal = false }) {
   const q = db('visit_plans as vp')
@@ -83,7 +178,7 @@ async function previewFull({ ownerUserId, scopeUserIds, granularity = 'weekly', 
  * Plan Editor. Re-sequences both source and destination reps' day so ETAs
  * stay accurate, and returns the deltas for the UI to animate.
  */
-async function reassignStop({ planId, assignmentId, newVisitorUserId, actorId, isGlobal }) {
+async function reassignStop({ planId, assignmentId, newVisitorUserId, actorId, isGlobal, force = false }) {
   const plan = await db('visit_plans').where({ id: planId }).first();
   if (!plan) {
     const err = new Error('Plan not found');
@@ -120,6 +215,36 @@ async function reassignStop({ planId, assignmentId, newVisitorUserId, actorId, i
     throw err;
   }
 
+  // Cap pre-flight (PLAN_ENABLE_CAP_VALIDATION). When forced (force=true) we skip
+  // the check but stamp metrics.balance.over_cap_count for observability.
+  if (ENABLE_CAP_VALIDATION_REASSIGN && !force) {
+    const cap = newUser.daily_minutes_cap || 480;
+    const cur = await currentMinutesByRep(planId, newVisitorUserId, target.scheduled_date);
+    const projected = cur.totalMin
+      + Number(target.expected_service_minutes || 45)
+      + Number(target.expected_travel_minutes || 30);
+    if (projected > cap) {
+      const alternatives = await findReassignAlternatives({
+        planId, scheduledDate: target.scheduled_date, assignmentId,
+        excludeUserId: newVisitorUserId,
+      });
+      const err = new Error('Reassign would exceed daily cap of target rep');
+      err.status = 409;
+      err.code = 'cap_exceeded';
+      err.payload = {
+        code: 'cap_exceeded',
+        rep: {
+          id: newUser.id, full_name: newUser.full_name,
+          cap_minutes: cap,
+          current_minutes: cur.totalMin,
+          projected_minutes: projected,
+        },
+        alternatives,
+      };
+      throw err;
+    }
+  }
+
   await db.transaction(async (trx) => {
     await trx('visit_plan_assignments')
       .where({ id: assignmentId })
@@ -137,7 +262,113 @@ async function reassignStop({ planId, assignmentId, newVisitorUserId, actorId, i
     }
   });
 
-  return { changed: true, source: oldVisitorId, destination: newVisitorUserId };
+  return {
+    changed: true, source: oldVisitorId, destination: newVisitorUserId,
+    forced: force === true,
+  };
+}
+
+/**
+ * Intraday reoptimization wrapper. Validates auth + plan status, runs the
+ * reoptimizer in a transaction, writes audit row, returns diff for UI.
+ */
+async function reoptimizeDay({
+  planId, date, brokenUserId, urgentStop, capExceedUserId, triggerKind,
+  actorId, isGlobal,
+}) {
+  if (!planId || !date) {
+    const err = new Error('planId and date are required');
+    err.status = 400; throw err;
+  }
+  if (!triggerKind) {
+    const err = new Error('trigger_kind is required (rep_breakdown|urgent_insert|cap_exceed|manual)');
+    err.status = 400; throw err;
+  }
+  const plan = await db('visit_plans').where({ id: planId }).first();
+  if (!plan) {
+    const err = new Error('Plan not found');
+    err.status = 404; throw err;
+  }
+  if (!isGlobal && plan.owner_user_id !== actorId) {
+    const err = new Error('Only owner can reoptimize');
+    err.status = 403; throw err;
+  }
+  if (plan.status !== 'published') {
+    const err = new Error(`Plan must be published (current status: ${plan.status})`);
+    err.status = 409; throw err;
+  }
+
+  return db.transaction(async (trx) => {
+    const result = await intradayReoptimizer.reoptimize({
+      planId, date,
+      brokenUserId: brokenUserId || null,
+      urgentStop: urgentStop || null,
+      capExceedUserId: capExceedUserId || null,
+      triggerKind, triggeredBy: actorId, trx,
+    });
+
+    if (!result.ok) {
+      const err = new Error(result.error || 'reoptimize_failed');
+      err.status = 422; err.code = result.error;
+      throw err;
+    }
+
+    // Persist audit row.
+    const [audit] = await trx('visit_plan_reoptimizations').insert({
+      visit_plan_id: planId,
+      scheduled_date: date,
+      triggered_by: actorId,
+      trigger_kind: triggerKind,
+      payload: JSON.stringify({
+        broken_user_id: brokenUserId || null,
+        urgent_stop: urgentStop || null,
+        cap_exceed_user_id: capExceedUserId || null,
+      }),
+      affected_assignment_ids: result.affectedIds,
+      locked_count: result.summary.locked_hard + result.summary.locked_soft,
+      released_count: result.summary.released_after_breakdown,
+      ms_elapsed: result.summary.ms_elapsed,
+      outcome: result.summary.no_capacity > 0 ? 'partial' : 'success',
+    }).returning('id');
+
+    // Stamp last_reopt_id on touched rows.
+    if (result.affectedIds.length) {
+      await trx('visit_plan_assignments')
+        .whereIn('id', result.affectedIds)
+        .update({ last_reopt_id: audit.id, reopt_lock_kind: null });
+    }
+
+    return {
+      ok: true,
+      audit_id: audit.id,
+      summary: result.summary,
+      diff: result.diff,
+      moves: result.moves,
+      urgent_assignment_id: result.urgentAssignmentId,
+    };
+  });
+}
+
+async function listReoptimizations(planId, { actorId, isGlobal }) {
+  const plan = await db('visit_plans').where({ id: planId }).first();
+  if (!plan) {
+    const err = new Error('Plan not found');
+    err.status = 404; throw err;
+  }
+  if (!isGlobal && plan.owner_user_id !== actorId
+    && plan.scope_user_id !== actorId
+    && (!plan.scope_user_id || !await canActorManage(actorId, plan.scope_user_id))) {
+    const err = new Error('Forbidden');
+    err.status = 403; throw err;
+  }
+  return db('visit_plan_reoptimizations as vpr')
+    .where({ visit_plan_id: planId })
+    .leftJoin('users as u', 'u.id', 'vpr.triggered_by')
+    .select(
+      'vpr.*',
+      'u.full_name as triggered_by_name',
+    )
+    .orderBy('vpr.created_at', 'desc');
 }
 
 /**
@@ -153,6 +384,10 @@ async function resequenceUserDay(trx, planId, visitorUserId, scheduledDate) {
   const routesMatrix = require('../../services/routesMatrix');
   const { orderStopsFromDepot, twoOptImprove } = require('../../utils/routeOrdering');
   const { localDayHHMMToUTC } = require('../../utils/timezone');
+  const multiStartSolver = require('../../utils/multiStart');
+
+  const SOLVER_STRATEGY = process.env.PLAN_SOLVER || 'legacy';
+  const SOLVER_DEADLINE_MS = Number(process.env.PLAN_SOLVER_DEADLINE_MS) || 450;
 
   const u = await trx('users')
     .select('id', 'home_lat', 'home_lng', 'service_minutes_per_stop')
@@ -191,9 +426,13 @@ async function resequenceUserDay(trx, planId, visitorUserId, scheduledDate) {
       stops.forEach((s, i) => { s.__seqIdx = i + 1; });
       const depotMarker = { __seqIdx: 0, lat: home.lat, lng: home.lng, __depot: true };
       const costFn = (a, b) => durationsMatrix[a.__seqIdx ?? 0][b.__seqIdx ?? 0];
-      const nn = orderStopsFromDepot(depotMarker, stops, costFn);
-      const opt = twoOptImprove([depotMarker, ...nn], costFn);
-      ordered = opt.slice(1).map((s) => stops.find((x) => x.__seqIdx === s.__seqIdx));
+      const solverResult = multiStartSolver.solve({
+        depot: depotMarker, stops, costFn,
+        repId: visitorUserId, dayIso: scheduledDate,
+        deadline: Date.now() + SOLVER_DEADLINE_MS,
+        strategy: SOLVER_STRATEGY,
+      });
+      ordered = solverResult.ordered.map((s) => stops.find((x) => x.__seqIdx === s.__seqIdx)).filter(Boolean);
     } catch (err) {
       console.warn(`[resequenceUserDay] matrix failed: ${err.message}`);
     }
@@ -835,4 +1074,7 @@ module.exports = {
   deviateAssignment,
   postMortem,
   replayRepDay,
+  reoptimizeDay,
+  listReoptimizations,
+  findReassignAlternatives,
 };

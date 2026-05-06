@@ -44,9 +44,11 @@ const { canActorManage } = require('../../services/teamScope');
 const routesMatrix = require('../../services/routesMatrix');
 const securityPolygons = require('../../services/securityPolygons');
 const { orderStopsFromDepot, twoOptImprove } = require('../../utils/routeOrdering');
+const multiStartSolver = require('../../utils/multiStart');
 const { QUADRANT_TO_PARETO } = require('../../utils/visitCadence');
 const { clusterByHome } = require('../../utils/kmeans');
 const { localDayHHMMToUTC } = require('../../utils/timezone');
+const log = require('../../utils/logger');
 
 const PARETO_CLASSES = ['A', 'B', 'C'];
 const PROSPECTO_PARETO_CLASSES = ['A', 'B', 'C', 'D'];
@@ -63,9 +65,65 @@ const ROLES_THAT_PROSPECT = new Set([ROLES.SUPERVISOR, ROLES.REPRESENTANTE]);
 const DEFAULT_ROUTE_START_HHMM = '08:00';
 const DEFAULT_DAILY_MINUTES_CAP = 480;
 const DEFAULT_SERVICE_MINUTES = 45;
+const DEFAULT_TRAVEL_MINUTES_CAP = 360;
+const DEFAULT_DAILY_KM_CAP = 200;
 const RETURN_LEG_KMH = 22;
 const RETURN_LEG_HAVERSINE_FACTOR = 1.4;
 const PER_USER_CONCURRENCY = 8;
+
+// Feature flags — see plan inicial/2026-05-05-routes-api-uso-completo.md and
+// the implementation plan in C:\Users\gairo\.claude\plans\si-van-a-ser-elegant-scott.md
+//   PLAN_USE_COST_COEFFS    — α/β-weighted costFn with cost_coefficients table.
+//                             When false, costFn is duration-only (legacy behavior).
+//   PLAN_ENABLE_CAP_VALIDATION — also enforce users.travel_minutes_cap and
+//                             users.daily_km_cap during tryFit (in addition to
+//                             daily_minutes_cap). When false, only daily cap is checked.
+const ENABLE_COST_COEFFS = process.env.PLAN_USE_COST_COEFFS === 'true';
+const ENABLE_CAP_VALIDATION = process.env.PLAN_ENABLE_CAP_VALIDATION === 'true';
+
+// Identity coeffs used when ENABLE_COST_COEFFS=false or no row found in DB.
+// alpha_duration=1, beta_distance=0 yields costFn(a,b) = duration_seconds — the
+// exact behavior of the legacy 2-opt closure.
+const FALLBACK_COEFFS = Object.freeze({
+  alpha_duration: 1.0,
+  beta_distance: 0.0,
+  cost_per_km: 0,
+  cost_per_hour: 0,
+  fixed_cost_per_day: 0,
+  source: 'fallback',
+});
+
+// PR3 flags
+const ENABLE_BREAKS = process.env.PLAN_ENABLE_BREAKS === 'true';
+const ENABLE_SOFT_WINDOWS = process.env.PLAN_ENABLE_SOFT_WINDOWS === 'true';
+const ENABLE_PARETO_SERVICE = process.env.PLAN_ENABLE_PARETO_SERVICE === 'true';
+
+// PR5 flag: 'legacy' (NN+2opt only — historical) | 'multistart' (escalonado por N)
+const SOLVER_STRATEGY = process.env.PLAN_SOLVER || 'legacy';
+// Per-(rep,day) deadline budget for multistart. SLA in plan §6: N=25 < 500ms.
+const SOLVER_DEADLINE_MS = Number(process.env.PLAN_SOLVER_DEADLINE_MS) || 450;
+
+// PR6 flags
+//   ROUTES_INLINE_POLYLINE — request polylines in the matrix call so persist mode
+//                            doesn't need a separate computeRoute per arc.
+//   PLAN_TRAFFIC_AWARE     — use TRAFFIC_AWARE for the publish-time matrix with
+//                            departureTime = route start of the day. Doubles SKU price
+//                            (Pro $10/1k) but produces ETAs that respect real traffic.
+const ENABLE_INLINE_POLYLINE = process.env.ROUTES_INLINE_POLYLINE === 'true';
+const ENABLE_TRAFFIC_AWARE_ON_PUBLISH = process.env.PLAN_TRAFFIC_AWARE === 'true';
+
+// PR7 flag: post-greedy variance balance step (swap stops between rep_max and
+// rep_min when their estimated end-of-day differs by > BALANCE_GAP_THRESHOLD_MIN).
+const ENABLE_BALANCE_STEP = process.env.PLAN_ENABLE_BALANCE === 'true';
+const BALANCE_GAP_THRESHOLD_MIN = Number(process.env.PLAN_BALANCE_GAP_MIN) || 90;
+const BALANCE_MAX_ITERATIONS = 3;
+const BALANCE_MAX_SWAPS_PER_ITER = 2;
+
+// Penalty in equivalent-seconds for arriving outside a pharmacy's soft window.
+// Tuned so a 30-min slip costs as much as ~10 minutes of drive (i.e. solver will
+// detour up to 10 min to honor the window). Per-stop multiplier when default_assumed.
+const SOFT_WINDOW_PENALTY_SEC_PER_MIN = 20;
+const SOFT_WINDOW_DEFAULT_ASSUMED_DAMPING = 0.3;
 
 function isWeekday(date) {
   const d = date.getUTCDay();
@@ -147,14 +205,20 @@ async function resolveTargetsForUser(trx, userId, day) {
 }
 
 async function pickCandidateClients(trx, { paretoFilter, excludeClientIds = [] }) {
+  // Defensive: pharmacies.opening_hours_v2 only exists post-mig 070.
+  const hasOpeningHoursV2 = await trx.schema.hasColumn('pharmacies', 'opening_hours_v2').catch(() => false);
+  const selectCols = [
+    'mc.id', 'mc.cpadre', 'mc.pareto', 'mc.pharmacy_id', 'mc.farmacia_nombre',
+    'mc.delegacion_municipio', 'mc.poblacion',
+    trx.raw('ST_X(p.coordinates::geometry) AS lng'),
+    trx.raw('ST_Y(p.coordinates::geometry) AS lat'),
+  ];
+  if (hasOpeningHoursV2) {
+    selectCols.push('p.opening_hours_v2', 'p.opening_hours_parse_status');
+  }
   const q = trx('marzam_clients as mc')
     .leftJoin('pharmacies as p', 'p.id', 'mc.pharmacy_id')
-    .select(
-      'mc.id', 'mc.cpadre', 'mc.pareto', 'mc.pharmacy_id', 'mc.farmacia_nombre',
-      'mc.delegacion_municipio', 'mc.poblacion',
-      trx.raw('ST_X(p.coordinates::geometry) AS lng'),
-      trx.raw('ST_Y(p.coordinates::geometry) AS lat'),
-    )
+    .select(...selectCols)
     .whereNotNull('mc.pareto');
   if (paretoFilter?.length) q.whereIn('mc.pareto', paretoFilter);
   if (excludeClientIds.length) q.whereNotIn('mc.id', excludeClientIds);
@@ -182,17 +246,22 @@ async function pickCandidateProspects(trx, { excludePharmacyIds = [], paretoLett
     // table missing (pre-063) — degrade silently
   }
 
+  // Defensive: opening_hours_v2 only exists post-mig 070.
+  const hasOpeningHoursV2 = await trx.schema.hasColumn('pharmacies', 'opening_hours_v2').catch(() => false);
+
   if (snapshotPeriod) {
+    const selectCols = [
+      'p.id', 'p.name as farmacia_nombre', 'p.municipality as delegacion_municipio',
+      'p.quadrant', 'qs.quadrant as quadrant_derived', 'qs.final_score',
+      db.raw('ST_X(p.coordinates::geometry) AS lng'),
+      db.raw('ST_Y(p.coordinates::geometry) AS lat'),
+    ];
+    if (hasOpeningHoursV2) selectCols.push('p.opening_hours_v2', 'p.opening_hours_parse_status');
     const q = trx('pharmacies as p')
       .innerJoin('quadrant_snapshot as qs', function () {
         this.on('qs.pharmacy_id', '=', 'p.id').andOn('qs.period_start', '=', trx.raw('?', [snapshotPeriod]));
       })
-      .select(
-        'p.id', 'p.name as farmacia_nombre', 'p.municipality as delegacion_municipio',
-        'p.quadrant', 'qs.quadrant as quadrant_derived', 'qs.final_score',
-        db.raw('ST_X(p.coordinates::geometry) AS lng'),
-        db.raw('ST_Y(p.coordinates::geometry) AS lat'),
-      )
+      .select(...selectCols)
       .whereNot('p.source', 'marzam')
       .andWhere('p.status', 'active')
       .andWhere(function () {
@@ -210,13 +279,15 @@ async function pickCandidateProspects(trx, { excludePharmacyIds = [], paretoLett
   }
 
   // Fallback: live data (legacy behaviour).
+  const liveSelectCols = [
+    'id', 'name as farmacia_nombre', 'municipality as delegacion_municipio',
+    'quadrant', 'quadrant_derived', 'final_score',
+    db.raw('ST_X(coordinates::geometry) AS lng'),
+    db.raw('ST_Y(coordinates::geometry) AS lat'),
+  ];
+  if (hasOpeningHoursV2) liveSelectCols.push('opening_hours_v2', 'opening_hours_parse_status');
   const q = trx('pharmacies')
-    .select(
-      'id', 'name as farmacia_nombre', 'municipality as delegacion_municipio',
-      'quadrant', 'quadrant_derived', 'final_score',
-      db.raw('ST_X(coordinates::geometry) AS lng'),
-      db.raw('ST_Y(coordinates::geometry) AS lat'),
-    )
+    .select(...liveSelectCols)
     .whereNot('source', 'marzam')
     .andWhere('status', 'active')
     .andWhere(function () {
@@ -286,10 +357,180 @@ async function classifyCandidatesByPolygon(candidates) {
 }
 
 /**
+ * Resolve cost coefficients for a user with the hierarchy:
+ *   user → role → global → FALLBACK_COEFFS
+ *
+ * Cached by buildPlan in a per-run map so two calls within the same plan get
+ * stable values even if cost_coefficients is edited concurrently.
+ *
+ * Returns FALLBACK_COEFFS when ENABLE_COST_COEFFS=false (so the rest of the
+ * pipeline can treat coeffs as always present).
+ */
+async function resolveCostCoeffs(trx, user) {
+  if (!ENABLE_COST_COEFFS) return { ...FALLBACK_COEFFS, source: 'disabled' };
+  // Defensive: if migration 069 hasn't been applied yet, table won't exist.
+  try {
+    let row = await trx('cost_coefficients')
+      .where({ scope_kind: 'user', scope_value: user.id })
+      .whereNull('effective_to')
+      .first();
+    if (row) return { ...row, source: 'user' };
+    if (user.role) {
+      row = await trx('cost_coefficients')
+        .where({ scope_kind: 'role', scope_value: user.role })
+        .whereNull('effective_to')
+        .first();
+      if (row) return { ...row, source: 'role' };
+    }
+    row = await trx('cost_coefficients')
+      .where({ scope_kind: 'global' })
+      .whereNull('effective_to')
+      .first();
+    if (row) return { ...row, source: 'global' };
+  } catch (err) {
+    if (/relation .* does not exist/.test(String(err.message || ''))) {
+      log.warn({ event: 'plan.coeffs.table_missing', migration: '069', user_id: user.id });
+    } else {
+      throw err;
+    }
+  }
+  return { ...FALLBACK_COEFFS };
+}
+
+/**
+ * Load break rules with the same hierarchy as cost_coefficients (user → role → global).
+ * Returns array of break rules (typically 0 or 1 lunch). Quiet fallback when migration
+ * 071 not applied: returns [] so PR2 alone keeps working.
+ */
+async function loadBreakRules(trx, user) {
+  if (!ENABLE_BREAKS) return [];
+  try {
+    const userRules = await trx('break_rules')
+      .where({ scope_kind: 'user', scope_value: user.id, active: true })
+      .orderBy('kind');
+    if (userRules.length) return userRules;
+    if (user.role) {
+      const roleRules = await trx('break_rules')
+        .where({ scope_kind: 'role', scope_value: user.role, active: true })
+        .orderBy('kind');
+      if (roleRules.length) return roleRules;
+    }
+    return trx('break_rules')
+      .where({ scope_kind: 'global', active: true })
+      .orderBy('kind');
+  } catch (err) {
+    if (/relation .* does not exist/.test(String(err.message || ''))) return [];
+    throw err;
+  }
+}
+
+/**
+ * Returns Map<pareto, service_minutes>. Empty map when migration 072 not applied
+ * or feature flag off — caller falls back to user.service_minutes_per_stop or
+ * DEFAULT_SERVICE_MINUTES.
+ */
+async function loadParetoServiceOverrides(trx) {
+  if (!ENABLE_PARETO_SERVICE) return new Map();
+  try {
+    const rows = await trx('pareto_service_overrides')
+      .where({ active: true })
+      .select('pareto', 'service_minutes', 'applies_to_kind');
+    const out = new Map();
+    for (const r of rows) out.set(r.pareto, { minutes: r.service_minutes, kind: r.applies_to_kind });
+    return out;
+  } catch (err) {
+    if (/relation .* does not exist/.test(String(err.message || ''))) return new Map();
+    throw err;
+  }
+}
+
+/**
+ * Resolve service minutes for a stop. Hierarchy:
+ *   1. users.service_minutes_per_stop (if set explicitly per rep)
+ *   2. pareto_service_overrides[stop.pareto] when ENABLE_PARETO_SERVICE
+ *   3. DEFAULT_SERVICE_MINUTES (45)
+ */
+function resolveServiceMinutes(user, stop, paretoOverrides) {
+  if (user.service_minutes_per_stop != null && Number(user.service_minutes_per_stop) > 0) {
+    return Number(user.service_minutes_per_stop);
+  }
+  if (ENABLE_PARETO_SERVICE && paretoOverrides && stop?.pareto) {
+    const override = paretoOverrides.get(stop.pareto);
+    if (override) {
+      const stopKind = stop.__type || stop.__kind;
+      if (override.kind === 'both' || override.kind === stopKind) return override.minutes;
+    }
+  }
+  return DEFAULT_SERVICE_MINUTES;
+}
+
+/**
+ * Compute soft-window penalty in equivalent-seconds for arriving outside a pharmacy's
+ * opening hours. Returns 0 when feature flag off, no v2 hours, or arrival is inside
+ * the window. Default-assumed windows get reduced damping (we don't trust them enough
+ * to fully penalize).
+ *
+ * arrivalDate: JS Date in UTC. dayIso: 'YYYY-MM-DD'.
+ */
+const { windowForDay } = require('../../services/openingHoursParser');
+
+function softWindowPenaltySeconds(stop, arrivalDate, dayIso) {
+  if (!ENABLE_SOFT_WINDOWS || !stop || !arrivalDate) return 0;
+  const win = windowForDay(stop, dayIso);
+  if (!win) {
+    // Pharmacy closed on this day → very strong penalty (treat as 60-min slip).
+    return SOFT_WINDOW_PENALTY_SEC_PER_MIN * 60;
+  }
+  const arrivalLocalMin = arrivalDate.getUTCHours() * 60 + arrivalDate.getUTCMinutes();
+  // Note: opening_hours stored as local CDMX (UTC-6). arrival is UTC. Adjust by 6h.
+  const localMin = (arrivalLocalMin - 6 * 60 + 24 * 60) % (24 * 60);
+  const [oh, om] = win.open.split(':').map(Number);
+  const [ch, cm] = win.close.split(':').map(Number);
+  const openMin = oh * 60 + om;
+  const closeMin = ch * 60 + cm;
+  let slip = 0;
+  if (localMin < openMin) slip = openMin - localMin;
+  else if (localMin > closeMin) slip = localMin - closeMin;
+  if (!slip) return 0;
+  const damping = win.defaultAssumed ? SOFT_WINDOW_DEFAULT_ASSUMED_DAMPING : 1.0;
+  return slip * SOFT_WINDOW_PENALTY_SEC_PER_MIN * damping;
+}
+
+/**
+ * Build the cost function used by NN-from-depot and 2-opt over a duration matrix.
+ *
+ *   costFn(a, b) = α · duration_seconds[a][b] + β · distance_meters[a][b]
+ *
+ * When β=0 (legacy path) this collapses to pure-duration ordering, byte-equivalent
+ * to the previous closure at planGenerator.js:515.
+ *
+ * distancesMatrix is optional: when null (e.g. matrix call returned only durations
+ * because field mask omitted distance), β is ignored.
+ */
+function buildCostFn(durationsMatrix, distancesMatrix, coeffs) {
+  const alpha = Number(coeffs?.alpha_duration ?? 1.0);
+  const beta = Number(coeffs?.beta_distance ?? 0.0);
+  return (a, b) => {
+    const ai = a.__seqIdx ?? 0;
+    const bi = b.__seqIdx ?? 0;
+    const d = durationsMatrix[ai][bi];
+    if (!Number.isFinite(d)) return Infinity;
+    if (!beta || !distancesMatrix) return alpha * d;
+    const dist = distancesMatrix[ai][bi];
+    if (!Number.isFinite(dist)) return alpha * d;
+    return alpha * d + beta * dist;
+  };
+}
+
+/**
  * Phase 1 — assign candidates to (user, day) cells using cluster-then-greedy
  * with a daily-minutes-cap budget enforced.
  *
  * targets[userId][dayIso] = { marzam: { A, B, C }, prospecto: { A, B, C, D } }
+ *
+ * When ENABLE_CAP_VALIDATION=true, also tracks per-day travel minutes and km
+ * against users.travel_minutes_cap / daily_km_cap; rejected candidates surface
+ * in unassigned[] with reason 'travel_cap_exceeded' or 'km_cap_exceeded'.
  */
 function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targets }) {
   const usedClients = new Set();
@@ -346,24 +587,54 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
     }
   }
 
-  // Per-(user,day) budget tracker: cumulative minutes including drive estimates.
-  const dayBudgetUsed = new Map(); // key `${userId}|${dayIso}` -> minutes used
+  // Per-(user,day) budget trackers — three independent dimensions because a
+  // long-distance detour can pass the daily cap (jornada total) but blow the
+  // travel cap (manejo) or distance cap (gasolina + desgaste).
+  const dayBudgetUsed = new Map();   // `${userId}|${dayIso}` -> total minutes
+  const dayTravelUsed = new Map();   // `${userId}|${dayIso}` -> driving minutes only
+  const dayKmUsed = new Map();       // `${userId}|${dayIso}` -> driving km only
 
   function budgetKey(u, d) { return `${u}|${d}`; }
+
+  /**
+   * Returns either an accepted fit (`{fromPrev, fromPrevKm, service, returnLeg, returnKm}`)
+   * or a rejection (`{rejected: 'cap_exceeded'|'travel_cap_exceeded'|'km_cap_exceeded'}`).
+   *
+   * Caller pushes accepted stops to dayStops and rejections (with reason) to unassigned[].
+   */
   function tryFit(u, dayIso, candidate, prevPoint) {
     const key = budgetKey(u.id, dayIso);
     const used = dayBudgetUsed.get(key) || 0;
+    const usedTravel = dayTravelUsed.get(key) || 0;
+    const usedKm = dayKmUsed.get(key) || 0;
+
     const cap = u.daily_minutes_cap || DEFAULT_DAILY_MINUTES_CAP;
+    const travelCap = u.travel_minutes_cap != null ? Number(u.travel_minutes_cap) : DEFAULT_TRAVEL_MINUTES_CAP;
+    const kmCap = u.daily_km_cap != null ? Number(u.daily_km_cap) : DEFAULT_DAILY_KM_CAP;
     const service = u.service_minutes_per_stop || DEFAULT_SERVICE_MINUTES;
+
     const home = (u.home_lat != null && u.home_lng != null)
       ? { lat: Number(u.home_lat), lng: Number(u.home_lng) }
       : null;
     const candPoint = { lat: Number(candidate.lat), lng: Number(candidate.lng) };
-    const fromPrev = prevPoint ? estimateMinutes(prevPoint, candPoint) : (home ? estimateMinutes(home, candPoint) : 0);
+
+    const fromOrigin = prevPoint || home;
+    const fromPrev = fromOrigin ? estimateMinutes(fromOrigin, candPoint) : 0;
+    const fromPrevKm = fromOrigin ? haversineKm(fromOrigin, candPoint) * RETURN_LEG_HAVERSINE_FACTOR : 0;
     const returnLeg = home ? estimateMinutes(candPoint, home) : 0;
+    const returnKm = home ? haversineKm(candPoint, home) * RETURN_LEG_HAVERSINE_FACTOR : 0;
+
     const optimisticTotal = used + fromPrev + service + returnLeg;
-    if (optimisticTotal > cap) return null;
-    return { fromPrev, service, returnLeg };
+    if (optimisticTotal > cap) return { rejected: 'cap_exceeded' };
+
+    if (ENABLE_CAP_VALIDATION) {
+      const optimisticTravel = usedTravel + fromPrev + returnLeg;
+      const optimisticKm = usedKm + fromPrevKm + returnKm;
+      if (optimisticTravel > travelCap) return { rejected: 'travel_cap_exceeded' };
+      if (optimisticKm > kmCap) return { rejected: 'km_cap_exceeded' };
+    }
+
+    return { fromPrev, fromPrevKm, service, returnLeg, returnKm };
   }
 
   for (const day of days) {
@@ -381,13 +652,18 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
       // Track the previous accepted stop's coords so the cap accounting reflects
       // sequencing (approximately — we'll re-sequence with real driving in phase 2).
       let prevPoint = home;
+      // Returns:
+      //   true  → candidate accepted
+      //   string → rejection reason ('cap_exceeded'|'travel_cap_exceeded'|'km_cap_exceeded')
       const fitOrUnassign = (candidate, kind) => {
         const fit = tryFit(u, dayIso, candidate, prevPoint);
-        if (!fit) return false;
+        if (fit.rejected) return fit.rejected;
         dayStops.push({ ...candidate, __type: kind });
         if (kind === 'client') usedClients.add(candidate.id); else usedProspects.add(candidate.id);
         const key = budgetKey(u.id, dayIso);
         dayBudgetUsed.set(key, (dayBudgetUsed.get(key) || 0) + fit.fromPrev + fit.service);
+        dayTravelUsed.set(key, (dayTravelUsed.get(key) || 0) + fit.fromPrev);
+        dayKmUsed.set(key, (dayKmUsed.get(key) || 0) + fit.fromPrevKm);
         prevPoint = { lat: Number(candidate.lat), lng: Number(candidate.lng) };
         return true;
       };
@@ -400,9 +676,10 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
         const pool = (userBuckets?.client?.[pareto] || []).filter((c) => !usedClients.has(c.id));
         for (const candidate of pool) {
           if (placed >= dailyTarget) break;
-          if (fitOrUnassign(candidate, 'client')) placed += 1;
+          const result = fitOrUnassign(candidate, 'client');
+          if (result === true) placed += 1;
           else {
-            unassigned.push({ user_id: u.id, day: dayIso, pareto, kind: 'marzam', reason: 'cap_exceeded', stop_id: candidate.id });
+            unassigned.push({ user_id: u.id, day: dayIso, pareto, kind: 'marzam', reason: result, stop_id: candidate.id });
           }
         }
 
@@ -416,7 +693,7 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
             .sort((a, b) => a.__distScore - b.__distScore);
           for (const candidate of prospectPool) {
             if (placed >= dailyTarget) break;
-            if (fitOrUnassign(candidate, 'prospect')) placed += 1;
+            if (fitOrUnassign(candidate, 'prospect') === true) placed += 1;
           }
         }
 
@@ -435,9 +712,10 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
           const pool = (userBuckets?.prospect?.[pareto] || []).filter((c) => !usedProspects.has(c.id));
           for (const candidate of pool) {
             if (placed >= dailyTarget) break;
-            if (fitOrUnassign(candidate, 'prospect')) placed += 1;
+            const result = fitOrUnassign(candidate, 'prospect');
+            if (result === true) placed += 1;
             else {
-              unassigned.push({ user_id: u.id, day: dayIso, pareto, kind: 'prospecto', reason: 'cap_exceeded', stop_id: candidate.id });
+              unassigned.push({ user_id: u.id, day: dayIso, pareto, kind: 'prospecto', reason: result, stop_id: candidate.id });
             }
           }
           const shortfall = dailyTarget - placed;
@@ -454,6 +732,134 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
 }
 
 /**
+ * Estimate total minutes a rep will spend on a given day given their stops.
+ * Uses Haversine×1.4 / 22 km/h estimates — same proxy used by tryFit. We don't
+ * fetch real matrices here because the balance step runs before sequencing.
+ */
+function estimateDayMinutes(rep, stops, paretoOverrides) {
+  if (!stops.length) return 0;
+  const home = (rep.home_lat != null && rep.home_lng != null)
+    ? { lat: Number(rep.home_lat), lng: Number(rep.home_lng) } : null;
+  if (!home) return 0;
+  let total = 0;
+  let prev = home;
+  for (const s of stops) {
+    const stopPoint = { lat: Number(s.lat), lng: Number(s.lng) };
+    total += estimateMinutes(prev, stopPoint);
+    total += resolveServiceMinutes(rep, s, paretoOverrides);
+    prev = stopPoint;
+  }
+  total += estimateMinutes(prev, home); // return leg
+  return total;
+}
+
+/**
+ * Post-greedy balance step. Reduces the gap between max(end_min) and min(end_min)
+ * across reps for each day by trying single-stop transfers from the longest rep
+ * to the shortest rep when:
+ *   - Both reps are clustered geographically (haversine(home_max, stop) is comparable
+ *     to haversine(home_min, stop)).
+ *   - The transfer reduces overall variance.
+ *   - Neither rep ends up over their daily_minutes_cap.
+ *
+ * This is a heuristic — exact min-makespan is NP-hard. The aim is to absorb the
+ * "rep1 done at 13:00, rep2 done at 17:00" syndrome that bare greedy produces.
+ *
+ * Mutates `assignmentMap` in place. Returns metrics for telemetry.
+ */
+function balanceByVarianceSwap({ assignmentMap, scopeUsers, paretoOverrides, days }) {
+  if (!ENABLE_BALANCE_STEP) {
+    return { enabled: false, swaps_attempted: 0, swaps_accepted: 0, gap_before: 0, gap_after: 0 };
+  }
+  const userById = new Map(scopeUsers.map((u) => [u.id, u]));
+  const stats = {
+    enabled: true, swaps_attempted: 0, swaps_accepted: 0,
+    gap_before: 0, gap_after: 0,
+    iterations: 0,
+  };
+
+  for (const day of days) {
+    const dayIso = isoDate(day);
+    const minutesByRep = new Map();
+    for (const u of scopeUsers) {
+      const stops = (assignmentMap.get(u.id) || new Map()).get(dayIso) || [];
+      minutesByRep.set(u.id, estimateDayMinutes(u, stops, paretoOverrides));
+    }
+    const initialGap = Math.max(...minutesByRep.values()) - Math.min(...minutesByRep.values());
+    stats.gap_before = Math.max(stats.gap_before, initialGap);
+
+    if (initialGap <= BALANCE_GAP_THRESHOLD_MIN) continue;
+
+    for (let iter = 0; iter < BALANCE_MAX_ITERATIONS; iter += 1) {
+      stats.iterations += 1;
+      // Sort users by current minutes desc (longest first) and asc (shortest first).
+      const sorted = [...minutesByRep.entries()].sort((a, b) => b[1] - a[1]);
+      const longest = sorted[0];
+      const shortest = sorted[sorted.length - 1];
+      const gap = longest[1] - shortest[1];
+      if (gap <= BALANCE_GAP_THRESHOLD_MIN) break;
+
+      const longRep = userById.get(longest[0]);
+      const shortRep = userById.get(shortest[0]);
+      const longStops = (assignmentMap.get(longRep.id) || new Map()).get(dayIso) || [];
+      const shortHome = (shortRep.home_lat != null && shortRep.home_lng != null)
+        ? { lat: Number(shortRep.home_lat), lng: Number(shortRep.home_lng) } : null;
+      if (!shortHome) break;
+
+      // Try each stop of longRep — score by potential variance reduction.
+      let acceptedThisIter = 0;
+      const candidates = longStops.slice().sort((a, b) => {
+        // Prefer stops geographically closer to shortRep's home.
+        const da = haversineKm(shortHome, { lat: Number(a.lat), lng: Number(a.lng) });
+        const db = haversineKm(shortHome, { lat: Number(b.lat), lng: Number(b.lng) });
+        return da - db;
+      });
+      for (const stop of candidates) {
+        if (acceptedThisIter >= BALANCE_MAX_SWAPS_PER_ITER) break;
+        stats.swaps_attempted += 1;
+
+        // Simulate move.
+        const newLongStops = longStops.filter((s) => s !== stop);
+        const newShortStops = [...((assignmentMap.get(shortRep.id) || new Map()).get(dayIso) || []), stop];
+
+        const newLongMin = estimateDayMinutes(longRep, newLongStops, paretoOverrides);
+        const newShortMin = estimateDayMinutes(shortRep, newShortStops, paretoOverrides);
+        const longCap = longRep.daily_minutes_cap || DEFAULT_DAILY_MINUTES_CAP;
+        const shortCap = shortRep.daily_minutes_cap || DEFAULT_DAILY_MINUTES_CAP;
+
+        if (newShortMin > shortCap) continue; // would blow short rep's cap
+        if (newLongMin > longCap) continue;   // pathological
+        const newGap = Math.abs(newLongMin - newShortMin);
+        if (newGap >= gap) continue;
+
+        // Accept swap.
+        const longBucket = assignmentMap.get(longRep.id).get(dayIso);
+        const shortBucket = assignmentMap.get(shortRep.id).get(dayIso) || [];
+        const idx = longBucket.indexOf(stop);
+        if (idx >= 0) longBucket.splice(idx, 1);
+        shortBucket.push(stop);
+        if (!assignmentMap.get(shortRep.id).has(dayIso)) {
+          assignmentMap.get(shortRep.id).set(dayIso, shortBucket);
+        }
+        minutesByRep.set(longRep.id, newLongMin);
+        minutesByRep.set(shortRep.id, newShortMin);
+        stats.swaps_accepted += 1;
+        acceptedThisIter += 1;
+        // Re-sort longStops after removal.
+        longStops.splice(longStops.indexOf(stop), 1);
+      }
+
+      if (acceptedThisIter === 0) break;  // no improvement possible at this iteration
+    }
+
+    const finalGap = Math.max(...minutesByRep.values()) - Math.min(...minutesByRep.values());
+    stats.gap_after = Math.max(stats.gap_after, finalGap);
+  }
+
+  return stats;
+}
+
+/**
  * Phase 2 — sequence each (rep, day) using driving-time matrix.
  *
  * Modes:
@@ -464,7 +870,10 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
  *                                       matrix. No computeRoute calls. Polyline
  *                                       comes from cache when present, else null.
  */
-async function sequenceAndMaterialize({ scopeUsers, assignments, planConfig, mode = 'persist' }) {
+async function sequenceAndMaterialize({
+  scopeUsers, assignments, planConfig, mode = 'persist',
+  coeffsByUserId = null, breakRulesByUserId = null, paretoOverrides = null,
+}) {
   const rows = [];
   const totals = {
     total_drive_minutes: 0,
@@ -472,6 +881,10 @@ async function sequenceAndMaterialize({ scopeUsers, assignments, planConfig, mod
     caution_arcs: 0,
     polyline_arcs: 0,
     last_leg_minutes_per_user: {},
+    soft_window_violations: 0,
+    soft_window_violation_count: 0,
+    break_applied_per_user: {},
+    break_skipped_per_user: {},
   };
   const routeStartHHMM = planConfig.route_start_hhmm || DEFAULT_ROUTE_START_HHMM;
   const userById = new Map(scopeUsers.map((u) => [u.id, u]));
@@ -494,32 +907,74 @@ async function sequenceAndMaterialize({ scopeUsers, assignments, planConfig, mod
       let ordered = stopsWithCoords;
       let durationsMatrix = null;
 
+      // Holds polyline per (i,j) when fieldMask='with_polyline' returned them.
+      let polylineMatrix = null;
+
       if (home && stopsWithCoords.length >= 2) {
         const points = [home, ...stopsWithCoords.map((s) => ({ lat: Number(s.lat), lng: Number(s.lng) }))];
+        // PR6: when persisting AND ROUTES_INLINE_POLYLINE flag is on, we ask Google
+        // for polylines inline. Avoids N×computeRoute calls per (rep,day).
+        const wantsInlinePolyline = (mode === 'persist') && ENABLE_INLINE_POLYLINE;
+        // PR6: when persisting AND PLAN_TRAFFIC_AWARE is on, switch to TRAFFIC_AWARE
+        // for the publish-time matrix with the actual route start time of the day.
+        // Preview iterations stay UNAWARE to keep the editor cheap.
+        const matrixPref = (mode === 'persist' && ENABLE_TRAFFIC_AWARE_ON_PUBLISH)
+          ? 'TRAFFIC_AWARE' : 'TRAFFIC_UNAWARE';
+        const departureTime = matrixPref === 'TRAFFIC_AWARE'
+          ? localDayHHMMToUTC(dayIso, routeStartHHMM)
+          : undefined;
         try {
-          const matrix = await routesMatrix.computeMatrixCached(points, points, {
-            preference: 'TRAFFIC_UNAWARE',
-          });
+          const matrixCall = wantsInlinePolyline
+            ? routesMatrix.computeMatrixWithPolyline(points, points, {
+                preference: matrixPref, departureTime, metricsSink: totals,
+              })
+            : routesMatrix.computeMatrixCached(points, points, {
+                preference: matrixPref, departureTime, metricsSink: totals,
+              });
+          const matrix = await matrixCall;
           durationsMatrix = Array.from({ length: points.length }, () => new Array(points.length).fill(Infinity));
+          if (wantsInlinePolyline) {
+            polylineMatrix = Array.from({ length: points.length }, () => new Array(points.length).fill(null));
+          }
           for (const r of matrix) {
             durationsMatrix[r.originIndex][r.destinationIndex] = r.durationSeconds;
+            if (polylineMatrix && r.polyline) polylineMatrix[r.originIndex][r.destinationIndex] = r.polyline;
           }
+          totals.traffic_aware_used = totals.traffic_aware_used || (matrixPref === 'TRAFFIC_AWARE');
         } catch (err) {
-          console.warn(`[planGenerator] matrix failed for user ${userId} day ${dayIso}: ${err.message}`);
+          log.warn({ event: 'plan.matrix.failed', user_id: userId, day: dayIso, mode, err: err.message });
           durationsMatrix = null;
         }
 
         if (durationsMatrix) {
           stopsWithCoords.forEach((s, i) => { s.__seqIdx = i + 1; });
           const depotMarker = { __seqIdx: 0, lat: home.lat, lng: home.lng, __depot: true };
-          const costFn = (a, b) => {
-            const ai = a.__seqIdx ?? 0;
-            const bi = b.__seqIdx ?? 0;
-            return durationsMatrix[ai][bi];
-          };
-          const nnOrdered = orderStopsFromDepot(depotMarker, stopsWithCoords, costFn);
-          const opt = twoOptImprove([depotMarker, ...nnOrdered], costFn);
-          ordered = opt.slice(1).map((s) => stopsWithCoords.find((x) => x.__seqIdx === s.__seqIdx));
+          const userCoeffs = coeffsByUserId ? coeffsByUserId.get(userId) : null;
+          // distancesMatrix is null in this PR — matrix call only fetches durations.
+          // PR6 (ROUTES_INLINE_POLYLINE) populates a parallel distance matrix.
+          const costFn = buildCostFn(durationsMatrix, null, userCoeffs);
+          const solverResult = multiStartSolver.solve({
+            depot: depotMarker,
+            stops: stopsWithCoords,
+            costFn,
+            repId: userId,
+            dayIso,
+            deadline: Date.now() + SOLVER_DEADLINE_MS,
+            strategy: SOLVER_STRATEGY,
+          });
+          ordered = solverResult.ordered.map((s) => stopsWithCoords.find((x) => x.__seqIdx === s.__seqIdx)).filter(Boolean);
+          // Track solver telemetry per (rep, day) for metrics.solver.
+          totals.solver_runs = totals.solver_runs || [];
+          totals.solver_runs.push({
+            user_id: userId,
+            day: dayIso,
+            n: stopsWithCoords.length,
+            mode: solverResult.mode,
+            tier: solverResult.strategy,
+            seeds_tried: solverResult.seedsTried,
+            kernels: solverResult.kernels,
+            cost_seconds: Math.round(solverResult.totalCost),
+          });
         } else {
           const costFn = (a, b) => haversineKm({ lat: a.lat, lng: a.lng }, { lat: b.lat, lng: b.lng });
           ordered = orderStopsFromDepot(home, stopsWithCoords, costFn);
@@ -533,7 +988,55 @@ async function sequenceAndMaterialize({ scopeUsers, assignments, planConfig, mod
       let routeOrder = 1;
       const dayRows = [];
 
-      for (const s of ordered) {
+      // Lunch-break planning: before the walk, decide BEFORE which stop to insert the
+      // break. Strategy: simulate the walk timeline; insert the break before the first
+      // stop whose arrival would fall within (or after) the soft window (earliest..latest).
+      // If we never reach the window naturally, hard_required breaks fire at the end of
+      // the day with a metrics flag.
+      const breakRules = breakRulesByUserId ? (breakRulesByUserId.get(userId) || []) : [];
+      const lunchRule = breakRules.find((b) => b.kind === 'lunch') || null;
+      let breakBeforeIdx = null;
+      let breakDurationMin = 0;
+      let breakStatus = null; // 'on_time' | 'late' | 'skipped'
+      if (lunchRule) {
+        breakDurationMin = lunchRule.duration_min;
+        const earliestUtc = localDayHHMMToUTC(dayIso, String(lunchRule.earliest).slice(0, 5));
+        const latestUtc = localDayHHMMToUTC(dayIso, String(lunchRule.latest).slice(0, 5));
+        let simCursor = new Date(cursor);
+        let simPrev = 0;
+        for (let i = 0; i < ordered.length; i += 1) {
+          const s = ordered[i];
+          const seg = (durationsMatrix && s.__seqIdx != null && Number.isFinite(durationsMatrix[simPrev][s.__seqIdx]))
+            ? durationsMatrix[simPrev][s.__seqIdx]
+            : Math.round(haversineKm(home, { lat: Number(s.lat), lng: Number(s.lng) }) * RETURN_LEG_HAVERSINE_FACTOR / RETURN_LEG_KMH * 3600);
+          simCursor = new Date(simCursor.getTime() + seg * 1000);
+          if (simCursor >= earliestUtc) {
+            breakBeforeIdx = i;
+            breakStatus = simCursor <= latestUtc ? 'on_time' : 'late';
+            break;
+          }
+          simCursor = new Date(simCursor.getTime() + resolveServiceMinutes(u, s, paretoOverrides) * 60 * 1000);
+          simPrev = s.__seqIdx ?? 0;
+        }
+        if (breakBeforeIdx == null) {
+          if (lunchRule.hard_required) {
+            breakBeforeIdx = ordered.length; // end of day
+            breakStatus = 'late';
+          } else {
+            breakStatus = 'skipped';
+          }
+        }
+      }
+
+      for (let i = 0; i < ordered.length; i += 1) {
+        const s = ordered[i];
+
+        // Apply lunch break before this stop if scheduled here.
+        if (lunchRule && i === breakBeforeIdx && breakStatus !== 'skipped') {
+          cursor = new Date(cursor.getTime() + breakDurationMin * 60 * 1000);
+          totals.break_applied_per_user[userId] = (totals.break_applied_per_user[userId] || 0) + breakDurationMin;
+        }
+
         const stopPoint = { lat: Number(s.lat), lng: Number(s.lng) };
         let travelSeconds = 0;
         let polyline = null;
@@ -545,24 +1048,39 @@ async function sequenceAndMaterialize({ scopeUsers, assignments, planConfig, mod
         }
 
         if (mode === 'persist' && prevPoint) {
-          // Real polyline materialization — only at publish time.
-          try {
-            const route = await routesMatrix.computeRoute(prevPoint, stopPoint, { preference: 'TRAFFIC_UNAWARE' });
-            if (route) {
-              travelSeconds = route.durationSeconds || travelSeconds;
-              polyline = route.polyline;
-              if (polyline) {
-                crossesCaution = await securityPolygons.polylineIntersectsCaution(polyline);
-                if (crossesCaution) {
-                  travelSeconds = Math.round(travelSeconds * securityPolygons.CAUTION_PENALTY);
-                  totals.caution_arcs += 1;
-                }
-                totals.polyline_arcs += 1;
-                routesMatrix.persistPolylineSafe(prevPoint, stopPoint, polyline);
-              }
+          // PR6: prefer polyline already shipped by the matrix call. Fall through
+          // to per-arc computeRoute only when (a) polyline-in-matrix flag is OFF,
+          // or (b) the matrix didn't return a polyline for this arc.
+          let usedInline = false;
+          if (polylineMatrix && s.__seqIdx != null) {
+            const inline = polylineMatrix[prevSeqIdx][s.__seqIdx];
+            if (inline) {
+              polyline = inline;
+              usedInline = true;
             }
-          } catch (err) {
-            console.warn(`[planGenerator] route failed for user ${userId} day ${dayIso}: ${err.message}`);
+          }
+          if (!usedInline) {
+            try {
+              const route = await routesMatrix.computeRoute(prevPoint, stopPoint, { preference: 'TRAFFIC_UNAWARE' });
+              if (route) {
+                travelSeconds = route.durationSeconds || travelSeconds;
+                polyline = route.polyline;
+              }
+            } catch (err) {
+              log.warn({ event: 'plan.route.failed', user_id: userId, day: dayIso, err: err.message });
+            }
+          }
+          if (polyline) {
+            crossesCaution = await securityPolygons.polylineIntersectsCaution(polyline);
+            if (crossesCaution) {
+              travelSeconds = Math.round(travelSeconds * securityPolygons.CAUTION_PENALTY);
+              totals.caution_arcs += 1;
+            }
+            totals.polyline_arcs += 1;
+            // Even when usedInline=true the cache row for this geohash7 pair
+            // may not yet have polyline if a prior preview-only matrix call
+            // wrote a row without it. persistPolylineSafe ensures coverage.
+            if (!usedInline) routesMatrix.persistPolylineSafe(prevPoint, stopPoint, polyline);
           }
         }
 
@@ -574,7 +1092,21 @@ async function sequenceAndMaterialize({ scopeUsers, assignments, planConfig, mod
         const travelMinutes = Math.round(travelSeconds / 60);
         cursor = new Date(cursor.getTime() + travelSeconds * 1000);
         const arrival = new Date(cursor);
-        cursor = new Date(cursor.getTime() + serviceMinutes * 60 * 1000);
+
+        // Soft window violation tracking. Only metrics + per-row stamp; does not
+        // re-order. The reorder-aware path is the multi-start solver in PR5.
+        const stopServiceMin = resolveServiceMinutes(u, s, paretoOverrides);
+        let softSlipMin = 0;
+        if (ENABLE_SOFT_WINDOWS) {
+          const penaltySec = softWindowPenaltySeconds(s, arrival, dayIso);
+          if (penaltySec > 0) {
+            softSlipMin = Math.round(penaltySec / SOFT_WINDOW_PENALTY_SEC_PER_MIN);
+            totals.soft_window_violations += softSlipMin;
+            totals.soft_window_violation_count += 1;
+          }
+        }
+
+        cursor = new Date(cursor.getTime() + stopServiceMin * 60 * 1000);
 
         const row = {
           visitor_user_id: userId,
@@ -587,7 +1119,7 @@ async function sequenceAndMaterialize({ scopeUsers, assignments, planConfig, mod
           expected_start_time: arrival,
           expected_arrival_time: arrival,
           expected_travel_minutes: travelMinutes,
-          expected_service_minutes: serviceMinutes,
+          expected_service_minutes: stopServiceMin,
           polyline_to_next: null,
           // Preview-only fields (stripped before DB insert in generate()).
           lat: s.lat != null ? Number(s.lat) : null,
@@ -596,16 +1128,27 @@ async function sequenceAndMaterialize({ scopeUsers, assignments, planConfig, mod
           cpadre: s.cpadre || null,
           pareto: s.pareto || null,
           __crossesCaution: crossesCaution,
+          __softWindowSlipMin: softSlipMin,
         };
         dayRows.push(row);
         if (dayRows.length > 1) {
           dayRows[dayRows.length - 2].polyline_to_next = polyline;
         }
         totals.total_drive_minutes += travelMinutes;
-        totals.total_service_minutes += serviceMinutes;
+        totals.total_service_minutes += stopServiceMin;
         prevPoint = stopPoint;
         prevSeqIdx = s.__seqIdx ?? 0;
         routeOrder += 1;
+      }
+
+      // Apply lunch break at end-of-day if scheduled there (hard_required and never
+      // hit the window naturally).
+      if (lunchRule && breakBeforeIdx === ordered.length && breakStatus !== 'skipped') {
+        cursor = new Date(cursor.getTime() + breakDurationMin * 60 * 1000);
+        totals.break_applied_per_user[userId] = (totals.break_applied_per_user[userId] || 0) + breakDurationMin;
+      }
+      if (lunchRule && breakStatus === 'skipped') {
+        totals.break_skipped_per_user[userId] = (totals.break_skipped_per_user[userId] || 0) + 1;
       }
 
       // Append return leg duration (no row, just metric) — closes the day.
@@ -688,28 +1231,66 @@ async function buildPlan(args, trx, mode) {
     }
   }
 
-  // Defensive SELECT: migration 057 might not be applied. Fall back to base
-  // columns and let the geo logic degrade gracefully.
+  // Defensive SELECT: migration 057 / 068 might not be applied. Fall back to
+  // base columns and let the geo + cap logic degrade gracefully.
+  // Columns from 057: home_lat, home_lng, daily_minutes_cap, service_minutes_per_stop
+  // Columns from 068: travel_minutes_cap, daily_km_cap, preferred_travel_mode
   let scopeUsers;
   try {
     scopeUsers = await trx('users')
       .select('id', 'role', 'full_name', 'branch_id',
-        'home_lat', 'home_lng', 'daily_minutes_cap', 'service_minutes_per_stop')
+        'home_lat', 'home_lng', 'daily_minutes_cap', 'service_minutes_per_stop',
+        'travel_minutes_cap', 'daily_km_cap', 'preferred_travel_mode')
       .whereIn('id', scopeUserIds)
       .andWhere({ is_active: true });
   } catch (err) {
     if (/column .* does not exist/.test(String(err.message || ''))) {
-      console.warn('[planGenerator] migration 057 not applied — degrading');
-      scopeUsers = (await trx('users')
-        .select('id', 'role', 'full_name', 'branch_id')
-        .whereIn('id', scopeUserIds)
-        .andWhere({ is_active: true }))
-        .map((u) => ({
-          ...u, home_lat: null, home_lng: null,
-          daily_minutes_cap: DEFAULT_DAILY_MINUTES_CAP,
-          service_minutes_per_stop: DEFAULT_SERVICE_MINUTES,
-        }));
+      log.warn({ event: 'plan.users.migration_pending', migrations: ['057', '068'], degraded: true });
+      // Try 057-only fallback first.
+      try {
+        scopeUsers = (await trx('users')
+          .select('id', 'role', 'full_name', 'branch_id',
+            'home_lat', 'home_lng', 'daily_minutes_cap', 'service_minutes_per_stop')
+          .whereIn('id', scopeUserIds)
+          .andWhere({ is_active: true }))
+          .map((u) => ({
+            ...u,
+            travel_minutes_cap: DEFAULT_TRAVEL_MINUTES_CAP,
+            daily_km_cap: DEFAULT_DAILY_KM_CAP,
+            preferred_travel_mode: 'DRIVE',
+          }));
+      } catch {
+        scopeUsers = (await trx('users')
+          .select('id', 'role', 'full_name', 'branch_id')
+          .whereIn('id', scopeUserIds)
+          .andWhere({ is_active: true }))
+          .map((u) => ({
+            ...u, home_lat: null, home_lng: null,
+            daily_minutes_cap: DEFAULT_DAILY_MINUTES_CAP,
+            service_minutes_per_stop: DEFAULT_SERVICE_MINUTES,
+            travel_minutes_cap: DEFAULT_TRAVEL_MINUTES_CAP,
+            daily_km_cap: DEFAULT_DAILY_KM_CAP,
+            preferred_travel_mode: 'DRIVE',
+          }));
+      }
     } else { throw err; }
+  }
+
+  // Resolve cost coefficients for every user up front. coeffsByUserId is consumed
+  // by sequenceAndMaterialize when building costFn, and snapshotted into metrics
+  // so historical post-mortems use the values that were active at plan time.
+  const coeffsByUserId = new Map();
+  const breakRulesByUserId = new Map();
+  await pMapBounded(scopeUsers, async (u) => {
+    coeffsByUserId.set(u.id, await resolveCostCoeffs(trx, u));
+    breakRulesByUserId.set(u.id, await loadBreakRules(trx, u));
+  });
+  const paretoOverrides = await loadParetoServiceOverrides(trx);
+  // First-resolved coeff → snapshot. Mixed sources are rare (all users share role
+  // or global), but log when we see >1 distinct source to make calibration drift visible.
+  const coeffSources = new Set([...coeffsByUserId.values()].map((c) => c.source));
+  if (coeffSources.size > 1) {
+    log.warn({ event: 'plan.coeffs.mixed_sources', sources: [...coeffSources] });
   }
 
   const days = eachWorkingDay(new Date(`${periodStart}T00:00:00Z`), new Date(`${periodEnd}T00:00:00Z`));
@@ -770,9 +1351,14 @@ async function buildPlan(args, trx, mode) {
     scopeUsers, days, candidatesByPareto, prospects, targets,
   });
 
+  // PR7: post-greedy variance balancing. Mutates assignmentMap.
+  const balanceStats = balanceByVarianceSwap({
+    assignmentMap, scopeUsers, paretoOverrides, days,
+  });
+
   const { rows: assignmentRows, totals } = await sequenceAndMaterialize({
     scopeUsers, assignments: assignmentMap, planConfig: { route_start_hhmm: routeStartHHMM },
-    mode,
+    mode, coeffsByUserId, breakRulesByUserId, paretoOverrides,
   });
 
   const config = {
@@ -792,6 +1378,29 @@ async function buildPlan(args, trx, mode) {
     ],
     unassigned,
   };
+  // Snapshot coefficients per-user so historical reports use the values that
+  // were active at plan time (cost_coefficients edits don't retroactively change
+  // post-mortem economics).
+  const coeffsSnapshot = {};
+  for (const [uid, c] of coeffsByUserId.entries()) {
+    coeffsSnapshot[uid] = {
+      source: c.source,
+      alpha_duration: Number(c.alpha_duration),
+      beta_distance: Number(c.beta_distance),
+      cost_per_km: Number(c.cost_per_km),
+      cost_per_hour: Number(c.cost_per_hour),
+      fixed_cost_per_day: Number(c.fixed_cost_per_day || 0),
+    };
+  }
+
+  // Solver summary: aggregate the per-(rep,day) solver runs into one snapshot.
+  const solverRuns = totals.solver_runs || [];
+  const tiersSeen = [...new Set(solverRuns.map((r) => r.tier))];
+  const nMax = solverRuns.reduce((m, r) => Math.max(m, r.n), 0);
+  const seedsAvg = solverRuns.length
+    ? Math.round(solverRuns.reduce((s, r) => s + r.seeds_tried, 0) / solverRuns.length * 10) / 10
+    : 0;
+
   const metrics = {
     total_drive_minutes: totals.total_drive_minutes,
     total_service_minutes: totals.total_service_minutes,
@@ -800,6 +1409,40 @@ async function buildPlan(args, trx, mode) {
     unassigned_count: unassigned.length,
     assignments_count: assignmentRows.length,
     last_leg_minutes_per_user: totals.last_leg_minutes_per_user,
+    coeffs_snapshot: coeffsSnapshot,
+    soft_window_violations: totals.soft_window_violations,
+    soft_window_violation_count: totals.soft_window_violation_count,
+    break_applied_per_user: totals.break_applied_per_user,
+    break_skipped_per_user: totals.break_skipped_per_user,
+    solver: {
+      strategy: SOLVER_STRATEGY,
+      tiers_seen: tiersSeen,
+      n_max_per_route: nMax,
+      seeds_avg: seedsAvg,
+      runs: solverRuns.length,
+    },
+    cost_breakdown: {
+      fresh: totals.fresh || 0,
+      cached: totals.cached || 0,
+      estimated_fallback: totals.estimated || 0,
+      traffic_aware_used: !!totals.traffic_aware_used,
+      polyline_in_matrix: ENABLE_INLINE_POLYLINE,
+    },
+    balance: {
+      ...balanceStats,
+      gap_threshold_min: BALANCE_GAP_THRESHOLD_MIN,
+    },
+    flags: {
+      cost_coeffs: ENABLE_COST_COEFFS,
+      cap_validation: ENABLE_CAP_VALIDATION,
+      breaks: ENABLE_BREAKS,
+      soft_windows: ENABLE_SOFT_WINDOWS,
+      pareto_service: ENABLE_PARETO_SERVICE,
+      solver: SOLVER_STRATEGY,
+      inline_polyline: ENABLE_INLINE_POLYLINE,
+      traffic_aware_publish: ENABLE_TRAFFIC_AWARE_ON_PUBLISH,
+      balance: ENABLE_BALANCE_STEP,
+    },
   };
 
   // Stable scope_hash so the unique index in 059 catches duplicates.

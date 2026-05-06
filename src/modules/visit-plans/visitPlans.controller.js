@@ -281,7 +281,7 @@ async function replayRepDay(req, res, next) {
 async function reassignStop(req, res, next) {
   try {
     const planId = req.params.id;
-    const { assignment_id: assignmentId, new_visitor_user_id: newVisitorUserId } = req.body || {};
+    const { assignment_id: assignmentId, new_visitor_user_id: newVisitorUserId, force } = req.body || {};
     if (!assignmentId || !newVisitorUserId) {
       return res.status(400).json({ error: 'assignment_id and new_visitor_user_id are required' });
     }
@@ -289,6 +289,64 @@ async function reassignStop(req, res, next) {
       planId,
       assignmentId,
       newVisitorUserId: accessDirectory.toCanonicalId(newVisitorUserId),
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
+      force: force === true || req.query.force === 'true',
+    });
+    res.json(result);
+  } catch (err) {
+    // Surface 409 cap_exceeded with structured payload for the FE alternatives modal.
+    if (err.status === 409 && err.code === 'cap_exceeded' && err.payload) {
+      return res.status(409).json(err.payload);
+    }
+    next(err);
+  }
+}
+
+async function reoptimizeDay(req, res, next) {
+  try {
+    const planId = req.params.id;
+    const {
+      date,
+      broken_user_id: brokenUserId,
+      urgent_stop: urgentStop,
+      cap_exceed_user_id: capExceedUserId,
+      trigger_kind: triggerKindRaw,
+    } = req.body || {};
+    if (!date) return res.status(400).json({ error: 'date (ISO YYYY-MM-DD) is required' });
+
+    // Infer trigger_kind from payload when not explicit.
+    let triggerKind = triggerKindRaw;
+    if (!triggerKind) {
+      if (brokenUserId) triggerKind = 'rep_breakdown';
+      else if (urgentStop) triggerKind = 'urgent_insert';
+      else if (capExceedUserId) triggerKind = 'cap_exceed';
+      else triggerKind = 'manual';
+    }
+    if (!['rep_breakdown', 'urgent_insert', 'cap_exceed', 'manual'].includes(triggerKind)) {
+      return res.status(400).json({ error: `invalid trigger_kind '${triggerKind}'` });
+    }
+    if (urgentStop && !urgentStop.pharmacy_id && !urgentStop.marzam_client_id) {
+      return res.status(400).json({ error: 'urgent_stop must include pharmacy_id or marzam_client_id' });
+    }
+
+    const result = await service.reoptimizeDay({
+      planId,
+      date,
+      brokenUserId: brokenUserId ? accessDirectory.toCanonicalId(brokenUserId) : null,
+      urgentStop: urgentStop || null,
+      capExceedUserId: capExceedUserId ? accessDirectory.toCanonicalId(capExceedUserId) : null,
+      triggerKind,
+      actorId: req.user.id,
+      isGlobal: req.user.is_global,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
+async function listReoptimizations(req, res, next) {
+  try {
+    const result = await service.listReoptimizations(req.params.id, {
       actorId: req.user.id,
       isGlobal: req.user.is_global,
     });
@@ -371,4 +429,6 @@ module.exports = {
   costEstimate,
   resequenceUser,
   postMortemCsv,
+  reoptimizeDay,
+  listReoptimizations,
 };

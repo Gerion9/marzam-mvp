@@ -135,6 +135,23 @@ async function cronPurgeLiveOutbox(req, res, next) {
 router.get('/cron/purge-live-outbox', adminOrCron, cronPurgeLiveOutbox);
 router.post('/cron/purge-live-outbox', adminOrCron, cronPurgeLiveOutbox);
 
+async function cronParseOpeningHours(req, res, next) {
+  try {
+    const job = require('../bq-sync/jobs/parseOpeningHours');
+    const result = await job.run({
+      batchSize: Number(req.query.batch_size) || undefined,
+      force: req.query.force === 'true',
+    });
+    await recordCronRun('parse-opening-hours', 'ok', result);
+    res.json(result);
+  } catch (err) {
+    await recordCronRun('parse-opening-hours', 'error', { message: err.message });
+    next(err);
+  }
+}
+router.get('/cron/parse-opening-hours', adminOrCron, cronParseOpeningHours);
+router.post('/cron/parse-opening-hours', adminOrCron, cronParseOpeningHours);
+
 async function recordCronRun(jobKey, status, payload) {
   try {
     await db.raw(`

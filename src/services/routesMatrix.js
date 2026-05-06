@@ -28,10 +28,16 @@
 const db = require('../config/database');
 const config = require('../config');
 const { encode: geohashEncode } = require('../utils/geohash');
+const log = require('../utils/logger');
 
 const ROUTES_ENDPOINT = 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix';
 const ROUTE_ENDPOINT  = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 const MATRIX_FIELD_MASK = 'originIndex,destinationIndex,duration,distanceMeters,condition';
+// PR6: when the caller asks for polylines inline (mode='persist' on publish),
+// we add `polyline.encodedPolyline` to the mask. This costs the same SKU as
+// the basic field mask per Google docs (Routes Matrix doesn't ladder the SKU
+// based on this single field). Validated empirically before enabling in prod.
+const MATRIX_FIELD_MASK_WITH_POLYLINE = `${MATRIX_FIELD_MASK},polyline.encodedPolyline`;
 const ROUTE_FIELD_MASK = 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline';
 
 const MAX_ELEMENTS_PER_CALL = 625;
@@ -159,12 +165,16 @@ async function readCache(pairs, { hourBucketValue, dayTypeValue, preference }) {
   if (!pairs.length) return new Map();
   // Build a CTE of requested pairs and left-join to cache. Faster than 1
   // query per pair on a typical N=100×100 plan generation.
+  // NOTE: knex 3.x does not understand `$N` positional placeholders when an
+  // array is also passed — it scans the SQL for placeholders and counts both
+  // styles, then errors with "Expected N bindings, saw 0". Use `?` instead.
   const params = [];
-  const placeholders = pairs.map(({ originGh, destGh }, i) => {
-    const j = i * 2;
+  const placeholders = pairs.map(({ originGh, destGh }) => {
     params.push(originGh, destGh);
-    return `($${j + 1}::char(7), $${j + 2}::char(7))`;
+    return '(?::char(7), ?::char(7))';
   }).join(',');
+  // hourBucketValue, dayTypeValue and preference are server-controlled enums —
+  // safe to inline. (Preference is validated via the SKU_PRICE map upstream.)
   const sql = `
     WITH wanted (origin_geohash7, dest_geohash7) AS (VALUES ${placeholders})
     SELECT w.origin_geohash7, w.dest_geohash7,
@@ -173,9 +183,9 @@ async function readCache(pairs, { hourBucketValue, dayTypeValue, preference }) {
     LEFT JOIN route_matrix_cache c
       ON c.origin_geohash7 = w.origin_geohash7
      AND c.dest_geohash7  = w.dest_geohash7
-     AND c.hour_bucket    = ${hourBucketValue}
-     AND c.day_type       = ${dayTypeValue}
-     AND c.routing_preference = '${preference}'
+     AND c.hour_bucket    = ${Number(hourBucketValue)}
+     AND c.day_type       = ${Number(dayTypeValue)}
+     AND c.routing_preference = '${String(preference).replace(/'/g, "''")}'
      AND c.expires_at > NOW()
   `;
   const result = await db.raw(sql, params);
@@ -219,9 +229,18 @@ function buildWaypoint({ lat, lng }) {
   return { waypoint: { location: { latLng: { latitude: lat, longitude: lng } } } };
 }
 
-async function callRoutesMatrixApi(origins, destinations, { preference = 'TRAFFIC_UNAWARE', departureTime } = {}) {
+async function callRoutesMatrixApi(origins, destinations, opts = {}) {
+  const { preference = 'TRAFFIC_UNAWARE', departureTime, fieldMask = 'basic' } = opts;
   const apiKey = config.google.mapsApiKey;
   if (!apiKey) throw new Error('GOOGLE_MAPS_API_KEY is not set');
+
+  // PR6 invariant: TRAFFIC_AWARE without departureTime is meaningless and Google
+  // bills it as Pro tier anyway. Throw to prevent silent waste.
+  if (preference === 'TRAFFIC_AWARE' && !departureTime) {
+    const err = new Error('TRAFFIC_AWARE matrix call requires opts.departureTime');
+    err.code = 'invalid_traffic_aware_call';
+    throw err;
+  }
 
   // Cost guard: estimate this call's cost before it goes out.
   const elements = origins.length * destinations.length;
@@ -234,17 +253,18 @@ async function callRoutesMatrixApi(origins, destinations, { preference = 'TRAFFI
     travelMode: 'DRIVE',
     routingPreference: preference,
   };
-  // departureTime is required for TRAFFIC_AWARE; ignored otherwise.
   if (preference === 'TRAFFIC_AWARE' && departureTime) {
     body.departureTime = departureTime.toISOString();
   }
+
+  const mask = fieldMask === 'with_polyline' ? MATRIX_FIELD_MASK_WITH_POLYLINE : MATRIX_FIELD_MASK;
 
   const res = await fetch(ROUTES_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': MATRIX_FIELD_MASK,
+      'X-Goog-FieldMask': mask,
     },
     body: JSON.stringify(body),
   });
@@ -261,7 +281,7 @@ async function callRoutesMatrixApi(origins, destinations, { preference = 'TRAFFI
     matrixCalls: 1,
     matrixElements: elements,
     sku: preference,
-  }).catch((e) => console.warn(`[routesMatrix] recordSpend failed: ${e.message}`));
+  }).catch((e) => log.warn({ event: 'routes.recordSpend.failed', source: 'matrix', err: e.message }));
   // Response is a flat array of { originIndex, destinationIndex, ... }.
   return Array.isArray(json) ? json : [];
 }
@@ -306,10 +326,16 @@ async function computeMatrix(origins, destinations, opts = {}) {
         durationSeconds: dur,
         distanceMeters: r.distanceMeters ?? 0,
         condition: r.condition,
+        polyline: r.polyline?.encodedPolyline ?? null,
       };
     });
   } catch (err) {
-    console.warn(`[routesMatrix] Falling back to Haversine — ${err.message}`);
+    // Caller-error invariants must NOT silently degrade to Haversine — they are
+    // bugs in the caller. Surface them so the SLA alert / oncall can react.
+    if (err && (err.code === 'invalid_traffic_aware_call' || err.code === 'routes_budget_exceeded')) {
+      throw err;
+    }
+    log.warn({ event: 'routes.matrix.fallback_haversine', origins: origins.length, dests: destinations.length, err: err.message });
     const out = [];
     for (let i = 0; i < origins.length; i += 1) {
       for (let j = 0; j < destinations.length; j += 1) {
@@ -332,6 +358,10 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
   if (!origins.length || !destinations.length) return [];
   const departureTime = opts.departureTime || new Date();
   const preference = opts.preference || 'TRAFFIC_UNAWARE';
+  const fieldMask = opts.fieldMask || 'basic';
+  const wantsPolyline = fieldMask === 'with_polyline';
+  // Optional sink populated by caller to count cache hit/miss for the metrics chip.
+  const sink = opts.metricsSink || null;
   const hourBucketValue = hourBucket(departureTime);
   const dayTypeValue = dayType(departureTime);
 
@@ -362,10 +392,15 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
   // 1) Cache lookup.
   const cacheMap = await readCache([...uniquePairs.values()], { hourBucketValue, dayTypeValue, preference });
 
-  // 2) Detect uncached pairs.
+  // 2) Detect uncached pairs. When fieldMask='with_polyline' we also treat
+  //    rows that have duration but no polyline as effectively uncached (we'll
+  //    re-fetch with the polyline-bearing field mask). Caller pays SKU once;
+  //    next callers benefit from polyline being persisted.
   const uncached = [];
   for (const [key, pair] of uniquePairs.entries()) {
-    if (!cacheMap.has(key)) uncached.push({ key, ...pair });
+    const cached = cacheMap.get(key);
+    if (!cached) uncached.push({ key, ...pair });
+    else if (wantsPolyline && !cached.polyline) uncached.push({ key, ...pair, __polylineRefetch: true });
   }
 
   // 3) Call Routes API (or fallback) on the uncached subset.
@@ -385,7 +420,7 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
         uniqDests.push(p.destLatLng);
       }
     }
-    const matrix = await computeMatrix(uniqOrigins, uniqDests, { preference, departureTime });
+    const matrix = await computeMatrix(uniqOrigins, uniqDests, { preference, departureTime, fieldMask });
 
     // Build a lookup uniqueOrigin × uniqueDest → result.
     const resultByOD = new Map();
@@ -402,6 +437,7 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
       const entry = {
         durationSeconds: r.durationSeconds,
         distanceMeters: r.distanceMeters,
+        polyline: r.polyline || null,
         flag: r.flag === 'estimated' ? 'estimated' : 'fresh',
       };
       cacheMap.set(p.key, entry);
@@ -411,7 +447,7 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
           destGh: p.destGh,
           durationSeconds: entry.durationSeconds,
           distanceMeters: entry.distanceMeters,
-          polyline: null,
+          polyline: entry.polyline,
         });
       }
     }
@@ -419,7 +455,7 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
       try {
         await writeCache(toCache, { hourBucketValue, dayTypeValue, preference });
       } catch (err) {
-        console.warn(`[routesMatrix] writeCache failed: ${err.message}`);
+        log.warn({ event: 'routes.cache.write_failed', err: err.message });
       }
     }
   }
@@ -429,6 +465,11 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
   for (const { i, j, key } of pairToKey) {
     const r = cacheMap.get(key);
     if (r) {
+      if (sink) {
+        if (r.flag === 'cached') sink.cached = (sink.cached || 0) + 1;
+        else if (r.flag === 'estimated') sink.estimated = (sink.estimated || 0) + 1;
+        else sink.fresh = (sink.fresh || 0) + 1;
+      }
       out.push({
         originIndex: i,
         destinationIndex: j,
@@ -440,10 +481,40 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
     } else {
       // No cache, no fresh result: use Haversine fallback to keep planGenerator deterministic.
       const est = fallbackEstimate(origins[i], destinations[j]);
+      if (sink) sink.estimated = (sink.estimated || 0) + 1;
       out.push({ originIndex: i, destinationIndex: j, ...est });
     }
   }
   return out;
+}
+
+/**
+ * Convenience wrapper for callers that want polylines inline (publish path).
+ * Sets `fieldMask='with_polyline'` so cache rows missing polyline trigger a
+ * re-fetch with the polyline-bearing mask.
+ *
+ * SKU note: Google's Routes Matrix bills per element, not per field. Adding
+ * `polyline.encodedPolyline` does NOT escalate the SKU as of the 2026 docs.
+ * Validate empirically (cron `routes_api_spend` should not double after the
+ * flag is enabled).
+ */
+async function computeMatrixWithPolyline(origins, destinations, opts = {}) {
+  return computeMatrixCached(origins, destinations, { ...opts, fieldMask: 'with_polyline' });
+}
+
+/**
+ * Read snapshot of matrix breakdown captured by metricsSink.
+ * Caller pattern:
+ *   const sink = { fresh: 0, cached: 0, estimated: 0 };
+ *   await computeMatrixCached(..., { metricsSink: sink });
+ *   const breakdown = getMatrixBreakdown(sink);
+ */
+function getMatrixBreakdown(sink) {
+  if (!sink) return { fresh: 0, cached: 0, estimated: 0, total: 0 };
+  const fresh = sink.fresh || 0;
+  const cached = sink.cached || 0;
+  const estimated = sink.estimated || 0;
+  return { fresh, cached, estimated, total: fresh + cached + estimated };
 }
 
 /**
@@ -483,7 +554,7 @@ async function computeRoute(origin, destination, opts = {}) {
     const text = await res.text();
     throw new Error(`Routes API single failed: ${res.status} ${text.slice(0, 240)}`);
   }
-  recordSpend({ routeCalls: 1, sku: preference }).catch((e) => console.warn(`[routesMatrix] recordSpend failed: ${e.message}`));
+  recordSpend({ routeCalls: 1, sku: preference }).catch((e) => log.warn({ event: 'routes.recordSpend.failed', source: 'route_single', err: e.message }));
   const json = await res.json();
   const route = json.routes?.[0];
   if (!route) return null;
@@ -535,7 +606,7 @@ function persistPolylineSafe(originLatLng, destLatLng, polyline, opts = {}) {
       setTimeout(async () => {
         try { await persistPolyline(originLatLng, destLatLng, polyline, opts); }
         catch (err2) {
-          console.warn(`[routesMatrix] persistPolyline retry failed: ${err2.message}`);
+          log.warn({ event: 'routes.polyline.persist_failed_after_retry', err: err2.message });
         }
       }, 250);
     }
@@ -558,11 +629,13 @@ async function purgeExpired() {
 module.exports = {
   computeMatrix,
   computeMatrixCached,
+  computeMatrixWithPolyline,
   computeRoute,
   persistPolyline,
   persistPolylineSafe,
   purgeExpired,
   getDailyBudgetStatus,
+  getMatrixBreakdown,
   RoutesBudgetExceededError,
   // exported for tests
   _hourBucket: hourBucket,

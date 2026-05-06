@@ -80,25 +80,31 @@ function orderStopsFromDepot(depot, stops, costFn) {
  * @param {{maxIterations?:number}} [opts]
  * @returns {Array} improved route (mutated copy, depot at [0])
  */
-function twoOptImprove(route, costFn, { maxIterations = 30 } = {}) {
+/**
+ * Total cost of a route (depot included at index 0). Exported so multi-start
+ * solver (utils/multiStart.js) can compare candidate tours without re-deriving
+ * the closure. Asymmetric: cost(a,b) ≠ cost(b,a).
+ */
+function totalCost(arr, costFn) {
+  let sum = 0;
+  for (let k = 0; k < arr.length - 1; k += 1) sum += costFn(arr[k], arr[k + 1]);
+  return sum;
+}
+
+function twoOptImprove(route, costFn, { maxIterations = 30, deadline = null } = {}) {
   if (route.length < 4) return route.slice();
   const out = route.slice();
 
-  function totalCost(arr) {
-    let sum = 0;
-    for (let k = 0; k < arr.length - 1; k += 1) sum += costFn(arr[k], arr[k + 1]);
-    return sum;
-  }
-
   let improved = true;
   let iter = 0;
-  let best = totalCost(out);
+  let best = totalCost(out, costFn);
   while (improved && iter < maxIterations) {
     improved = false;
     iter += 1;
     // i starts at 1 to keep depot fixed; j ends at length-1 (no wrap-around,
     // we are an open path, not a tour).
     for (let i = 1; i < out.length - 1; i += 1) {
+      if (deadline && Date.now() > deadline) return out;
       for (let j = i + 1; j < out.length; j += 1) {
         // Candidate: reverse the segment [i..j] inclusive.
         const candidate = out.slice();
@@ -109,7 +115,7 @@ function twoOptImprove(route, costFn, { maxIterations = 30 } = {}) {
           a += 1;
           b -= 1;
         }
-        const cost = totalCost(candidate);
+        const cost = totalCost(candidate, costFn);
         if (cost + 1e-6 < best) {
           best = cost;
           for (let k = 0; k < out.length; k += 1) out[k] = candidate[k];
@@ -135,4 +141,4 @@ function toRad(deg) {
   return (deg * Math.PI) / 180;
 }
 
-module.exports = { orderStops, orderStopsFromDepot, twoOptImprove };
+module.exports = { orderStops, orderStopsFromDepot, twoOptImprove, totalCost };
