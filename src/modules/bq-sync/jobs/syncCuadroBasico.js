@@ -42,6 +42,8 @@ const {
   pickFirst,
   asString,
   asDate,
+  auditCandidateColumns,
+  evaluateJobHealth,
 } = require('../bqHelpers');
 const { emitWarning } = require('../warnings');
 
@@ -183,9 +185,29 @@ async function run({ limit = null } = {}) {
   }
 
   const keyMap = buildKeyMap(rows[0]);
+
+  // Schema drift detection: required logical fields must map to at least one
+  // present source column. If any required is missing, abort early — running
+  // with a missing employee_code or full_name produces nonsense rows.
+  const REQUIRED_LOGICAL_FIELDS = ['employee_code', 'full_name', 'role'];
+  const colAudit = auditCandidateColumns(JOB_NAME, keyMap, COL_CANDIDATES, REQUIRED_LOGICAL_FIELDS);
+  if (colAudit.missing_required.length > 0) {
+    return {
+      name: JOB_NAME,
+      status: 'failed',
+      failure: 'schema_drift_missing_required',
+      missing_required: colAudit.missing_required,
+      missing_optional: colAudit.missing.filter((n) => !REQUIRED_LOGICAL_FIELDS.includes(n)),
+      rows: rows.length,
+      inserted: 0, updated: 0, skipped: rows.length, warnings: 0,
+      duration_ms: Date.now() - startedAt,
+    };
+  }
+
   const stats = {
     rows: rows.length, inserted: 0, updated: 0, skipped: 0, warnings: 0,
     role_unknown: 0, gerente_synthesized: 0, duplicate_employee_codes: 0, email_conflicts: 0,
+    missing_optional_columns: colAudit.missing,
   };
   const seenCodesInBatch = new Set();
 
@@ -307,7 +329,14 @@ async function run({ limit = null } = {}) {
     }
   }
 
-  return { name: JOB_NAME, ...stats, duration_ms: Date.now() - startedAt };
+  const health = evaluateJobHealth(stats);
+  return {
+    name: JOB_NAME,
+    status: health.status,
+    ...(health.reason ? { failure: health.reason } : {}),
+    ...stats,
+    duration_ms: Date.now() - startedAt,
+  };
 }
 
 module.exports = {

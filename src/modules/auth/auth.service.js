@@ -280,13 +280,16 @@ async function impersonate(managerId, targetUserId) {
 
   if (isExternalDataMode()) {
     const manager = accessDirectory.getUserById(managerId);
-    if (!manager || !isGlobalRole(manager.role)) {
+    // Audit Fix #1: external mode now mirrors DB-mode's is_active gate.
+    // The AUTH_DIRECTORY_JSON entries may carry an explicit `is_active`
+    // boolean; treat undefined/missing as true (back-compat).
+    if (!manager || !isGlobalRole(manager.role) || manager.is_active === false) {
       const err = new Error('Only administrators can impersonate');
       err.status = 403;
       throw err;
     }
     const target = accessDirectory.getUserById(targetUserId);
-    if (!target) {
+    if (!target || target.is_active === false) {
       const err = new Error('Target user not found or inactive');
       err.status = 404;
       throw err;
@@ -336,8 +339,11 @@ async function impersonate(managerId, targetUserId) {
 async function stopImpersonation(managerId) {
   if (isExternalDataMode()) {
     const manager = accessDirectory.getUserById(managerId);
-    if (!manager) {
-      const err = new Error('User not found');
+    // Audit Fix #1: a manager who was deactivated AFTER starting an
+    // impersonation must not be able to "stop" their way back into a
+    // privileged session. Mirror DB-mode's is_active check here.
+    if (!manager || manager.is_active === false) {
+      const err = new Error('User not found or inactive');
       err.status = 404;
       throw err;
     }
@@ -346,7 +352,7 @@ async function stopImpersonation(managerId) {
 
   const manager = await db('users').where({ id: managerId, is_active: true }).first();
   if (!manager) {
-    const err = new Error('User not found');
+    const err = new Error('User not found or inactive');
     err.status = 404;
     throw err;
   }

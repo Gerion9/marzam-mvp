@@ -6,6 +6,7 @@
  */
 
 const path = require('path');
+const crypto = require('crypto');
 const { Storage } = require('@google-cloud/storage');
 const config = require('../../config');
 
@@ -47,7 +48,23 @@ async function uploadOnboardingDoc({ onboardingId, docType, originalName, buffer
   const bucketName = config.gcs.bucketName;
   const folder = process.env.MARZAM_ONBOARDING_GCS_FOLDER || 'marzam/altas';
   const ext = resolveExt(originalName, contentType);
-  const objectPath = `${folder}/${onboardingId}/${docType}_${Date.now()}.${ext}`;
+  // Audit Fix #2 — defense-in-depth against object-path enumeration.
+  //
+  // Old path: `${folder}/${onboardingId}/${docType}_${Date.now()}.${ext}`
+  //   - onboardingId is a UUID (guessable if leaked from another channel)
+  //   - docType is from a small enum (rfc, id, contract, ...)
+  //   - timestamp window is brutable (~86M values per day)
+  //   → if `gcs.makeObjectsPublic=true` AND bucket grants allUsers:viewer,
+  //     guessing a valid UUID lets an attacker iterate timestamps and
+  //     download other pharmacies' RFC / IDs / contracts.
+  //
+  // New path adds a 12-byte random suffix (96 bits of entropy):
+  //   `${folder}/${onboardingId}/${docType}_${ts}_${nonce}.${ext}`
+  //   The nonce makes brute-forcing infeasible regardless of bucket policy.
+  //   This is additive; older docs already in GCS keep their old paths and
+  //   their stored DB rows still resolve.
+  const nonce = crypto.randomBytes(12).toString('hex');
+  const objectPath = `${folder}/${onboardingId}/${docType}_${Date.now()}_${nonce}.${ext}`;
 
   const storage = getStorageClient();
   const file = storage.bucket(bucketName).file(objectPath);

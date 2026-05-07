@@ -97,6 +97,12 @@ const FALLBACK_COEFFS = Object.freeze({
 const ENABLE_BREAKS = process.env.PLAN_ENABLE_BREAKS === 'true';
 const ENABLE_SOFT_WINDOWS = process.env.PLAN_ENABLE_SOFT_WINDOWS === 'true';
 const ENABLE_PARETO_SERVICE = process.env.PLAN_ENABLE_PARETO_SERVICE === 'true';
+// Audit Fix #6 — when true, runs a soft-window-aware swap-improve pass
+// AFTER multiStart picks a sequence. Conservative: only swaps that strictly
+// reduce window slip without growing drive time more than 5% are accepted.
+// Default off until A/B benchmark validates impact on published plans.
+const ENABLE_SOFT_WINDOW_SWAP = process.env.PLAN_SOFT_WINDOW_AWARE === 'true';
+const { improveForSoftWindows } = require('../../utils/softWindowSwap');
 
 // PR5 flag: 'legacy' (NN+2opt only — historical) | 'multistart' (escalonado por N)
 const SOLVER_STRATEGY = process.env.PLAN_SOLVER || 'legacy';
@@ -963,6 +969,32 @@ async function sequenceAndMaterialize({
             strategy: SOLVER_STRATEGY,
           });
           ordered = solverResult.ordered.map((s) => stopsWithCoords.find((x) => x.__seqIdx === s.__seqIdx)).filter(Boolean);
+
+          // Audit Fix #6 — soft-window-aware post-pass.
+          // Runs only when PLAN_SOFT_WINDOW_AWARE=true AND soft windows are
+          // enabled. Default off (no behavior change). When on, swaps stops
+          // to reduce opening-hours violations while capping drive growth at
+          // 5%. See src/utils/softWindowSwap.js for full doc-block.
+          let softWindowSwapStats = null;
+          if (ENABLE_SOFT_WINDOW_SWAP && ENABLE_SOFT_WINDOWS && ordered.length >= 2) {
+            const dayStartUtc = localDayHHMMToUTC(dayIso, routeStartHHMM);
+            const swapResult = improveForSoftWindows({
+              ordered,
+              costMatrix: durationsMatrix,
+              dayStart: dayStartUtc,
+              serviceMinutesFor: (s) => resolveServiceMinutes(u, s, paretoOverrides),
+              softWindowSlipSecondsFor: (s, arrival) => softWindowPenaltySeconds(s, arrival, dayIso),
+            });
+            ordered = swapResult.ordered;
+            softWindowSwapStats = {
+              accepted: swapResult.accepted,
+              base_slip_seconds: Math.round(swapResult.baseSlipSeconds || 0),
+              final_slip_seconds: Math.round(swapResult.finalSlipSeconds || 0),
+              base_drive_seconds: Math.round(swapResult.baseDriveSeconds || 0),
+              final_drive_seconds: Math.round(swapResult.finalDriveSeconds || 0),
+            };
+          }
+
           // Track solver telemetry per (rep, day) for metrics.solver.
           totals.solver_runs = totals.solver_runs || [];
           totals.solver_runs.push({
@@ -974,6 +1006,7 @@ async function sequenceAndMaterialize({
             seeds_tried: solverResult.seedsTried,
             kernels: solverResult.kernels,
             cost_seconds: Math.round(solverResult.totalCost),
+            soft_window_swap: softWindowSwapStats,
           });
         } else {
           const costFn = (a, b) => haversineKm({ lat: a.lat, lng: a.lng }, { lat: b.lat, lng: b.lng });
@@ -1093,8 +1126,9 @@ async function sequenceAndMaterialize({
         cursor = new Date(cursor.getTime() + travelSeconds * 1000);
         const arrival = new Date(cursor);
 
-        // Soft window violation tracking. Only metrics + per-row stamp; does not
-        // re-order. The reorder-aware path is the multi-start solver in PR5.
+        // Soft window violation tracking. Metrics + per-row stamp here.
+        // Reorder-aware path is the soft-window-swap pass above the
+        // sequencing call (audit Fix #6, gated by PLAN_SOFT_WINDOW_AWARE).
         const stopServiceMin = resolveServiceMinutes(u, s, paretoOverrides);
         let softSlipMin = 0;
         if (ENABLE_SOFT_WINDOWS) {

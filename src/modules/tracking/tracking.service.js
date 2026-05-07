@@ -6,8 +6,57 @@ const { isExternalDataMode } = require('../../repositories/runtime');
 const { parseStopId } = require('../externalData/externalAssignmentIds');
 const accessDirectory = require('../../services/accessDirectory');
 const liveBus = require('../live/live.service');
+const { haversineMeters, DISTANCE_WARNING_THRESHOLD_M } = require('../../utils/geoDistance');
 
-const DISTANCE_WARNING_THRESHOLD_M = 500;
+// Per-rep hierarchy cache so /ping doesn't issue an extra users JOIN per call.
+// TTL 60s — long enough that 1 ping/30s reuses; short enough that role/manager
+// changes propagate to live-ops within a minute. Key: rep_id → {role,
+// manager_id, manager_name, branch_id, branch_name, employee_code, expiresAt}.
+const HIERARCHY_TTL_MS = 60_000;
+const hierarchyCache = new Map();
+
+async function fetchHierarchyForRep(repId) {
+  if (!repId) return null;
+  const now = Date.now();
+  const hit = hierarchyCache.get(repId);
+  if (hit && hit.expiresAt > now) return hit;
+  try {
+    const row = await db('users as u')
+      .leftJoin('users as m', 'm.id', 'u.manager_id')
+      .leftJoin('branches as b', 'b.id', 'u.branch_id')
+      .select(
+        'u.role',
+        'u.employee_code',
+        'u.manager_id',
+        db.raw('m.full_name as manager_name'),
+        db.raw('m.role as manager_role'),
+        db.raw('m.employee_code as manager_employee_code'),
+        'u.branch_id',
+        db.raw('b.name as branch_name'),
+        db.raw('b.code as branch_code'),
+      )
+      .where('u.id', repId)
+      .first();
+    if (!row) return null;
+    const entry = {
+      role: row.role || null,
+      employee_code: row.employee_code || null,
+      manager_id: row.manager_id || null,
+      manager_name: row.manager_name || null,
+      manager_role: row.manager_role || null,
+      manager_employee_code: row.manager_employee_code || null,
+      branch_id: row.branch_id || null,
+      branch_name: row.branch_name || null,
+      branch_code: row.branch_code || null,
+      expiresAt: now + HIERARCHY_TTL_MS,
+    };
+    hierarchyCache.set(repId, entry);
+    return entry;
+  } catch {
+    // Best-effort: never break ping ingestion because of a metadata lookup.
+    return null;
+  }
+}
 
 // Mexico bounding box (loose). Pings outside this are rejected to avoid
 // (0,0) garbage from misconfigured devices and global VPN exits.
@@ -137,8 +186,12 @@ async function recordPing({ rep_id, rep_name, assignment_id, verification_id, la
       console.warn(`[tracking] home bootstrap failed: ${err.message}`);
     }
   }
-  // Push to the live SSE bus so manager dashboards see the rep move in real time.
+  // Push to the live SSE bus so manager dashboards see the rep move in real
+  // time. Payload carries the hierarchy (role, manager, branch) so the
+  // frontend can group/filter by rank without an extra /api/team/cascade
+  // round-trip per event.
   try {
+    const hier = await fetchHierarchyForRep(rep_id);
     liveBus.publish({
       type: 'position',
       subjectUserId: rep_id,
@@ -150,6 +203,15 @@ async function recordPing({ rep_id, rep_name, assignment_id, verification_id, la
         accuracy_meters: accuracy_meters || null,
         recorded_at: ping.recorded_at || new Date().toISOString(),
         assignment_id: assignment_id || null,
+        role: hier?.role || null,
+        employee_code: hier?.employee_code || null,
+        manager_id: hier?.manager_id || null,
+        manager_name: hier?.manager_name || null,
+        manager_role: hier?.manager_role || null,
+        manager_employee_code: hier?.manager_employee_code || null,
+        branch_id: hier?.branch_id || null,
+        branch_name: hier?.branch_name || null,
+        branch_code: hier?.branch_code || null,
       },
     });
   } catch { /* never break ping ingest because of bus */ }
@@ -206,13 +268,7 @@ async function checkin({ rep_id, pharmacy_id, assignment_stop_id, lat, lng }) {
 
   let distanceM = null;
   if (pharmacy) {
-    const toRad = (value) => (value * Math.PI) / 180;
-    const earthRadiusM = 6371000;
-    const dLat = toRad(Number(pharmacy.lat) - Number(lat));
-    const dLng = toRad(Number(pharmacy.lng) - Number(lng));
-    const a = Math.sin(dLat / 2) ** 2
-      + Math.cos(toRad(Number(lat))) * Math.cos(toRad(Number(pharmacy.lat))) * Math.sin(dLng / 2) ** 2;
-    distanceM = 2 * earthRadiusM * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    distanceM = haversineMeters(lat, lng, pharmacy.lat, pharmacy.lng);
   }
 
   if (isExternalDataMode()) {
@@ -361,19 +417,49 @@ async function getLatestPositions() {
       lng: row.lng,
       recorded_at: row.recorded_at,
       full_name: row.rep_name || null,
+      role: null,
+      employee_code: null,
+      manager_id: null,
+      manager_name: null,
+      branch_id: null,
+      branch_name: null,
     }));
   }
 
+  // Joined with `users` + `branches` so the live-ops view can group/filter by
+  // role and hierarchy without a second round-trip. We left-join: a user
+  // deactivated mid-day still surfaces their last position with null hier.
   return db('rep_tracking_points as rtp')
     .distinctOn('rtp.rep_id')
+    .leftJoin('users as u', 'u.id', 'rtp.rep_id')
+    .leftJoin('users as m', 'm.id', 'u.manager_id')
+    .leftJoin('branches as b', 'b.id', 'u.branch_id')
     .select(
       'rtp.rep_id',
       'rtp.lat',
       'rtp.lng',
       'rtp.recorded_at',
-      db.raw('rtp.rep_name_snapshot AS full_name'),
+      db.raw('COALESCE(u.full_name, rtp.rep_name_snapshot) AS full_name'),
+      db.raw('u.role AS role'),
+      db.raw('u.employee_code AS employee_code'),
+      db.raw('u.manager_id AS manager_id'),
+      db.raw('m.full_name AS manager_name'),
+      db.raw('m.role AS manager_role'),
+      db.raw('m.employee_code AS manager_employee_code'),
+      db.raw('u.branch_id AS branch_id'),
+      db.raw('b.name AS branch_name'),
+      db.raw('b.code AS branch_code'),
     )
     .orderBy(['rtp.rep_id', { column: 'rtp.recorded_at', order: 'desc' }]);
 }
 
-module.exports = { recordPing, recordPingBatch, checkin, getCheckins, getBreadcrumbs, getLatestPositions };
+module.exports = {
+  recordPing,
+  recordPingBatch,
+  checkin,
+  getCheckins,
+  getBreadcrumbs,
+  getLatestPositions,
+  // Exposed for tests; not part of the public API.
+  _internals: { fetchHierarchyForRep, hierarchyCache, HIERARCHY_TTL_MS },
+};

@@ -13,6 +13,7 @@ const {
   buildKeyMap,
   pickFirst,
   asString,
+  auditCandidateColumns,
 } = require('../bqHelpers');
 
 const JOB_NAME = 'clients_ecatepec';
@@ -32,6 +33,19 @@ async function run({ limit = null } = {}) {
   }
 
   const keyMap = buildKeyMap(rows[0]);
+  // Both columns drive the match — neither absent means no row gets joined.
+  const colAudit = auditCandidateColumns(JOB_NAME, keyMap, COL_CANDIDATES, ['cpadre', 'dataplor_id']);
+  if (colAudit.missing_required.length > 0) {
+    return {
+      name: JOB_NAME,
+      status: 'failed',
+      failure: 'schema_drift_missing_required',
+      missing_required: colAudit.missing_required,
+      rows: rows.length,
+      matched: 0, missing_marzam: 0, missing_pharmacy: 0,
+      duration_ms: Date.now() - startedAt,
+    };
+  }
   const stats = { rows: rows.length, matched: 0, missing_marzam: 0, missing_pharmacy: 0 };
 
   for (const raw of rows) {

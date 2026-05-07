@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Marzam · Admin Cockpit</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="/css/admin-cockpit.css?v=admin-1">
+</head>
+<body>
+
+  <!-- Demo banner (reuses existing convention) -->
+  <div id="demo-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99;background:#1d4ed8;color:white;text-align:center;font-size:11px;font-weight:600;padding:4px;letter-spacing:0.08em">
+    MODO DEMO — DATOS SINTÉTICOS
+  </div>
+
+  <div class="cockpit-shell">
+
+    <!-- ── Topbar ─────────────────────────────────────────────────── -->
+    <header class="cockpit-topbar">
+      <div class="cockpit-brand">
+        <div class="cockpit-brand-mark">M</div>
+        <div>
+          <div class="cockpit-brand-title">Cockpit</div>
+          <div class="cockpit-brand-sub">Marzam · Admin</div>
+        </div>
+      </div>
+
+      <div class="range-picker" id="range-picker">
+        <button class="range-preset" data-range="today">Hoy</button>
+        <button class="range-preset" data-range="7d" data-active="true">7d</button>
+        <button class="range-preset" data-range="30d">30d</button>
+        <button class="range-preset" data-range="mtd">MTD</button>
+        <button class="range-preset" data-range="ytd">YTD</button>
+      </div>
+
+      <div class="cockpit-spacer"></div>
+
+      <div class="cockpit-anomaly-banner" id="anomaly-banner">
+        <span class="cockpit-anomaly-dot"></span>
+        <span id="anomaly-banner-text">0 anomalías</span>
+      </div>
+
+      <button class="cockpit-pill" id="btn-refresh">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>
+        </svg>
+        <span>Refrescar</span>
+      </button>
+
+      <div class="cockpit-user">
+        <div class="cockpit-user-avatar" id="user-avatar">A</div>
+        <div>
+          <div class="cockpit-user-name" id="user-name">—</div>
+        </div>
+        <button class="cockpit-logout" id="btn-logout">Salir</button>
+      </div>
+    </header>
+
+    <main class="cockpit-main">
+
+      <!-- ── Hero ────────────────────────────────────────────────── -->
+      <section class="cockpit-section" aria-labelledby="hero-title">
+        <h2 id="hero-title" class="cockpit-section-title">Snapshot ejecutivo</h2>
+        <p class="cockpit-section-sub" id="hero-sub">Indicadores en tiempo real — actualizado <span id="hero-updated">…</span></p>
+
+        <div class="hero-grid" id="hero-grid">
+          <!-- 6 KPI tiles inyectados por cockpit.js -->
+          <div class="kpi-tile"><div class="kpi-tile-label">Visitas hoy</div><div class="skeleton skeleton-num"></div></div>
+          <div class="kpi-tile"><div class="kpi-tile-label">Cobertura padrón</div><div class="skeleton skeleton-num"></div></div>
+          <div class="kpi-tile"><div class="kpi-tile-label">Monto MTD</div><div class="skeleton skeleton-num"></div></div>
+          <div class="kpi-tile"><div class="kpi-tile-label">Reps activos</div><div class="skeleton skeleton-num"></div></div>
+          <div class="kpi-tile"><div class="kpi-tile-label">Compliance MTD</div><div class="skeleton skeleton-num"></div></div>
+          <div class="kpi-tile"><div class="kpi-tile-label">Health score</div><div class="skeleton skeleton-num"></div></div>
+        </div>
+      </section>
+
+      <!-- ── Middle: Map + Trend + Hierarchy ────────────────────── -->
+      <section class="middle-grid">
+
+        <!-- Big Map -->
+        <div class="cockpit-card" style="grid-column: span 1;">
+          <div class="cockpit-card-header">
+            <div>
+              <div class="cockpit-card-title">Cobertura geográfica</div>
+              <div class="cockpit-card-meta" id="map-meta">Ecatepec · 30 días</div>
+            </div>
+            <div class="layer-toggles" id="map-layer-toggles" role="group" aria-label="Capas del mapa">
+              <button class="layer-toggle" data-layer="pharmacies" data-active="true" aria-pressed="true">
+                <span class="layer-toggle-dot" style="background:#dc2626"></span>Farmacias
+              </button>
+              <button class="layer-toggle" data-layer="coverage" data-active="true" aria-pressed="true">
+                <span class="layer-toggle-dot" style="background:#15803d"></span>Cobertura
+              </button>
+              <button class="layer-toggle" data-layer="pareto" aria-pressed="false">
+                <span class="layer-toggle-dot" style="background:#f59e0b"></span>Pareto
+              </button>
+              <button class="layer-toggle" data-layer="live" aria-pressed="false">
+                <span class="layer-toggle-dot" style="background:#16a34a"></span>Live
+              </button>
+              <button class="layer-toggle" data-layer="untouched" aria-pressed="false">
+                <span class="layer-toggle-dot" style="background:#ef4444"></span>Sin tocar
+              </button>
+            </div>
+          </div>
+          <div class="cockpit-card-body flush">
+            <div id="big-map" class="big-map"></div>
+          </div>
+        </div>
+
+        <!-- Trend -->
+        <div class="cockpit-card">
+          <div class="cockpit-card-header">
+            <div>
+              <div class="cockpit-card-title">Tendencia</div>
+              <div class="cockpit-card-meta" id="trend-meta">Visitas + compliance</div>
+            </div>
+          </div>
+          <div class="cockpit-card-body">
+            <div class="trend-canvas-wrap"><canvas id="trend-chart"></canvas></div>
+            <div class="trend-totals" id="trend-totals">
+              <div>
+                <div class="trend-totals-label">Visitas (período)</div>
+                <div class="trend-totals-value numeral skeleton skeleton-num" id="trend-total-visits">—</div>
+                <div class="trend-totals-yoy" id="trend-yoy-visits">YoY: —</div>
+              </div>
+              <div>
+                <div class="trend-totals-label">Monto (período)</div>
+                <div class="trend-totals-value numeral skeleton skeleton-num" id="trend-total-amount">—</div>
+                <div class="trend-totals-yoy" id="trend-yoy-amount">YoY: —</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hierarchy -->
+        <div class="cockpit-card">
+          <div class="cockpit-card-header">
+            <div>
+              <div class="cockpit-card-title">Jerarquía</div>
+              <div class="cockpit-card-meta">Director → Rep · MTD</div>
+            </div>
+            <button class="btn-icon" id="htree-collapse" title="Colapsar todo">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M5 15l7-7 7 7"/>
+              </svg>
+            </button>
+          </div>
+          <div class="cockpit-card-body flush">
+            <div class="htree" id="htree">
+              <div style="padding:18px 22px"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Drawer ─────────────────────────────────────────────── -->
+      <section class="drawer" id="drawer">
+        <div class="drawer-tabs" role="tablist">
+          <button class="drawer-tab" data-drawer="ops" data-active="true">Operaciones</button>
+          <button class="drawer-tab" data-drawer="geo">Geografía</button>
+          <button class="drawer-tab" data-drawer="people">Personas</button>
+          <button class="drawer-tab" data-drawer="commercial">Comercial</button>
+          <button class="drawer-tab" data-drawer="onboarding">Onboarding</button>
+          <button class="drawer-tab" data-drawer="quality">Calidad de datos</button>
+          <button class="drawer-tab" data-drawer="system">Sistema</button>
+          <button class="drawer-tab" data-drawer="anomalies">Anomalías <span class="drawer-tab-count" id="anomaly-tab-count">·</span></button>
+        </div>
+        <div class="drawer-body" id="drawer-body">
+          <div style="padding:22px"><div class="skeleton skeleton-block"></div></div>
+        </div>
+      </section>
+
+      <!-- ── Audit live tail ────────────────────────────────────── -->
+      <section class="audit-tail">
+        <div class="audit-tail-header">
+          <div class="audit-tail-title">Audit log · en vivo</div>
+          <div class="audit-tail-status">
+            <span class="audit-pulse"></span>
+            <span id="audit-status">Refresca cada 10s</span>
+          </div>
+        </div>
+        <div class="audit-list" id="audit-list">
+          <div class="empty">
+            <div class="empty-title">Sin eventos recientes</div>
+            <div class="empty-sub">Cuando alguien modifique datos del sistema aparecerá aquí.</div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Auth guard — runs synchronously before any other script -->
+  <script>
+    (function authGuard() {
+      try {
+        const userJson = localStorage.getItem('user');
+        const token = localStorage.getItem('token');
+        if (!userJson || !token) {
+          window.location.replace('/');
+          return;
+        }
+        const user = JSON.parse(userJson);
+        const role = String(user.role || '').toLowerCase();
+        const isAdmin = role === 'admin' || role === 'national_admin';
+        if (!isAdmin) {
+          window.location.replace('/app');
+          return;
+        }
+        // expose for boot
+        window.__ADMIN_USER__ = user;
+        window.__ADMIN_TOKEN__ = token;
+      } catch (e) {
+        console.error('[admin] auth guard failed', e);
+        window.location.replace('/');
+      }
+    })();
+  </script>
+
+  <script src="/js/api.js?v=admin-1"></script>
+  <script src="/js/admin/charts.js?v=admin-1"></script>
+  <script src="/js/admin/big-map.js?v=admin-1"></script>
+  <script src="/js/admin/hierarchy-tree.js?v=admin-1"></script>
+  <script src="/js/admin/drawer.js?v=admin-1"></script>
+  <script src="/js/admin/cockpit.js?v=admin-1"></script>
+</body>
+</html>

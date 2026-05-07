@@ -164,7 +164,14 @@ async function listUniverse(req, res, next) {
       ? Math.max(0, Math.min(50000, Number(req.query.limit)))
       : 5000;
     const bbox = parseBbox(req.query.bbox);
-    const data = await service.getUniverse({ limit, bbox });
+    const userScope = req.query.scope === 'mine' && req.user
+      ? {
+        userId: req.user.id,
+        role: req.user.role,
+        isGlobal: !!req.user.is_global,
+      }
+      : null;
+    const data = await service.getUniverse({ limit, bbox, userScope });
     res.json(data);
   } catch (e) {
     next(e);

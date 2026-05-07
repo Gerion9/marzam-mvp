@@ -63,12 +63,13 @@ function clusterByHome(reps, candidates, { iterations = 4, anchor = true } = {})
     home: { lat: Number(r.home_lat), lng: Number(r.home_lng) },
   }));
 
-  const usable = candidates.filter(
-    (c) => Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng)),
-  );
-  const unclustered = candidates.filter(
-    (c) => !Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lng)),
-  );
+  // Reject null/undefined explicitly: Number(null) === 0 (finite!) would
+  // otherwise smuggle a coordless candidate through as if it were at (0,0).
+  const hasCoords = (c) =>
+    c.lat != null && c.lng != null
+    && Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng));
+  const usable = candidates.filter(hasCoords);
+  const unclustered = candidates.filter((c) => !hasCoords(c));
 
   let assignments = new Array(usable.length);
 

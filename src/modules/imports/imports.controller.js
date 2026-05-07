@@ -1,4 +1,5 @@
 const importsService = require('./imports.service');
+const { secretsEqual } = require('../../utils/secretCompare');
 
 async function uploadUrl(req, res, next) {
   try {
@@ -72,7 +73,7 @@ async function workerTick(req, res, next) {
     const authedDirector = req.user && (req.user.role === 'director_sucursal' || req.user.role === 'national_admin');
 
     if (secret) {
-      if (presented !== secret && !authedDirector) {
+      if (!secretsEqual(presented, secret) && !authedDirector) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
     } else if (!authedDirector) {

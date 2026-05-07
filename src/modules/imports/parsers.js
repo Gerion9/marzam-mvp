@@ -78,10 +78,17 @@ function asNumeric(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Legacy null markers that some Marzam Excel files use in place of empty
+// cells. Treated as null so downstream UPSERTs don't store the literal
+// strings.
+const NULL_MARKERS = new Set(['null', 'n/a', '#n/a', 'na', '-', '--']);
+
 function asString(value) {
   if (value === null || value === undefined) return null;
   const s = String(value).trim();
-  return s === '' ? null : s;
+  if (s === '') return null;
+  if (NULL_MARKERS.has(s.toLowerCase())) return null;
+  return s;
 }
 
 function pad2(n) {

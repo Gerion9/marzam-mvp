@@ -4,6 +4,26 @@ const { ROLE_PRIMARY_PARETO, PARETO_CLASSES } = require('./planGenerator');
 const { normalizeRole } = require('../../constants/roles');
 
 /**
+ * Audit Fix #3 — preview endpoints accept arbitrary `scope_user_ids` in the
+ * body. They are allow-listed for demo users in `demoReadonly.js` (so the
+ * Plan Editor sandbox works), but a curl client with a demo token can ask
+ * for previews against ANY rep's scope and receive real plan data.
+ *
+ * Backend defense: when the actor is a demo user, force `scopeUserIds` to
+ * just the demo user's own canonical id. The frontend `demoHierarchy.js`
+ * already does this for the happy path; this is the backend net.
+ */
+function enforceDemoScope(req, scopeUserIds) {
+  if (req.user?.data_scope !== 'demo') return scopeUserIds;
+  // Demo users may only preview against themselves. Drop everything else
+  // silently — returning a 403 would be more honest but would break the
+  // demo UX flow described in `demoReadonly.js:42-49` (sandbox needs to
+  // succeed without bouncing through error handlers).
+  const own = req.user.id ? [req.user.id] : [];
+  return own;
+}
+
+/**
  * Validate the pareto_filter array passed in the request.
  *
  * Rules:
@@ -103,9 +123,10 @@ async function preview(req, res, next) {
     if (!Array.isArray(scopeUserIds) || !scopeUserIds.length) {
       return res.status(400).json({ error: 'scope_user_ids is required' });
     }
+    const scopedIds = enforceDemoScope(req, scopeUserIds);
     const result = await service.preview({
       ownerUserId: req.user.id,
-      scopeUserIds: scopeUserIds.map((id) => accessDirectory.toCanonicalId(id)),
+      scopeUserIds: scopedIds.map((id) => accessDirectory.toCanonicalId(id)),
       periodStart,
       periodEnd,
       paretoFilter,
@@ -137,7 +158,8 @@ async function previewFull(req, res, next) {
     if (!periodStart || !periodEnd) {
       return res.status(400).json({ error: 'period_start, period_end required' });
     }
-    const canonicalIds = scopeUserIds.map((id) => accessDirectory.toCanonicalId(id));
+    const scopedIds = enforceDemoScope(req, scopeUserIds);
+    const canonicalIds = scopedIds.map((id) => accessDirectory.toCanonicalId(id));
     const scopeUserRoles = await loadScopeUserRoles(canonicalIds);
     const paretoErr = validateParetoFilter(req, paretoFilter, scopeUserRoles);
     if (paretoErr) return res.status(400).json({ error: paretoErr });
@@ -178,7 +200,8 @@ async function costEstimate(req, res, next) {
     if (!periodStart || !periodEnd) {
       return res.status(400).json({ error: 'period_start, period_end required' });
     }
-    const canonicalIds = scopeUserIds.map((id) => accessDirectory.toCanonicalId(id));
+    const scopedIds = enforceDemoScope(req, scopeUserIds);
+    const canonicalIds = scopedIds.map((id) => accessDirectory.toCanonicalId(id));
     const scopeUserRoles = await loadScopeUserRoles(canonicalIds);
     const paretoErr = validateParetoFilter(req, paretoFilter, scopeUserRoles);
     if (paretoErr) return res.status(400).json({ error: paretoErr });

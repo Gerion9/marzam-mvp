@@ -135,9 +135,27 @@ async function flotillaSummary(req, res, next) {
   }
 }
 
+// Coverage actionable views (mig 079 — pharmacy_presence).
+async function coveragePending(req, res, next) {
+  try {
+    res.json(await reportingService.getCoveragePending(req.query));
+  } catch (err) { next(err); }
+}
+
+async function myCoverage(req, res, next) {
+  try {
+    res.json(await reportingService.getMyCoverage({
+      userId: req.user?.id,
+      days: req.query.days,
+    }));
+  } catch (err) { next(err); }
+}
+
 module.exports = {
   dashboard, repProductivity, coverageByMunicipality, assignmentProgress, refreshViews,
   exportPharmacies, exportRepRoute, exportAllRepRoutes, visitDetail, flotillaSummary,
   // Marzam Execution Doc §10 KPI set:
   routeAdherence, visitDuration, prospectFunnel, salesVsTarget, routesOnTime,
+  // Coverage views (pharmacy_presence):
+  coveragePending, myCoverage,
 };

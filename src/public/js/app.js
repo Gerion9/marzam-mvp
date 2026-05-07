@@ -105,6 +105,12 @@
     APP.user = user;
     APP.role = normalizeRole(user.role);
 
+    // Admin tiene una sección dedicada (/admin); si llegó aquí, redirigir
+    if (APP.role === 'admin') {
+      location.href = '/admin';
+      return;
+    }
+
     // Auto-activate demo mode when the authenticated user is a demo account.
     // This catches users who log in via the form (which doesn't set the flag)
     // instead of the quick-pick buttons. Any user with data_scope='demo' or

@@ -73,6 +73,11 @@
       prosp_cons_D: true,
     },
     legendEl: null,
+    // Live data fetched from /api/marzam/universe for non-demo users.
+    // Demo users keep using DEMO_H.STORE (synthetic dataset).
+    liveData: null,        // { padron: [...], prospects: [...] }
+    liveLoading: null,     // promise — dedupe concurrent fetches
+    layersAdded: false,    // sources/layers attached to the map exactly once
   };
 
   function getMap() { return window.APP && window.APP.map; }
@@ -80,15 +85,22 @@
   function clearLayer(id) {
     const map = getMap();
     if (!map) return;
-    const layerIds = [id, `${id}-prospects`, `${id}-prospects-cross`, 'marzam-pharmacies-cross'];
-    const sourceIds = [id, `${id}-prospects`, `${id}-prospects-cross`];
-    // Layers must all be removed before any source that they reference is removed.
+    // Cover both the v2 layer set (prospects-ring) and any leftover from
+    // the previous version (prospects-cross) so partial deploys self-heal.
+    const layerIds = [
+      id,
+      `${id}-prospects`,
+      `${id}-prospects-ring`,
+      `${id}-prospects-cross`,
+    ];
+    const sourceIds = [id, `${id}-prospects`];
     layerIds.forEach((layerId) => {
       if (map.getLayer(layerId)) map.removeLayer(layerId);
     });
     sourceIds.forEach((sourceId) => {
       if (map.getSource(sourceId)) map.removeSource(sourceId);
     });
+    STATE.layersAdded = false;
   }
 
   function getCurrentUser() {
@@ -107,10 +119,86 @@
     return ALIASES[role] || role || 'representante';
   }
 
+  function isDemoMode() {
+    if (typeof localStorage === 'undefined') return false;
+    if (localStorage.getItem('marzam_demo') === '1') return true;
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || 'null');
+      if (!u) return false;
+      if (u.data_scope === 'demo') return true;
+      return String(u.email || '').endsWith('@demo.marzam.mx');
+    } catch { return false; }
+  }
+
+  /**
+   * Fetch live universe scoped to the current user. The backend applies
+   * role-based scoping (admin/director → all; gerente/supervisor → states
+   * of their assigned clients with all-fallback; rep → assigned pharmacies).
+   * Result is memoized in STATE.liveData; concurrent calls dedupe through
+   * STATE.liveLoading.
+   */
+  async function fetchLiveUniverse() {
+    if (STATE.liveData) return STATE.liveData;
+    if (STATE.liveLoading) return STATE.liveLoading;
+    const token = localStorage.getItem('token');
+    if (!token) return { padron: [], prospects: [] };
+
+    STATE.liveLoading = (async () => {
+      try {
+        const res = await fetch('/api/marzam/universe?scope=mine&limit=10000', {
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const padron = (data.marzam || []).map((m) => ({
+          id: m.id, name: m.name, address: m.address || '',
+          municipality: m.municipality, state: m.state,
+          lat: m.lat, lng: m.lng,
+          pareto: m.pareto, quadrant: m.quadrant,
+          final_score: m.final_score,
+          dataplor_id: m.dataplor_id, clave_mostrador: m.clave_mostrador,
+          business_type: m.business_type || 'pharmacy',
+          category: m.category,
+          geocoded_relevance: m.geocoded_relevance,
+        }));
+        const prospects = (data.prospects || []).map((p) => ({
+          id: p.id, name: p.name, address: p.address || '',
+          municipality: p.municipality, state: p.state,
+          lat: p.lat, lng: p.lng,
+          quadrant: p.quadrant, tier: p.pareto,
+          final_score: p.final_score,
+          potential_score: p.final_score,
+          business_type: p.business_type || 'pharmacy',
+          category: p.category,
+          geocoded_relevance: p.geocoded_relevance,
+          pareto: null,
+        }));
+        STATE.liveData = { padron, prospects };
+        return STATE.liveData;
+      } catch (err) {
+        console.warn('[marzam-pharmacies-map] live universe fetch failed', err);
+        STATE.liveData = { padron: [], prospects: [] };
+        return STATE.liveData;
+      } finally {
+        STATE.liveLoading = null;
+      }
+    })();
+    return STATE.liveLoading;
+  }
+
   /**
    * Decide qué farmacias mostrar dado el rol y la jerarquía.
+   * En modo demo lee de DEMO_H.STORE (synthetic). Para usuarios reales
+   * usa STATE.liveData (poblado por fetchLiveUniverse), que el backend
+   * ya filtra por rol.
    */
   function pharmaciesVisibleToUser(user) {
+    if (!isDemoMode()) {
+      // Real users: backend already scoped the data. Just return it.
+      const data = STATE.liveData || { padron: [], prospects: [] };
+      return data;
+    }
+
     if (!window.DEMO_H || !DEMO_H.STORE) return { padron: [], prospects: [] };
     const STORE = DEMO_H.STORE;
     const role = rolesNorm(user && user.role);
@@ -179,13 +267,21 @@
     return p.business_type === 'consultorio' ? 'consultorio' : 'pharmacy';
   }
 
+  // Treat NULL pareto as "C" so freshly-synced Marzam clients without an
+  // explicit ABC classification still render. The legend keeps a single
+  // toggle per Pareto bucket; null-pareto pharmacies follow the C toggle.
+  function padronPareto(p) {
+    const v = (p.pareto || '').toUpperCase();
+    return v === 'A' || v === 'B' || v === 'C' ? v : 'C';
+  }
+
   function applyFilters(padron, prospects) {
     const f = STATE.filters;
     const padronFiltered = padron.filter((p) => {
-      if (p.pareto === 'A' && !f.padron_A) return false;
-      if (p.pareto === 'B' && !f.padron_B) return false;
-      if (p.pareto === 'C' && !f.padron_C) return false;
-      return p.pareto === 'A' || p.pareto === 'B' || p.pareto === 'C';
+      const v = padronPareto(p);
+      if (v === 'A') return f.padron_A;
+      if (v === 'B') return f.padron_B;
+      return f.padron_C;
     });
     const prospectsFiltered = prospects.filter((p) => {
       const t = prospectTier(p);
@@ -196,81 +292,77 @@
     return { padron: padronFiltered, prospects: prospectsFiltered };
   }
 
-  function paint(padron, prospects) {
-    const map = getMap();
-    if (!map) return;
-    const apply = () => {
-      clearLayer('marzam-pharmacies');
-
-      // ── Padrón Marzam ──
-      const padronFeatures = padron.map((p) => ({
+  // Build the GeoJSON FeatureCollections from raw padron + prospect rows.
+  // Pure function — separating data shaping from layer mutation lets us
+  // call setData() on each repaint without touching layers.
+  function buildFeatureCollections(padron, prospects) {
+    const padronFeatures = padron.map((p) => {
+      const v = padronPareto(p);
+      return {
         type: 'Feature',
         properties: {
           id: p.id,
           name: p.name || 'Farmacia',
-          pareto: p.pareto || 'C',
-          color: PARETO_COLORS[p.pareto] || PARETO_COLORS.C,
+          pareto: v,
+          color: PARETO_COLORS[v] || PARETO_COLORS.C,
           chain: p.chain || '',
           address: p.address || '',
           municipality: p.municipality || '',
           source: 'padron',
           business_type: businessTypeOf(p),
-          // Marzam-only: 0..1 from BlackPrint geocoder.  Used in popup
-          // to flag locations we can't 100 % trust until Marzam ships
-          // their real coordinates.
           geocoded_relevance: p.geocoded_relevance != null ? Number(p.geocoded_relevance) : null,
           final_score: p.final_score != null ? Number(p.final_score) : null,
         },
         geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
-      }));
-      map.addSource('marzam-pharmacies', { type: 'geojson', data: { type: 'FeatureCollection', features: padronFeatures } });
-      map.addLayer({
-        id: 'marzam-pharmacies',
-        type: 'circle',
-        source: 'marzam-pharmacies',
-        paint: {
-          'circle-radius': [
-            'match', ['get', 'pareto'],
-            'A', 8,
-            'B', 6,
-            'C', 4.5,
-            5,
-          ],
-          'circle-color': ['get', 'color'],
-          'circle-stroke-width': 1.5,
-          'circle-stroke-color': '#ffffff',
-          'circle-opacity': 0.9,
+      };
+    });
+    const prospectFeatures = prospects.map((p) => {
+      const tier = prospectTier(p);
+      const bt = businessTypeOf(p);
+      return {
+        type: 'Feature',
+        properties: {
+          id: p.id,
+          name: p.name || (bt === 'consultorio' ? 'Consultorio' : 'Prospecto'),
+          tier,
+          color: PROSPECT_TIER_COLORS[tier] || PROSPECT_TIER_COLORS.D,
+          chain: p.chain || '',
+          address: p.address || '',
+          municipality: p.municipality || '',
+          source: 'prospect',
+          business_type: bt,
+          // Numeric flag the symbol layer can use as a filter — guards
+          // against text-font glyph misses by still painting an inner
+          // ring overlay for consultorios (see addStaticLayers).
+          is_consultorio: bt === 'consultorio' ? 1 : 0,
+          potential_score: p.potential_score || 0,
+          order_potential: p.order_potential || 0,
+          distance_to_nearest_marzam_m: p.distance_to_nearest_marzam_m || 0,
+          final_score: p.final_score != null ? Number(p.final_score) : null,
         },
-      });
+        geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+      };
+    });
+    return {
+      padron: { type: 'FeatureCollection', features: padronFeatures },
+      prospects: { type: 'FeatureCollection', features: prospectFeatures },
+    };
+  }
 
-      // ── Prospectos ──
-      const prospectFeatures = prospects.map((p) => {
-        const tier = prospectTier(p);
-        const bt = businessTypeOf(p);
-        return {
-          type: 'Feature',
-          properties: {
-            id: p.id,
-            name: p.name || (bt === 'consultorio' ? 'Consultorio' : 'Prospecto'),
-            tier,
-            color: PROSPECT_TIER_COLORS[tier] || PROSPECT_TIER_COLORS.D,
-            chain: p.chain || '',
-            address: p.address || '',
-            municipality: p.municipality || '',
-            source: 'prospect',
-            business_type: bt,
-            potential_score: p.potential_score || 0,
-            order_potential: p.order_potential || 0,
-            distance_to_nearest_marzam_m: p.distance_to_nearest_marzam_m || 0,
-            // Prospects come from Dataplor (field-collected lat/lng) so
-            // geocoded_relevance is NULL — but we still pass final_score
-            // through so the popup can render the potential bar.
-            final_score: p.final_score != null ? Number(p.final_score) : null,
-          },
-          geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
-        };
-      });
-      map.addSource('marzam-pharmacies-prospects', { type: 'geojson', data: { type: 'FeatureCollection', features: prospectFeatures } });
+  // Create sources + layers + click handlers exactly once. After this
+  // runs subsequent paints just update source data via setData().
+  function addStaticLayers(map) {
+    if (STATE.layersAdded) return;
+    STATE.layersAdded = true;
+
+    if (!map.getSource('marzam-pharmacies')) {
+      map.addSource('marzam-pharmacies', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
+    if (!map.getSource('marzam-pharmacies-prospects')) {
+      map.addSource('marzam-pharmacies-prospects', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
+
+    if (!map.getLayer('marzam-pharmacies-prospects')) {
       map.addLayer({
         id: 'marzam-pharmacies-prospects',
         type: 'circle',
@@ -278,11 +370,7 @@
         paint: {
           'circle-radius': [
             'match', ['get', 'tier'],
-            'A', 7,
-            'B', 5.5,
-            'C', 4,
-            'D', 3.5,
-            5,
+            'A', 7, 'B', 5.5, 'C', 4, 'D', 3.5, 5,
           ],
           'circle-color': ['get', 'color'],
           'circle-stroke-width': 2,
@@ -290,98 +378,133 @@
           'circle-opacity': 0.85,
         },
       });
+    }
 
-      // Consultorio overlay: a white "+" cross stamped on top of the
-      // colored circle.  Cheaper than a SymbolLayer with a sprite and
-      // works without registering image assets.
+    // Consultorio inner-ring overlay — a smaller white circle stamped on
+    // top of the colored prospect dot. Renders WITHOUT depending on the
+    // basemap glyph server (which sometimes lacks the requested font and
+    // silently skips the symbol). This guarantees consultorios are always
+    // visually distinguishable from regular pharmacy prospects.
+    if (!map.getLayer('marzam-pharmacies-prospects-ring')) {
       map.addLayer({
-        id: 'marzam-pharmacies-prospects-cross',
-        type: 'symbol',
+        id: 'marzam-pharmacies-prospects-ring',
+        type: 'circle',
         source: 'marzam-pharmacies-prospects',
-        filter: ['==', ['get', 'business_type'], 'consultorio'],
-        layout: {
-          'text-field': '+',
-          'text-size': [
-            'match', ['get', 'tier'],
-            'A', 14,
-            'B', 12,
-            'C', 10,
-            'D', 9,
-            10,
-          ],
-          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-          'text-allow-overlap': true,
-          'text-ignore-placement': true,
-        },
+        filter: ['==', ['get', 'is_consultorio'], 1],
         paint: {
-          'text-color': '#ffffff',
-          'text-halo-color': 'rgba(0,0,0,0.25)',
-          'text-halo-width': 0.6,
+          'circle-radius': [
+            'match', ['get', 'tier'],
+            'A', 3, 'B', 2.4, 'C', 1.8, 'D', 1.5, 2,
+          ],
+          'circle-color': '#ffffff',
+          'circle-stroke-width': 0.8,
+          'circle-stroke-color': 'rgba(0,0,0,0.25)',
+          'circle-opacity': 1,
         },
       });
+    }
 
-      // Click handler — popup con info detallada.
-      ['marzam-pharmacies', 'marzam-pharmacies-prospects'].forEach((layerId) => {
-        map.on('click', layerId, (e) => {
-          const f = e.features[0];
-          const p = f.properties;
-          const isProspect = p.source === 'prospect';
-          const isConsultorio = p.business_type === 'consultorio';
-          const typeLabel = isConsultorio ? 'CONSULTORIO' : 'FARMACIA';
-          const badge = isProspect
-            ? `<span class="font-bold" style="color:${p.color}">PROSPECTO · ${typeLabel} · TIER ${p.tier}</span>`
-            : `<span class="font-bold" style="color:${p.color}">PADRÓN MARZAM · ${typeLabel} · PARETO ${p.pareto}</span>`;
-
-          // Confianza de ubicación (sólo para clientes Marzam con
-          // geocoded_relevance presente — el dot fue geocodificado, no
-          // validado en campo).
-          const geo = Number(p.geocoded_relevance);
-          const geoBlock = (!isProspect && Number.isFinite(geo) && geo > 0)
-            ? renderScoreBar({
-              label: 'Confianza de ubicación',
-              valuePct: Math.round(geo * 100),
-              tone: 'warn',
-              note: 'Geocodeada desde dirección — no validada en campo',
-            })
-            : '';
-
-          // Potencial de venta (final_score, 0..100).  Tanto padrón como
-          // prospectos lo tienen — viene de BlackPrint.
-          const fs = Number(p.final_score);
-          const scoreBlock = Number.isFinite(fs) && fs > 0
-            ? renderScoreBar({
-              label: 'Potencial de venta',
-              valuePct: Math.round(Math.max(0, Math.min(100, fs))),
-              tone: 'good',
-            })
-            : '';
-
-          const html = `
-            <div class="text-xs leading-tight" style="min-width:240px">
-              <div class="text-[10px] uppercase tracking-wider mb-1">${badge}</div>
-              <div class="text-sm font-bold text-slate-800 mb-1">${escapeHtml(p.name)}</div>
-              ${p.address ? `<div class="text-[11px] text-slate-500">${escapeHtml(p.address)}</div>` : ''}
-              ${p.chain ? `<div class="text-[10px] text-slate-400 mt-1">Cadena: ${escapeHtml(p.chain)}</div>` : ''}
-              ${(geoBlock || scoreBlock) ? `<div class="mt-2 pt-2 border-t border-slate-200 space-y-2">${geoBlock}${scoreBlock}</div>` : ''}
-              ${isProspect ? `
-                <div class="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-200">
-                  ${p.order_potential ? `<div><div class="text-[9px] text-slate-400 uppercase font-bold">Pedido est.</div><div class="text-xs font-bold text-slate-700">$${Number(p.order_potential).toLocaleString()}</div></div>` : ''}
-                  ${p.distance_to_nearest_marzam_m ? `<div><div class="text-[9px] text-slate-400 uppercase font-bold">A Marzam +cercano</div><div class="text-xs font-bold text-slate-700">${p.distance_to_nearest_marzam_m}m</div></div>` : ''}
-                  <div><div class="text-[9px] text-slate-400 uppercase font-bold">Tier estimado</div><div class="text-xs font-bold" style="color:${p.color}">${p.tier}</div></div>
-                </div>
-              ` : ''}
-            </div>
-          `;
-          new maplibregl.Popup({ offset: 12, closeButton: true })
-            .setLngLat(f.geometry.coordinates)
-            .setHTML(html)
-            .addTo(map);
-        });
-        map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
-        map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
+    if (!map.getLayer('marzam-pharmacies')) {
+      map.addLayer({
+        id: 'marzam-pharmacies',
+        type: 'circle',
+        source: 'marzam-pharmacies',
+        paint: {
+          'circle-radius': [
+            'match', ['get', 'pareto'],
+            'A', 8, 'B', 6, 'C', 4.5, 5,
+          ],
+          'circle-color': ['get', 'color'],
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#ffffff',
+          'circle-opacity': 0.95,
+        },
       });
+    }
+
+    // Click + hover handlers. Bound once because rebinding on every
+    // repaint accumulates listeners and slows the map after a few toggles.
+    ['marzam-pharmacies', 'marzam-pharmacies-prospects'].forEach((layerId) => {
+      map.on('click', layerId, (e) => {
+        const feat = e.features[0];
+        const p = feat.properties;
+        const isProspect = p.source === 'prospect';
+        const isConsultorio = String(p.business_type) === 'consultorio';
+        const typeLabel = isConsultorio ? 'CONSULTORIO' : 'FARMACIA';
+        const badge = isProspect
+          ? `<span class="font-bold" style="color:${p.color}">PROSPECTO · ${typeLabel} · TIER ${p.tier}</span>`
+          : `<span class="font-bold" style="color:${p.color}">PADRÓN MARZAM · ${typeLabel} · PARETO ${p.pareto}</span>`;
+        const geo = Number(p.geocoded_relevance);
+        const geoBlock = (!isProspect && Number.isFinite(geo) && geo > 0)
+          ? renderScoreBar({
+            label: 'Confianza de ubicación',
+            valuePct: Math.round(geo * 100),
+            tone: 'warn',
+            note: 'Geocodeada desde dirección — no validada en campo',
+          })
+          : '';
+        const fs = Number(p.final_score);
+        const scoreBlock = Number.isFinite(fs) && fs > 0
+          ? renderScoreBar({
+            label: 'Potencial de venta',
+            valuePct: Math.round(Math.max(0, Math.min(100, fs))),
+            tone: 'good',
+          })
+          : '';
+        const html = `
+          <div class="text-xs leading-tight" style="min-width:240px">
+            <div class="text-[10px] uppercase tracking-wider mb-1">${badge}</div>
+            <div class="text-sm font-bold text-slate-800 mb-1">${escapeHtml(p.name)}</div>
+            ${p.address ? `<div class="text-[11px] text-slate-500">${escapeHtml(p.address)}</div>` : ''}
+            ${p.chain ? `<div class="text-[10px] text-slate-400 mt-1">Cadena: ${escapeHtml(p.chain)}</div>` : ''}
+            ${(geoBlock || scoreBlock) ? `<div class="mt-2 pt-2 border-t border-slate-200 space-y-2">${geoBlock}${scoreBlock}</div>` : ''}
+            ${isProspect ? `
+              <div class="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-200">
+                ${p.order_potential ? `<div><div class="text-[9px] text-slate-400 uppercase font-bold">Pedido est.</div><div class="text-xs font-bold text-slate-700">$${Number(p.order_potential).toLocaleString()}</div></div>` : ''}
+                ${p.distance_to_nearest_marzam_m ? `<div><div class="text-[9px] text-slate-400 uppercase font-bold">A Marzam +cercano</div><div class="text-xs font-bold text-slate-700">${p.distance_to_nearest_marzam_m}m</div></div>` : ''}
+                <div><div class="text-[9px] text-slate-400 uppercase font-bold">Tier estimado</div><div class="text-xs font-bold" style="color:${p.color}">${p.tier}</div></div>
+              </div>
+            ` : ''}
+          </div>
+        `;
+        new maplibregl.Popup({ offset: 12, closeButton: true })
+          .setLngLat(feat.geometry.coordinates)
+          .setHTML(html)
+          .addTo(map);
+      });
+      map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
+    });
+  }
+
+  // Run `fn` once the map style is ready. Style readiness is a race we
+  // hit on first render: the map.on('load') event has fired before the
+  // caller subscribed, so map.once('load', fn) never triggers. Polling
+  // map.isStyleLoaded() side-steps that — which is exactly what made
+  // pharmacies "appear only after toggling the legend" before this fix.
+  function whenStyleReady(map, fn) {
+    if (map.isStyleLoaded && map.isStyleLoaded()) { fn(); return; }
+    let attempts = 0;
+    const tick = () => {
+      attempts += 1;
+      if (map.isStyleLoaded && map.isStyleLoaded()) { fn(); return; }
+      if (attempts > 60) { fn(); return; } // 6s ceiling — paint anyway
+      setTimeout(tick, 100);
     };
-    if (map.loaded()) apply(); else map.once('load', apply);
+    tick();
+  }
+
+  function paint(padron, prospects) {
+    const map = getMap();
+    if (!map) return;
+    whenStyleReady(map, () => {
+      addStaticLayers(map);
+      const fc = buildFeatureCollections(padron, prospects);
+      const padronSrc = map.getSource('marzam-pharmacies');
+      const prospSrc = map.getSource('marzam-pharmacies-prospects');
+      if (padronSrc && padronSrc.setData) padronSrc.setData(fc.padron);
+      if (prospSrc && prospSrc.setData) prospSrc.setData(fc.prospects);
+    });
   }
 
   function escapeHtml(s) {
@@ -539,7 +662,7 @@
       'prosp-cons-A': 0, 'prosp-cons-B': 0, 'prosp-cons-C': 0, 'prosp-cons-D': 0,
     };
     padron.forEach((p) => {
-      const k = `padron-${p.pareto}`;
+      const k = `padron-${padronPareto(p)}`;
       if (counts[k] != null) counts[k] += 1;
     });
     prospects.forEach((p) => {
@@ -563,9 +686,16 @@
     updateCounts(padron, prospects);
   }
 
-  function render() {
+  async function render() {
     STATE.visible = true;
     if (!STATE.legendEl) renderLegend();
+    // For real (non-demo) users: load the role-scoped universe before
+    // painting. Without this the layer renders empty because DEMO_H.STORE
+    // is unhydrated outside demo mode.
+    if (!isDemoMode() && !STATE.liveData) {
+      try { await fetchLiveUniverse(); } catch { /* logged inside */ }
+      if (!STATE.visible) return; // user navigated away during fetch
+    }
     repaint();
   }
 

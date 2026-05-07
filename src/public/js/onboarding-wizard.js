@@ -92,47 +92,73 @@
 
   // ──────────────────────────────────────────────────────────
   // State del wizard
+  //
+  // `initialPharmacy` se usa cuando el wizard se abre desde una "stop card"
+  // del plan diario (rep tocó "Iniciar proceso" en una farmacia Nueva).  Pre-
+  // rellenamos lo que ya conocemos de la farmacia y saltamos el step de
+  // selección de candidatos — ya sabemos cuál es.
   // ──────────────────────────────────────────────────────────
-  function makeState() {
+  function makeState(initialPharmacy = null) {
+    const ph = initialPharmacy;
     return {
       onboardingId: null,
       stepIndex: 0,
-      // Decisiones
-      not_in_directory: null,    // boolean
-      dataplor_id: null,         // si eligió un candidato cercano
-      candidate_pharmacy_id: null,
-      candidate_name: null,
+      // Decisiones — pre-rellenadas si llegó farmacia desde stop card.
+      // Si vino desde stop, la farmacia YA está en nuestro padrón (no
+      // importa que `dataplor_id` sea null — `geo_pharmacy_id` existe), así
+      // que jamás disparamos la rama "no está en la lista" + 3 fotos del
+      // lugar.  Esa rama es solo para altas manuales sin candidato.
+      not_in_directory: ph ? false : null,
+      dataplor_id: ph?.dataplor_id || null,
+      candidate_pharmacy_id: ph?.id || null,
+      candidate_name: ph?.name || null,
       candidates: null,          // cache de cercanos
       candidatesLoading: false,
       persona_tipo: null,        // 'fisica' | 'moral'
       forma_pago: null,          // 'efectivo' | 'credito'
-      // Datos
+      // Datos — el nombre del padrón se pre-rellena como nombre comercial.
+      // La razón social se deja vacía: viene de la Constancia, puede diferir.
       rfc: '',
       razon_social: '',
-      nombre_comercial: '',
+      nombre_comercial: ph?.name || '',
       contact_name: '',
       contact_phone: '',
       contact_email: '',
-      address: '',
+      address: ph?.address || '',
       notes: '',
-      lat: null, lng: null, accuracy: null,
+      lat: ph?.lat ?? null, lng: ph?.lng ?? null, accuracy: null,
       // Fotos / documentos subidos: { [docType]: { id, photo_url, previewUrl } }
       uploaded: {},
       // Productos capturados (lista local; se persisten al backend al avanzar de ese paso)
       products: [],
       spec: DEFAULT_SPEC,
+      // Marca: el wizard se abrió desde un stop del plan diario.  En el
+      // submit final también creamos una row en /visits para que la parada
+      // se marque como completada en el plan.
+      sourceStop: ph || null,
     };
   }
 
   // ──────────────────────────────────────────────────────────
   // Definición de steps (función de orden, devuelve lista dinámica)
+  //
+  // Cuando el wizard se abre desde un stop card (state.sourceStop), saltamos
+  // el step "intro" — ya sabemos cuál farmacia es.  Si la farmacia trae
+  // dataplor_id, también saltamos "no_exists_confirm".  Si NO trae (caso
+  // synthetic / fuera de padrón) mantenemos "no_exists_confirm" para que el
+  // rep tome las 3 fotos del lugar.
   // ──────────────────────────────────────────────────────────
   function buildSteps(state) {
+    const fromStop = !!state.sourceStop;
+    const intro = fromStop
+      ? []
+      : [{ id: 'intro', title: '¿Encontraste la farmacia?' }];
+    const noExists = state.not_in_directory && !fromStop
+      ? [{ id: 'no_exists_confirm', title: 'Confirma antes de marcar como inexistente' }]
+      : [];
     return [
-      { id: 'intro',      title: '¿Encontraste la farmacia?' },
-      ...(state.not_in_directory
-        ? [{ id: 'no_exists_confirm', title: 'Confirma antes de marcar como inexistente' }]
-        : []),
+      ...intro,
+      ...noExists,
       { id: 'persona',    title: 'Tipo de persona' },
       { id: 'pago',       title: 'Forma de pago' },
       { id: 'datos',      title: 'Datos básicos' },
@@ -687,6 +713,25 @@
   async function submit(state) {
     await ensureDraft(state); // patch reciente
     const result = await API.post(`/pharmacy-onboarding/${state.onboardingId}/submit`, {});
+    // Si el wizard se abrió desde un stop del plan diario, registramos
+    // también una visita para que la parada se marque como completada.
+    // Best-effort: si el id del stop es sintético (sin row en `pharmacies`)
+    // o el endpoint falla, dejamos solo el alta.
+    const stop = state.sourceStop;
+    if (stop?.id && !/^(stop|prosp)-\d+$/.test(String(stop.id))) {
+      try {
+        await API.post('/visits', {
+          pharmacy_id: stop.id,
+          outcome: 'interested',
+          notes: state.notes || `Alta de farmacia ${state.persona_tipo === 'moral' ? 'persona moral' : 'persona física'}${state.forma_pago ? ' (' + state.forma_pago + ')' : ''}`,
+          checkin_lat: state.lat,
+          checkin_lng: state.lng,
+          persona_tipo: state.persona_tipo || null,
+        });
+      } catch (e) {
+        console.warn('[onboarding-wizard] visit registration failed:', e?.error || e);
+      }
+    }
     return result;
   }
 
@@ -730,20 +775,30 @@
 
   // ──────────────────────────────────────────────────────────
   // Mount
+  //
+  // `opts.pharmacy` (opcional): objeto del stop card del plan diario.  Si
+  // viene, pre-rellenamos nombre, dirección, lat/lng y dataplor_id, saltamos
+  // el step intro y al submit registramos también una visita.
   // ──────────────────────────────────────────────────────────
-  function open() {
+  function open(opts = {}) {
     if (!canUseWizard()) {
       window.MarzamToast?.show('El alta de farmacia nueva está disponible solo para Supervisores y Representantes.', 'error');
       return;
     }
 
-    const state = makeState();
+    const initialPharmacy = opts && opts.pharmacy ? opts.pharmacy : null;
+    const state = makeState(initialPharmacy);
 
-    // GPS en background
+    // GPS en background — sobrescribe lat/lng del stop con la posición real
+    // del rep si está disponible (más preciso para auditoría de docs).
     geolocate().then((g) => { if (g) Object.assign(state, g); });
 
     // Spec del backend
     loadSpec(state);
+
+    const headerSubtitle = initialPharmacy?.name
+      ? `Asistente paso a paso · ${initialPharmacy.name}`
+      : 'Asistente paso a paso';
 
     const root = el(`
       <div class="onb-backdrop" role="dialog" aria-modal="true">
@@ -751,7 +806,7 @@
           <div class="onb-header">
             <div style="flex:1; min-width:0;">
               <h2>Alta de farmacia nueva</h2>
-              <p>Asistente paso a paso</p>
+              <p>${escapeHtml(headerSubtitle)}</p>
             </div>
             <button class="onb-close" aria-label="Cerrar">
               <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6"/></svg>

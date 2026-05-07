@@ -25,6 +25,12 @@ const KIND_URL_TO_DB = {
 
 const DEFAULT_CHUNK_SIZE = Number(process.env.MARZAM_IMPORTS_CHUNK_SIZE) || 500;
 const SOFT_TIMEOUT_MS = Number(process.env.MARZAM_IMPORTS_WORKER_SOFT_TIMEOUT_MS) || 45000;
+// Heartbeat protocol: a `processing` row whose last_heartbeat_at is older
+// than IMPORT_JOB_TTL_MIN minutes is considered a zombie (worker crashed
+// or Vercel SIGKILL'd the function). Subsequent ticks reclaim it. 5 min
+// is conservative against Vercel's 10 min hard kill while leaving a
+// healthy worker plenty of room between chunks. Audit Fix #4.
+const IMPORT_JOB_TTL_MIN = Number(process.env.MARZAM_IMPORTS_JOB_TTL_MIN) || 5;
 
 function normalizeKind(kind) {
   return KIND_URL_TO_DB[kind] || kind;
@@ -105,22 +111,43 @@ async function runWorkerTick({ chunkSize = DEFAULT_CHUNK_SIZE, softTimeoutMs = S
   const startedAt = Date.now();
   const result = { picked: false, job_id: null, processed: 0, status: null };
 
+  // Defensive: column may not exist if migration 077 hasn't run.
+  const hasHeartbeat = await db.schema.hasColumn('import_jobs', 'last_heartbeat_at')
+    .catch(() => false);
+
   const jobToProcess = await db.transaction(async (trx) => {
-    const candidate = await trx('import_jobs')
-      .select('*')
-      .whereIn('status', ['pending', 'processing'])
+    // Pickup query: claim any 'pending' job, OR any 'processing' job whose
+    // heartbeat is stale (or null). Active workers stay locked via
+    // skipLocked, so no contention with healthy peers — only zombies are
+    // reclaimable.
+    const q = trx('import_jobs').select('*');
+    if (hasHeartbeat) {
+      q.where(function buildPickupFilter() {
+        this.where('status', 'pending')
+          .orWhere(function staleProcessing() {
+            this.where('status', 'processing')
+              .andWhere(function staleHeartbeat() {
+                this.whereNull('last_heartbeat_at')
+                  .orWhereRaw(`last_heartbeat_at < NOW() - INTERVAL '${IMPORT_JOB_TTL_MIN} minutes'`);
+              });
+          });
+      });
+    } else {
+      q.whereIn('status', ['pending', 'processing']);
+    }
+    const candidate = await q
       .orderBy('created_at', 'asc')
       .forUpdate()
       .skipLocked()
       .first();
     if (!candidate) return null;
-    await trx('import_jobs')
-      .where({ id: candidate.id })
-      .update({
-        status: 'processing',
-        started_at: candidate.started_at || trx.fn.now(),
-        updated_at: trx.fn.now(),
-      });
+    const updatePatch = {
+      status: 'processing',
+      started_at: candidate.started_at || trx.fn.now(),
+      updated_at: trx.fn.now(),
+    };
+    if (hasHeartbeat) updatePatch.last_heartbeat_at = trx.fn.now();
+    await trx('import_jobs').where({ id: candidate.id }).update(updatePatch);
     return candidate;
   });
 
@@ -207,6 +234,16 @@ async function runWorkerTick({ chunkSize = DEFAULT_CHUNK_SIZE, softTimeoutMs = S
     }
     cursor += slice.length;
     result.processed += slice.length;
+
+    // Heartbeat between chunks so a long-running worker doesn't get
+    // reclaimed as a zombie. Best-effort: ignore failure (DB hiccup
+    // shouldn't bring the import down).
+    if (hasHeartbeat) {
+      await db('import_jobs')
+        .where({ id: jobToProcess.id })
+        .update({ last_heartbeat_at: db.fn.now() })
+        .catch(() => {});
+    }
   }
 
   const isDone = cursor >= rawRows.length;

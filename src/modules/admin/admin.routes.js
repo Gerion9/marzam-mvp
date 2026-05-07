@@ -15,8 +15,47 @@ const authenticate = require('../../middleware/auth');
 const authorize = require('../../middleware/rbac');
 const routesMatrix = require('../../services/routesMatrix');
 const db = require('../../config/database');
+const { secretsEqual } = require('../../utils/secretCompare');
 
 const router = Router();
+
+// Stable 32-bit signed hash of a job key string; used as the pg advisory-lock id.
+function hashJobKey(jobKey) {
+  let h = 0;
+  for (let i = 0; i < jobKey.length; i++) {
+    h = ((h << 5) - h + jobKey.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
+// Wrap a cron handler to deduplicate concurrent invocations (Vercel Cron has been
+// observed to occasionally fire the same schedule twice within seconds). Uses a
+// transactional advisory lock held by a long-running "lock holder" trx — this
+// pattern is safe under PgBouncer transaction-mode because the holder keeps the
+// same backend connection for the lifetime of the trx, while the handler's own
+// queries run on independent pooled connections (they don't need the lock).
+function withCronLock(jobKey, handler) {
+  return async (req, res, next) => {
+    const lockId = hashJobKey(jobKey);
+    let lockTrx;
+    try {
+      lockTrx = await db.transaction();
+      const got = await lockTrx.raw('SELECT pg_try_advisory_xact_lock(?) AS got', [lockId]);
+      if (!got.rows?.[0]?.got) {
+        await lockTrx.rollback();
+        lockTrx = null;
+        const summary = { skipped: 'duplicate_invocation', job_key: jobKey };
+        await recordCronRun(jobKey, 'skipped', summary);
+        return res.json(summary);
+      }
+      return await handler(req, res, next);
+    } finally {
+      if (lockTrx) {
+        try { await lockTrx.rollback(); } catch { /* nothing useful to do */ }
+      }
+    }
+  };
+}
 
 /**
  * Permits either a logged-in admin OR a request with x-cron-secret matching
@@ -26,7 +65,7 @@ const router = Router();
 function adminOrCron(req, res, next) {
   const cronSecret = process.env.CRON_SECRET;
   const supplied = req.header('x-cron-secret') || req.query.cron_secret;
-  if (cronSecret && supplied && supplied === cronSecret) return next();
+  if (cronSecret && secretsEqual(supplied, cronSecret)) return next();
   // Fall through to standard auth + admin gate.
   return authenticate(req, res, (err) => {
     if (err) return next(err);
@@ -70,8 +109,8 @@ async function cronPurgeRouteCache(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/purge-route-cache', adminOrCron, cronPurgeRouteCache);
-router.post('/cron/purge-route-cache', adminOrCron, cronPurgeRouteCache);
+router.get('/cron/purge-route-cache', adminOrCron, withCronLock('purge-route-cache', cronPurgeRouteCache));
+router.post('/cron/purge-route-cache', adminOrCron, withCronLock('purge-route-cache', cronPurgeRouteCache));
 
 async function cronPurgeTracking(req, res, next) {
   try {
@@ -87,8 +126,8 @@ async function cronPurgeTracking(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/purge-tracking', adminOrCron, cronPurgeTracking);
-router.post('/cron/purge-tracking', adminOrCron, cronPurgeTracking);
+router.get('/cron/purge-tracking', adminOrCron, withCronLock('purge-tracking', cronPurgeTracking));
+router.post('/cron/purge-tracking', adminOrCron, withCronLock('purge-tracking', cronPurgeTracking));
 
 async function cronGeocodeBackfill(req, res, next) {
   try {
@@ -101,8 +140,8 @@ async function cronGeocodeBackfill(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/geocode-backfill', adminOrCron, cronGeocodeBackfill);
-router.post('/cron/geocode-backfill', adminOrCron, cronGeocodeBackfill);
+router.get('/cron/geocode-backfill', adminOrCron, withCronLock('geocode-backfill', cronGeocodeBackfill));
+router.post('/cron/geocode-backfill', adminOrCron, withCronLock('geocode-backfill', cronGeocodeBackfill));
 
 async function cronQuadrantsSnapshot(req, res, next) {
   try {
@@ -115,8 +154,8 @@ async function cronQuadrantsSnapshot(req, res, next) {
     next(err);
   }
 }
-router.get('/quadrants/snapshot', adminOrCron, cronQuadrantsSnapshot);
-router.post('/quadrants/snapshot', adminOrCron, cronQuadrantsSnapshot);
+router.get('/quadrants/snapshot', adminOrCron, withCronLock('quadrants-snapshot', cronQuadrantsSnapshot));
+router.post('/quadrants/snapshot', adminOrCron, withCronLock('quadrants-snapshot', cronQuadrantsSnapshot));
 
 async function cronPurgeLiveOutbox(req, res, next) {
   try {
@@ -132,8 +171,8 @@ async function cronPurgeLiveOutbox(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/purge-live-outbox', adminOrCron, cronPurgeLiveOutbox);
-router.post('/cron/purge-live-outbox', adminOrCron, cronPurgeLiveOutbox);
+router.get('/cron/purge-live-outbox', adminOrCron, withCronLock('purge-live-outbox', cronPurgeLiveOutbox));
+router.post('/cron/purge-live-outbox', adminOrCron, withCronLock('purge-live-outbox', cronPurgeLiveOutbox));
 
 async function cronParseOpeningHours(req, res, next) {
   try {
@@ -149,8 +188,84 @@ async function cronParseOpeningHours(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/parse-opening-hours', adminOrCron, cronParseOpeningHours);
-router.post('/cron/parse-opening-hours', adminOrCron, cronParseOpeningHours);
+router.get('/cron/parse-opening-hours', adminOrCron, withCronLock('parse-opening-hours', cronParseOpeningHours));
+router.post('/cron/parse-opening-hours', adminOrCron, withCronLock('parse-opening-hours', cronParseOpeningHours));
+
+/**
+ * Monthly retention cron for audit_events.
+ *
+ * Decision: 2-year retention. Rows older than AUDIT_RETENTION_DAYS (default
+ * 730) are MOVED to `audit_events_archive` (created in migration 078). The
+ * CTE makes the operation atomic — no window where a row is absent from
+ * both tables.
+ *
+ * Add to vercel.json with schedule "0 4 1 * *" (1st of each month, 04:00 UTC).
+ * See audit Fix #10 in docs/qa-fix-plan.md.
+ */
+async function cronAuditRetention(req, res, next) {
+  try {
+    const days = Number(process.env.AUDIT_RETENTION_DAYS) || 730;
+    if (!Number.isFinite(days) || days < 1) {
+      throw new Error(`Invalid AUDIT_RETENTION_DAYS: ${process.env.AUDIT_RETENTION_DAYS}`);
+    }
+    // Defensive: archive table may not exist yet (pre-mig-078).
+    const archiveExists = await db.raw(
+      "SELECT to_regclass('audit_events_archive') AS t",
+    );
+    if (!archiveExists.rows?.[0]?.t) {
+      const summary = { skipped: 'audit_events_archive missing — apply migration 078' };
+      await recordCronRun('audit-retention', 'skipped', summary);
+      return res.json(summary);
+    }
+    const moved = await db.raw(`
+      WITH old AS (
+        DELETE FROM audit_events
+        WHERE created_at < NOW() - INTERVAL '${days} days'
+        RETURNING *
+      )
+      INSERT INTO audit_events_archive
+        (id, user_id, action, entity_type, entity_id,
+         before_state, after_state, ip_address, created_at)
+      SELECT id, user_id, action, entity_type, entity_id,
+             before_state, after_state, ip_address, created_at
+        FROM old
+    `);
+    const summary = { archived: moved.rowCount || 0, retention_days: days };
+    await recordCronRun('audit-retention', 'ok', summary);
+    res.json(summary);
+  } catch (err) {
+    await recordCronRun('audit-retention', 'error', { message: err.message });
+    next(err);
+  }
+}
+router.get('/cron/audit-retention', adminOrCron, withCronLock('audit-retention', cronAuditRetention));
+router.post('/cron/audit-retention', adminOrCron, withCronLock('audit-retention', cronAuditRetention));
+
+/**
+ * Daily presence reconciliation — collapses rep_tracking_points × pharmacies
+ * into pharmacy_presence (mig 079) so we can answer "rep was at pharmacy X
+ * but didn't register a visit" without scanning raw pings every time.
+ *
+ * Schedule: "30 8 * * *" — 30 minutes before the 9:00 UTC tracking purge so
+ * yesterday's pings are still alive. Idempotent: skips if rows already exist
+ * for the target day unless `?force=true`.
+ */
+async function cronReconcilePresence(req, res, next) {
+  try {
+    const presenceService = require('../presence/presence.service');
+    const result = await presenceService.reconcileDay({
+      date: req.query.date || null,
+      force: req.query.force === 'true',
+    });
+    await recordCronRun('reconcile-presence', 'ok', result);
+    res.json(result);
+  } catch (err) {
+    await recordCronRun('reconcile-presence', 'error', { message: err.message });
+    next(err);
+  }
+}
+router.get('/cron/reconcile-presence', adminOrCron, withCronLock('reconcile-presence', cronReconcilePresence));
+router.post('/cron/reconcile-presence', adminOrCron, withCronLock('reconcile-presence', cronReconcilePresence));
 
 async function recordCronRun(jobKey, status, payload) {
   try {

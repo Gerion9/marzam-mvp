@@ -167,6 +167,21 @@
   let _etaTimer = null;
   let _liveStream = null;
   let _liveReconnect = null;
+  // GPS ping loop — sends rep position to /api/tracking/ping on a fixed
+  // interval while my-route is mounted. Mirrors the legacy `rep.js` toggle
+  // (see rep.js:963-970) but is auto-on for the new /app shell.
+  let _pingTimer = null;
+  let _pingIntervalMs = 30000;
+  let _pingPermissionDenied = false;
+  // Hydrate the cadence once from /api/health (same payload field as rep.js).
+  // Best-effort: a network failure leaves the 30s default.
+  fetch('/api/health', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((h) => {
+      const seconds = Number(h?.gps_ping_interval_seconds || 30);
+      _pingIntervalMs = Math.max(15, seconds) * 1000;
+    })
+    .catch(() => { /* keep default */ });
 
   function closeLiveStream() {
     if (_liveStream) { try { _liveStream.close(); } catch { /* noop */ } _liveStream = null; }
@@ -213,6 +228,7 @@
   async function renderMyRouteRich(body) {
     if (_watchId) { try { navigator.geolocation.clearWatch(_watchId); } catch { /* noop */ } _watchId = null; }
     if (_etaTimer) { clearInterval(_etaTimer); _etaTimer = null; }
+    if (_pingTimer) { clearInterval(_pingTimer); _pingTimer = null; }
     closeLiveStream();
     clearLayers();
 
@@ -268,7 +284,11 @@
               </div>
               <div class="flex flex-col gap-1.5">
                 <a :href="navUrl" target="_blank" rel="noopener" class="bg-blue-600 text-white text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg shadow text-center">Abrir</a>
-                <button @click="startStop()" class="bg-emerald-600 text-white text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg shadow">Iniciar</button>
+                <button @click="startStop()" class="bg-emerald-600 text-white text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg shadow" x-show="next.status !== 'in_progress'">Iniciar</button>
+                <button @click="registerStop(next)"
+                        class="text-white text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg shadow"
+                        :class="isProspect(next) ? 'bg-orange-600' : 'bg-violet-600'"
+                        x-text="isProspect(next) ? 'Iniciar proceso' : 'Registrar visita'"></button>
               </div>
             </div>
             <!-- Progress bar -->
@@ -296,11 +316,15 @@
               <div class="text-right text-[11px] flex flex-col items-end gap-1">
                 <div class="font-semibold text-slate-700" x-text="timeOf(s.expected_arrival_time)"></div>
                 <span class="mz-chip" :class="statusClass(s)" x-text="statusLabel(s)"></span>
-                <div class="flex items-center gap-1 mt-0.5" x-show="s.status !== 'done' && s.status !== 'deviated' && s.status !== 'skipped'">
+                <div class="flex items-center gap-1 mt-0.5 flex-wrap justify-end" x-show="s.status !== 'done' && s.status !== 'deviated' && s.status !== 'skipped'">
                   <a :href="wazeUrl(s)" target="_blank" rel="noopener"
                      class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-violet-100 text-violet-700">Waze</a>
                   <button @click="deviateStop(s)"
                      class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-rose-100 text-rose-700">Desviar</button>
+                  <button @click="registerStop(s)"
+                     class="text-[10px] font-bold uppercase px-2 py-0.5 rounded text-white"
+                     :class="isProspect(s) ? 'bg-orange-600' : 'bg-violet-600'"
+                     x-text="isProspect(s) ? 'Iniciar proceso' : 'Registrar'"></button>
                 </div>
               </div>
             </div>
@@ -403,14 +427,39 @@
       _refreshMap() { drawRoute(APP.map, this.stops, this.mePos); },
       _watchPosition() {
         if (!navigator.geolocation) return;
+        const self = this;
         _watchId = navigator.geolocation.watchPosition((pos) => {
-          this.mePos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          this._refreshMap();
-          this._refreshEta();
-        }, () => { /* ignore */ }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 });
+          self.mePos = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+          self._refreshMap();
+          self._refreshEta();
+        }, (err) => {
+          // PERMISSION_DENIED (code 1) is sticky across the session — short-
+          // circuit further pings rather than retrying every interval.
+          _pingPermissionDenied = !!(err && err.code === 1);
+        }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 });
+        this._startPingLoop();
       },
       _scheduleEtaRefresh() {
         _etaTimer = setInterval(() => this._refreshEta(), 60_000);
+      },
+      _startPingLoop() {
+        if (_pingTimer) return;
+        const self = this;
+        _pingTimer = setInterval(() => self._sendPing(), _pingIntervalMs);
+      },
+      async _sendPing() {
+        // Three guards: explicit permission denial (no point retrying), tab
+        // hidden (don't drain battery in background), and no fix yet.
+        if (_pingPermissionDenied || (typeof document !== 'undefined' && document.hidden) || !this.mePos) return;
+        const me = this.mePos;
+        try {
+          await API.post('/tracking/ping', {
+            lat: Number(me.lat),
+            lng: Number(me.lng),
+            accuracy_meters: me.accuracy != null ? Number(me.accuracy) : undefined,
+            assignment_id: this.next?.id || undefined,
+          });
+        } catch { /* silent — endpoint already drops bad coords */ }
       },
       async _refreshEta() {
         const target = this.next;
@@ -502,6 +551,44 @@
           const q = window.MarzamOfflineQueue;
           if (q?.pendingOpsCount) this.pendingOps = await q.pendingOpsCount();
         } catch { /* ignore */ }
+      },
+      isProspect(s) {
+        // 'prospect' viene del SQL que arma listAssignmentsForUser:
+        // CASE WHEN vpa.pharmacy_id IS NOT NULL THEN 'prospect' ELSE 'client'.
+        // Cliente Marzam → registrar visita corta.  Prospecto → wizard de alta.
+        return s?.target_type === 'prospect';
+      },
+      // Abre el modal correcto: visit corto para Marzam, wizard de alta
+      // (persona física/moral, RFC, forma de pago, fachada, docs) para
+      // prospectos.  MarzamVisitClient.open enruta internamente.
+      registerStop(s) {
+        if (!s) return;
+        const client = window.MarzamVisitClient;
+        if (!client?.open) {
+          window.MarzamToast?.show('El módulo de visita no está disponible', 'danger');
+          return;
+        }
+        const isProsp = this.isProspect(s);
+        // El id que pasamos a visit-client tiene que ser el id de la
+        // pharmacies row real (geo_pharmacy_id viene del COALESCE en el
+        // SELECT).  Sin eso, el POST /visits o /pharmacy-onboarding rechaza
+        // con FK violation.  Si geo_pharmacy_id es null caemos a
+        // pharmacy_id (vpa.pharmacy_id, set para prospectos) y como último
+        // recurso al id del assignment — best-effort.
+        const pharmacyId = s.geo_pharmacy_id || s.pharmacy_id || s.id;
+        client.open({
+          pharmacy: {
+            id: pharmacyId,
+            name: s.farmacia_nombre || 'Sin nombre',
+            address: s.delegacion_municipio || '',
+            lat: s.lat,
+            lng: s.lng,
+            pareto: s.pareto,
+            is_marzam: !isProsp,
+            source: isProsp ? 'blackprint' : 'marzam',
+            dataplor_id: s.dataplor_id || null,
+          },
+        });
       },
       wazeUrl(s) { return deepLinkWaze(s); },
       colorFor(s) {

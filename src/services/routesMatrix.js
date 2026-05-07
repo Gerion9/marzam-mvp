@@ -114,40 +114,121 @@ async function getDailyBudgetStatus() {
 }
 
 /**
- * Throw RoutesBudgetExceededError if adding `addCostUsd` would push us over
- * the daily limit. The check is a pre-flight; we recheck after the call when
- * we record the actual cost.
+ * Atomically reserve `addCostUsd` against today's budget. Throws
+ * `RoutesBudgetExceededError` (HTTP 429) when the reservation would push us
+ * over the daily limit, otherwise pre-records the estimated cost so concurrent
+ * callers see the deduction immediately.
+ *
+ * Concurrency: the read-check-write sequence runs inside a single
+ * `db.transaction` guarded by `pg_advisory_xact_lock(<day>)`. The lock is
+ * scoped to today's UTC date — different days don't contend, but every
+ * caller in the same UTC day serializes through the same key. This closes
+ * the TOCTOU window where N parallel matrix calls could each see "$49.99
+ * spent" and all proceed.
+ *
+ * Settlement: the actual cost is recorded later via `recordSpend()`, which
+ * uses the SAME advisory lock so reservations and settlements never
+ * interleave.
  */
+function dayLockKey() {
+  // Postgres advisory lock takes a bigint. Use today's UTC date as YYYYMMDD
+  // and arrange so two different process instances on the same day collide.
+  const d = new Date();
+  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+}
+
 async function assertWithinBudget(addCostUsd) {
-  const s = await getDailyBudgetStatus();
-  if (s.spent_usd + addCostUsd > s.budget_usd) {
-    // Increment rejected counter so admin dashboard reflects pressure.
-    await db.raw(`
-      INSERT INTO routes_api_spend (day, rejected_calls)
-      VALUES (CURRENT_DATE, 1)
+  const lockKey = dayLockKey();
+  // Two-phase to keep the rejected_calls counter visible even when the
+  // outer trx rolls back due to throw:
+  //   Phase 1 (this trx, lock held): read budget, decide reject vs accept.
+  //     - Accept: pre-record reservation in the same trx, commit, return.
+  //     - Reject: commit cleanly (no writes), then phase 2 records the
+  //       rejection counter in a separate trx, then throw.
+  let rejectAt = null;
+  await db.transaction(async (trx) => {
+    await trx.raw('SELECT pg_advisory_xact_lock(?)', [lockKey]);
+    const row = await trx('routes_api_spend')
+      .where('day', trx.raw("CURRENT_DATE AT TIME ZONE 'UTC'"))
+      .first();
+    const spent = Number(row?.est_cost_usd || 0);
+    if (spent + addCostUsd > DEFAULT_DAILY_BUDGET_USD) {
+      // Stage the reject info; we'll record + throw outside the trx so the
+      // counter increment isn't rolled back along with this trx body.
+      rejectAt = spent;
+      return;
+    }
+    // Pre-record the estimated cost so concurrent callers see the
+    // deduction. Settlement (recordSpend below) corrects the delta against
+    // the actual cost on success.
+    await trx.raw(`
+      INSERT INTO routes_api_spend (day, est_cost_usd, first_call_at, last_call_at)
+      VALUES (CURRENT_DATE, ?, NOW(), NOW())
       ON CONFLICT (day) DO UPDATE
-        SET rejected_calls = routes_api_spend.rejected_calls + 1,
+        SET est_cost_usd = routes_api_spend.est_cost_usd + EXCLUDED.est_cost_usd,
             last_call_at = NOW()
-    `);
-    throw new RoutesBudgetExceededError(s.spent_usd, s.budget_usd);
+    `, [addCostUsd]);
+  });
+
+  if (rejectAt !== null) {
+    // Phase 2: persist the rejection counter in its own trx (not under the
+    // advisory lock — we don't need exclusivity for a counter increment;
+    // ON CONFLICT serializes adequately on the conflict target). Best-
+    // effort: a counter write failure must not mask the budget error.
+    try {
+      await db.raw(`
+        INSERT INTO routes_api_spend (day, rejected_calls)
+        VALUES (CURRENT_DATE, 1)
+        ON CONFLICT (day) DO UPDATE
+          SET rejected_calls = routes_api_spend.rejected_calls + 1,
+              last_call_at = NOW()
+      `);
+    } catch (err) {
+      log.warn({ event: 'routes.rejected_counter.failed', err: err.message });
+    }
+    throw new RoutesBudgetExceededError(rejectAt, DEFAULT_DAILY_BUDGET_USD);
   }
 }
 
-async function recordSpend({ matrixCalls = 0, matrixElements = 0, routeCalls = 0, sku = 'TRAFFIC_UNAWARE' }) {
+/**
+ * Settlement: increment counters AND apply (estimate - actual) delta to
+ * `est_cost_usd`. Reservation already ran in `assertWithinBudget`, so this
+ * step does NOT add the full cost again — it only corrects for the
+ * difference between the estimate and the actual SKU bill (almost always
+ * zero or negative because estimates are pessimistic).
+ *
+ * Takes the same advisory lock as `assertWithinBudget` so concurrent
+ * settlements don't race on the est_cost_usd column.
+ */
+async function recordSpend({
+  matrixCalls = 0, matrixElements = 0, routeCalls = 0,
+  sku = 'TRAFFIC_UNAWARE', estimatedReservedUsd = null,
+}) {
   const matrixCost = (matrixElements / 1000) * (SKU_PRICE[sku] || SKU_PRICE.TRAFFIC_UNAWARE);
   const routeCost = (routeCalls / 1000) * SKU_PRICE.ROUTE_SINGLE;
-  const totalCost = +(matrixCost + routeCost).toFixed(4);
-  if (totalCost === 0 && matrixCalls === 0 && routeCalls === 0) return;
-  await db.raw(`
-    INSERT INTO routes_api_spend (day, matrix_calls, matrix_elements, route_calls, est_cost_usd, first_call_at, last_call_at)
-    VALUES (CURRENT_DATE, ?, ?, ?, ?, NOW(), NOW())
-    ON CONFLICT (day) DO UPDATE
-      SET matrix_calls    = routes_api_spend.matrix_calls    + EXCLUDED.matrix_calls,
-          matrix_elements = routes_api_spend.matrix_elements + EXCLUDED.matrix_elements,
-          route_calls     = routes_api_spend.route_calls     + EXCLUDED.route_calls,
-          est_cost_usd    = routes_api_spend.est_cost_usd    + EXCLUDED.est_cost_usd,
-          last_call_at    = NOW()
-  `, [matrixCalls, matrixElements, routeCalls, totalCost]);
+  const actualCost = +(matrixCost + routeCost).toFixed(4);
+  if (actualCost === 0 && matrixCalls === 0 && routeCalls === 0) return;
+
+  // Delta against the reservation. If estimatedReservedUsd is null (legacy
+  // callers pre-#7-fix), behave as before and add the full cost.
+  const delta = estimatedReservedUsd != null
+    ? +(actualCost - estimatedReservedUsd).toFixed(4)
+    : actualCost;
+
+  const lockKey = dayLockKey();
+  await db.transaction(async (trx) => {
+    await trx.raw('SELECT pg_advisory_xact_lock(?)', [lockKey]);
+    await trx.raw(`
+      INSERT INTO routes_api_spend (day, matrix_calls, matrix_elements, route_calls, est_cost_usd, first_call_at, last_call_at)
+      VALUES (CURRENT_DATE, ?, ?, ?, ?, NOW(), NOW())
+      ON CONFLICT (day) DO UPDATE
+        SET matrix_calls    = routes_api_spend.matrix_calls    + EXCLUDED.matrix_calls,
+            matrix_elements = routes_api_spend.matrix_elements + EXCLUDED.matrix_elements,
+            route_calls     = routes_api_spend.route_calls     + EXCLUDED.route_calls,
+            est_cost_usd    = routes_api_spend.est_cost_usd    + EXCLUDED.est_cost_usd,
+            last_call_at    = NOW()
+    `, [matrixCalls, matrixElements, routeCalls, delta]);
+  });
 }
 
 function fallbackEstimate(origin, dest) {
@@ -641,4 +722,7 @@ module.exports = {
   _hourBucket: hourBucket,
   _dayType: dayType,
   _haversineKm: haversineKm,
+  // exported for Tier B: scripts/qa-routes-toctou.js + qa-routes-budget-stress.js
+  assertWithinBudget,
+  recordSpend,
 };

@@ -7,11 +7,25 @@ const { isExternalDataMode } = require('../repositories/runtime');
  *
  * The controller can attach `res.locals.auditDetail` with { entityType, entityId, before, after }
  * to enrich the audit row.
+ *
+ * Audit policy decision (audit Fix #9, docs/qa-fix-plan.md):
+ *   We deliberately SKIP audit on responses with statusCode >= 400. Rationale:
+ *   every state-mutating handler in this codebase wraps its DB writes in a
+ *   single `db.transaction()` (see visits.service.js, onboarding.service.js,
+ *   bq-sync/jobs/*). When that transaction errors, Postgres rolls back the
+ *   entire batch and `res.statusCode` ends up 5xx — there is no "partial"
+ *   state in the DB to record. Logging an "attempted but failed" audit row
+ *   would be noise without forensic value.
+ *
+ *   If a future controller mutates state OUTSIDE a trx (e.g. a side-effect
+ *   that lives in S3/GCS), this policy should be revisited.
  */
 function auditLog(action) {
   return (_req, res, next) => {
     res.on('finish', async () => {
-      if (res.statusCode >= 400) return; // only log successful operations
+      // Policy: skip on 4xx (validation errors) AND 5xx (server-side rollback).
+      // See doc-block above for rationale.
+      if (res.statusCode >= 400) return;
       if (isExternalDataMode()) return;
       try {
         const detail = res.locals.auditDetail || {};

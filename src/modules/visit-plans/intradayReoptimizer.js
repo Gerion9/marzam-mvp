@@ -49,6 +49,11 @@ function haversineKm(a, b) {
  * Load assignments + rep + stop coordinates for one (plan, date).
  */
 async function loadDay(trx, planId, date) {
+  // FOR UPDATE: lock the day's assignments for the duration of the reopt
+  // transaction so a concurrent visit submit (status: planned → done) on the
+  // same plan/day waits until reopt commits. Without this lock the snapshot
+  // taken here can become stale mid-flight under READ COMMITTED isolation
+  // and a stop being completed in real time may end up reassigned.
   const rows = await trx('visit_plan_assignments as vpa')
     .where({ 'vpa.visit_plan_id': planId, 'vpa.scheduled_date': date })
     .leftJoin('marzam_clients as mc', 'mc.id', 'vpa.marzam_client_id')
@@ -64,7 +69,8 @@ async function loadDay(trx, planId, date) {
       trx.raw('COALESCE(ST_Y(p.coordinates::geometry), ST_Y(pp.coordinates::geometry)) AS lat'),
     )
     .orderBy('vpa.visitor_user_id')
-    .orderBy('vpa.route_order');
+    .orderBy('vpa.route_order')
+    .forUpdate('vpa');
   return rows;
 }
 
@@ -431,7 +437,11 @@ async function reoptimize({
         'vpa.id',
         trx.raw('COALESCE(ST_X(p.coordinates::geometry), ST_X(pp.coordinates::geometry)) AS lng'),
         trx.raw('COALESCE(ST_Y(p.coordinates::geometry), ST_Y(pp.coordinates::geometry)) AS lat'),
-      );
+      )
+      // Same FOR UPDATE rationale as loadDay above — these rows may be
+      // mutated again later in the trx (resequenceRep) and we don't want
+      // a concurrent submit to slip in between the read and the write.
+      .forUpdate('vpa');
     const stopsForResequence = repStops.filter((s) => s.lat != null && s.lng != null)
       .map((s) => ({ id: s.id, lat: Number(s.lat), lng: Number(s.lng) }));
     await resequenceRep(trx, planId, repId, date, rep, stopsForResequence);

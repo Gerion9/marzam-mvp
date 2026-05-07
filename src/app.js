@@ -10,6 +10,7 @@ const errorHandler = require('./middleware/errorHandler');
 const { requestContextMiddleware } = require('./middleware/requestContext');
 const softAuth = require('./middleware/softAuth');
 const demoReadonly = require('./middleware/demoReadonly');
+const sanitizeLogUrl = require('./middleware/sanitizeLogUrl');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const pharmacyRoutes = require('./modules/pharmacies/pharmacies.routes');
@@ -39,6 +40,7 @@ const quotasRoutes = require('./modules/quotas/quotas.routes');
 const invitationsRoutes = require('./modules/invitations/invitations.routes');
 const liveRoutes = require('./modules/live/live.routes');
 const adminRoutes = require('./modules/admin/admin.routes');
+const adminCockpitRoutes = require('./modules/admin/cockpit.routes');
 
 // Boot-time safety check: production must not run with scope filtering off.
 // Catches a class of "demo accidentally became prod" deploy mistakes.
@@ -65,6 +67,10 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '5mb' }));
+// Mask sensitive query params (token, cron_secret, ...) on req.url BEFORE
+// morgan logs them. req.query is left intact so downstream auth/route
+// handlers still see the real values. See src/middleware/sanitizeLogUrl.js.
+app.use(sanitizeLogUrl);
 app.use(morgan('short'));
 app.use(requestContextMiddleware);
 app.use(softAuth);
@@ -142,6 +148,7 @@ app.use('/api/poblaciones', poblacionesRoutes);
 app.use('/api/quotas', quotasRoutes);
 app.use('/api/admin/invitations', invitationsRoutes);
 app.use('/api/live', liveRoutes);
+app.use('/api/admin/cockpit', adminCockpitRoutes);
 app.use('/api/admin', adminRoutes);
 
 app.get('/api/health', async (_req, res) => {
@@ -208,6 +215,7 @@ app.get('/manager', (_req, res) => res.sendFile(path.join(__dirname, 'public', '
 app.get('/manager-live', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'manager-live.html')));
 app.get('/rep', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'rep.html')));
 app.get('/app', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'app.html')));
+app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 app.get('/activate.html', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'activate.html')));
 app.get('/reset-password.html', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'reset-password.html')));
 

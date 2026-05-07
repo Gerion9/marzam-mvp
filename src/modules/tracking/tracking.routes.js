@@ -6,10 +6,17 @@ const validate = require('../../middleware/validate');
 
 const router = Router();
 
+// Pings: any user with a tracked field role can post their position.
+// Supervisors/gerentes/director are accepted so they appear as map pins when
+// they are in the field — the live-ops view differentiates pin styling by
+// role. Checkins remain rep-only because Marzam Execution Doc §6 ties visit
+// evidence to the representante role.
+const FIELD_ROLES = ['field_rep', 'supervisor', 'gerente_ventas', 'director_sucursal'];
+
 router.post(
   '/ping',
   authenticate,
-  authorize('field_rep'),
+  authorize({ roles: FIELD_ROLES }),
   validate({
     lat: { required: true, type: 'number' },
     lng: { required: true, type: 'number' },
@@ -23,7 +30,7 @@ router.post(
 router.post(
   '/ping-batch',
   authenticate,
-  authorize('field_rep'),
+  authorize({ roles: FIELD_ROLES }),
   controller.recordPingBatch,
 );
 

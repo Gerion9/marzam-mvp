@@ -7,7 +7,7 @@
  * pull H3 because for a single-resolution use case the 60 lines below are
  * sufficient and have no native dependencies.
  *
- *   encode(19.4326, -99.1332, 7)  → "9g3qzte"
+ *   encode(19.4326, -99.1332, 7)  → "9g3w81t"
  *
  * Resolution table (rough, varies with latitude):
  *   length  cell_w   cell_h

@@ -14,6 +14,7 @@ const {
   asInt,
   asBool,
   asDate,
+  auditCandidateColumns,
 } = require('../bqHelpers');
 
 const JOB_NAME = 'detalle_mostrador';
@@ -73,6 +74,20 @@ async function run({ limit = null } = {}) {
     return { name: JOB_NAME, rows: 0, inserted: 0, updated: 0, skipped: 0, duration_ms: Date.now() - startedAt };
   }
   const keyMap = buildKeyMap(rows[0]);
+  // Schema drift detection: cpadre is the UPSERT key — without it the job
+  // skips every row.
+  const colAudit = auditCandidateColumns(JOB_NAME, keyMap, COL_CANDIDATES, ['cpadre', 'farmacia_nombre']);
+  if (colAudit.missing_required.length > 0) {
+    return {
+      name: JOB_NAME,
+      status: 'failed',
+      failure: 'schema_drift_missing_required',
+      missing_required: colAudit.missing_required,
+      rows: rows.length,
+      inserted: 0, updated: 0, skipped: rows.length,
+      duration_ms: Date.now() - startedAt,
+    };
+  }
   const stats = { rows: rows.length, inserted: 0, updated: 0, skipped: 0 };
 
   for (const raw of rows) {

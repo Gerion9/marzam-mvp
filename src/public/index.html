@@ -141,10 +141,16 @@
       } catch { /* keep hidden */ }
     })();
 
-    // If already authenticated, jump to /app
+    // Landing route depends on role: admin → /admin, everyone else → /app
+    function landingFor(user) {
+      const role = String(user?.role || '').toLowerCase();
+      return (role === 'admin' || role === 'national_admin') ? '/admin' : '/app';
+    }
+
+    // If already authenticated, jump to landing
     if (API.isAuth()) {
       const u = API.user();
-      if (u && (u.role || u.email)) location.href = '/app';
+      if (u && (u.role || u.email)) location.href = landingFor(u);
     }
 
     // Demo quick-picks
@@ -155,9 +161,9 @@
         if (!creds) return;
         btn.disabled = true;
         try {
-          await API.login(creds.email, creds.password);
+          const user = await API.login(creds.email, creds.password);
           localStorage.setItem('marzam_demo', '1');
-          location.href = '/app';
+          location.href = landingFor(user);
         } catch (err) {
           // Fallback offline-only demo (cuando el backend no está corrido)
           const demoUser = {
@@ -169,7 +175,7 @@
           localStorage.setItem('token', `demo_${role}`);
           localStorage.setItem('user', JSON.stringify(demoUser));
           localStorage.setItem('marzam_demo', '1');
-          location.href = '/app';
+          location.href = landingFor(demoUser);
         }
       });
     });
@@ -182,12 +188,12 @@
       btn.disabled = true;
       btn.textContent = 'Iniciando sesión…';
       try {
-        await API.login(
+        const user = await API.login(
           document.getElementById('email').value.trim(),
           document.getElementById('password').value,
         );
         localStorage.removeItem('marzam_demo');
-        location.href = '/app';
+        location.href = landingFor(user);
       } catch (err) {
         errEl.textContent = err.error || 'Error al iniciar sesión.';
         errEl.classList.remove('hidden');

@@ -26,4 +26,10 @@ router.get('/kpi/prospect-funnel',  authenticate, authorize({ roles: MGMT }), co
 router.get('/kpi/sales-vs-target',  authenticate, authorize({ roles: MGMT }), controller.salesVsTarget);
 router.get('/kpi/routes-on-time',   authenticate, authorize({ roles: MGMT }), controller.routesOnTime);
 
+// Coverage actionable views (mig 079 — pharmacy_presence). MGMT-only for the
+// padrón-wide list; the rep-scoped endpoint (/coverage/my) only requires
+// authentication since the service filters to req.user.id.
+router.get('/coverage/pending', authenticate, authorize({ roles: MGMT }), controller.coveragePending);
+router.get('/coverage/my',      authenticate, controller.myCoverage);
+
 module.exports = router;

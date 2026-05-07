@@ -49,13 +49,15 @@ const REQUIRED_DESTINATION_TABLES = [
 ];
 
 async function checkDestinationReady() {
-  const placeholders = REQUIRED_DESTINATION_TABLES.map((_, i) => `$${i + 1}`).join(',');
-  const { rows } = await db.raw(
-    `SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name IN (${placeholders})`,
-    REQUIRED_DESTINATION_TABLES,
-  );
-  const present = new Set(rows.map((r) => r.table_name));
+  // Use to_regclass + the connection's search_path so the check works against
+  // whatever schema knex is configured to use (currently `marzam_app`). The
+  // earlier hard-coded `table_schema = 'public'` always returned missing
+  // because the migrations live in `marzam_app`, not `public`.
+  const present = new Set();
+  for (const table of REQUIRED_DESTINATION_TABLES) {
+    const { rows } = await db.raw(`SELECT to_regclass(?) AS t`, [table]);
+    if (rows?.[0]?.t) present.add(table);
+  }
   const missing = REQUIRED_DESTINATION_TABLES.filter((t) => !present.has(t));
   return { ready: missing.length === 0, missing };
 }
@@ -115,8 +117,27 @@ async function runAll({ limitPerJob = null, force = false } = {}) {
     results.push({ name: 'mv_pharmacy_sales_rollups', error: err.message });
   }
 
-  const failed = results.some((r) => r.error);
-  return { ok: !failed, duration_ms: Date.now() - startedAt, results };
+  // A job is "unhealthy" if it threw OR returned status='failed' (schema drift,
+  // warnings ratio exceeded, etc.). Surface both signals separately so an oncall
+  // operator can tell apart "the worker crashed" from "data quality dropped".
+  const errored = results.filter((r) => r.error);
+  const flaggedFailed = results.filter((r) => r.status === 'failed');
+  const ok = errored.length === 0 && flaggedFailed.length === 0;
+
+  return {
+    ok,
+    duration_ms: Date.now() - startedAt,
+    results,
+    summary: {
+      total: results.length,
+      errored: errored.map((r) => ({ name: r.name, error: r.error })),
+      flagged_failed: flaggedFailed.map((r) => ({
+        name: r.name,
+        failure: r.failure,
+        missing_required: r.missing_required,
+      })),
+    },
+  };
 }
 
 module.exports = {

@@ -16,6 +16,7 @@
     { "src": "/manager-live", "dest": "/api/index.js" },
     { "src": "/rep", "dest": "/api/index.js" },
     { "src": "/app", "dest": "/api/index.js" },
+    { "src": "/admin", "dest": "/api/index.js" },
     { "src": "/(.*)", "dest": "/src/public/$1" }
   ],
   "crons": [
@@ -54,6 +55,14 @@
     {
       "path": "/api/admin/cron/parse-opening-hours",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/admin/cron/audit-retention",
+      "schedule": "0 4 1 * *"
+    },
+    {
+      "path": "/api/admin/cron/reconcile-presence",
+      "schedule": "30 8 * * *"
     }
   ]
 }

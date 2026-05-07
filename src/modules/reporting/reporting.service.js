@@ -822,6 +822,185 @@ async function getRoutesStartedOnTime({ from, to } = {}) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Coverage — actionable views over `pharmacies` × `pharmacy_presence`.
+// `pharmacy_presence` is populated by the daily reconcile-presence cron
+// (mig 079); it surfaces the difference between "rep was physically there"
+// (presence) and "rep submitted a visit_report" (visit). The coverage pending
+// view filters the padrón for pharmacies that are stale OR have unmatched
+// presence in the last N days.
+// ─────────────────────────────────────────────────────────────────────────
+
+function clampDays(days) {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n < 1) return 30;
+  return Math.min(Math.floor(n), 365);
+}
+
+function clampLimit(limit, fallback = 500) {
+  const n = Number(limit);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(Math.floor(n), 5000);
+}
+
+async function presenceTableExists() {
+  const r = await db.raw(`SELECT to_regclass('pharmacy_presence') AS t`);
+  return Boolean(r.rows?.[0]?.t);
+}
+
+async function getCoveragePending(filters = {}) {
+  if (isExternalDataMode()) {
+    return { warning: 'external_mode', items: [] };
+  }
+  const days = clampDays(filters.days);
+  const limit = clampLimit(filters.limit);
+  const hasPresence = await presenceTableExists();
+
+  const q = db('pharmacies as p')
+    .leftJoin('marzam_clients as mc', 'mc.pharmacy_id', 'p.id')
+    .leftJoin('users as u', 'u.id', 'p.assigned_rep_id')
+    .select(
+      'p.id as pharmacy_id',
+      'p.name',
+      'p.municipality',
+      db.raw(`COALESCE(mc.pareto, 'D') AS pareto`),
+      'p.last_visited_at',
+      'p.last_visit_outcome',
+      db.raw(`
+        CASE WHEN p.last_visited_at IS NULL THEN NULL
+             ELSE FLOOR(EXTRACT(EPOCH FROM (NOW() - p.last_visited_at)) / 86400)::int
+        END AS last_visit_age_days
+      `),
+      'p.assigned_rep_id',
+      db.raw('u.full_name AS assigned_rep_name'),
+    )
+    .where('p.is_independent', true)
+    .andWhere(function () {
+      this.whereNull('p.last_visited_at')
+        .orWhereRaw(`p.last_visited_at < NOW() - (?::int * INTERVAL '1 day')`, [days]);
+    })
+    .orderByRaw('p.last_visited_at NULLS FIRST')
+    .limit(limit);
+
+  if (filters.pareto) {
+    const list = String(filters.pareto).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+    if (list.length) q.whereIn(db.raw(`COALESCE(mc.pareto, 'D')`), list);
+  }
+  if (filters.rep_id) q.where('p.assigned_rep_id', filters.rep_id);
+  if (filters.municipality) q.where('p.municipality', filters.municipality);
+  if (filters.branch_id) q.where('mc.branch_id', filters.branch_id);
+
+  applyPharmacyScope(q, 'p.territory_id');
+
+  const rows = await q;
+  if (!hasPresence || rows.length === 0) {
+    return { warning: hasPresence ? null : 'pharmacy_presence_missing', days, items: rows.map((r) => ({
+      ...r,
+      presence_no_report_count: 0,
+      last_presence_at: null,
+    })) };
+  }
+
+  // Annotate with presence-without-report aggregates in one query.
+  const ids = rows.map((r) => r.pharmacy_id);
+  const presenceRows = await db('pharmacy_presence')
+    .select('pharmacy_id')
+    .count({ cnt: '*' })
+    .max({ last_presence_at: 'last_seen_at' })
+    .whereIn('pharmacy_id', ids)
+    .andWhere('has_visit_report', false)
+    .andWhereRaw(`presence_date >= CURRENT_DATE - (?::int * INTERVAL '1 day')`, [days])
+    .groupBy('pharmacy_id');
+
+  const byPharmacy = new Map(presenceRows.map((r) => [r.pharmacy_id, r]));
+  return {
+    days,
+    items: rows.map((r) => {
+      const p = byPharmacy.get(r.pharmacy_id);
+      return {
+        ...r,
+        presence_no_report_count: p ? Number(p.cnt) : 0,
+        last_presence_at: p?.last_presence_at || null,
+      };
+    }),
+  };
+}
+
+async function getMyCoverage({ userId, days } = {}) {
+  if (!userId) return { items: [] };
+  if (isExternalDataMode()) return { warning: 'external_mode', items: [] };
+  const window = clampDays(days);
+  const hasPresence = await presenceTableExists();
+
+  // Padrón of pharmacies the rep is responsible for: union of (1) pharmacies
+  // with assigned_rep_id = me and (2) marzam_clients pareto C/B/A where me is
+  // the assigned rep/supervisor/gerente. We render at the pharmacy level.
+  const rows = await db.raw(`
+    WITH mine AS (
+      SELECT p.id AS pharmacy_id,
+             p.name,
+             p.last_visited_at,
+             p.last_visit_outcome,
+             COALESCE(mc.pareto, 'D') AS pareto,
+             mc.id AS marzam_client_id,
+             mc.farmacia_nombre AS marzam_name
+        FROM pharmacies p
+        LEFT JOIN marzam_clients mc ON mc.pharmacy_id = p.id
+       WHERE p.assigned_rep_id = ?
+          OR mc.assigned_rep_id = ?
+          OR mc.assigned_supervisor_id = ?
+          OR mc.assigned_gerente_id = ?
+    )
+    SELECT pharmacy_id,
+           COALESCE(marzam_name, name) AS name,
+           pareto,
+           marzam_client_id,
+           last_visited_at,
+           last_visit_outcome,
+           CASE WHEN last_visited_at IS NULL THEN NULL
+                ELSE FLOOR(EXTRACT(EPOCH FROM (NOW() - last_visited_at)) / 86400)::int
+           END AS last_visit_age_days
+      FROM mine
+     ORDER BY last_visited_at NULLS FIRST
+  `, [userId, userId, userId, userId]);
+
+  const items = rows.rows || [];
+  if (!hasPresence || items.length === 0) {
+    return {
+      days: window,
+      warning: hasPresence ? null : 'pharmacy_presence_missing',
+      items: items.map((r) => ({
+        ...r,
+        dwell_no_report_seconds_30d: 0,
+        distance_warning_count_30d: 0,
+      })),
+    };
+  }
+
+  const ids = items.map((r) => r.pharmacy_id);
+  const aggRows = await db('pharmacy_presence')
+    .select('pharmacy_id')
+    .sum({ dwell: db.raw(`CASE WHEN has_visit_report = false THEN dwell_seconds ELSE 0 END`) })
+    .sum({ warn_count: db.raw(`CASE WHEN distance_warning = true THEN 1 ELSE 0 END`) })
+    .whereIn('pharmacy_id', ids)
+    .andWhere('rep_id', userId)
+    .andWhereRaw(`presence_date >= CURRENT_DATE - (?::int * INTERVAL '1 day')`, [window])
+    .groupBy('pharmacy_id');
+
+  const byPharm = new Map(aggRows.map((r) => [r.pharmacy_id, r]));
+  return {
+    days: window,
+    items: items.map((r) => {
+      const a = byPharm.get(r.pharmacy_id);
+      return {
+        ...r,
+        dwell_no_report_seconds_30d: a ? Number(a.dwell || 0) : 0,
+        distance_warning_count_30d: a ? Number(a.warn_count || 0) : 0,
+      };
+    }),
+  };
+}
+
 module.exports = {
   refreshViews,
   getPharmacyFunnel,
@@ -840,4 +1019,7 @@ module.exports = {
   getProspectFunnel,
   getSalesVsTarget,
   getRoutesStartedOnTime,
+  // Coverage views (mig 079 — pharmacy_presence):
+  getCoveragePending,
+  getMyCoverage,
 };

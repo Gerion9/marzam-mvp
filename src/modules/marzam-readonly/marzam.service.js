@@ -30,7 +30,7 @@ const {
   asNumeric,
   asBool,
 } = require('../bq-sync/bqHelpers');
-const { ROLES } = require('../../constants/roles');
+const { ROLES, normalizeRole } = require('../../constants/roles');
 const {
   rangoToRole,
   synthGerenteCode,
@@ -393,6 +393,82 @@ async function getClients(scope = null, { limit = null } = {}) {
 }
 
 /**
+ * Resolve the role-aware filter for `/api/marzam/universe?scope=mine`.
+ *
+ * Returns one of:
+ *   { kind: 'all' }                        -> no row filter (admin/director)
+ *   { kind: 'state', states: [...] }       -> filter pharmacies.state IN (...)
+ *                                             with fallback to 'all' if empty
+ *   { kind: 'pharmacy_ids', ids: [...] }   -> strict whitelist (rep);
+ *                                             empty list returns nothing
+ *
+ * Mapping:
+ *   - admin / director_sucursal     -> all
+ *   - gerente_ventas / supervisor   -> states of marzam_clients owned by user
+ *                                       (or by the user's subordinate tree)
+ *   - representante                 -> pharmacy ids of marzam_clients with
+ *                                       assigned_rep_id = user.id
+ *
+ * `marzam_clients` is the only place where ownership lives today, so we
+ * derive everything from it. When the user has zero assignments (pre-data
+ * state) supervisors/gerentes fall back to seeing ALL pharmacies — better
+ * than rendering an empty map until the assignment data lands.
+ */
+async function resolveUniverseScope(userScope) {
+  if (!userScope || !userScope.userId) return { kind: 'all' };
+  const role = normalizeRole(userScope.role);
+  if (role === ROLES.ADMIN || role === ROLES.DIRECTOR_SUCURSAL || userScope.isGlobal) {
+    return { kind: 'all' };
+  }
+
+  if (role === ROLES.REPRESENTANTE) {
+    const rows = await localDb('marzam_clients')
+      .select('pharmacy_id')
+      .where('assigned_rep_id', userScope.userId)
+      .whereNotNull('pharmacy_id');
+    const ids = rows.map((r) => r.pharmacy_id).filter(Boolean);
+    return { kind: 'pharmacy_ids', ids };
+  }
+
+  if (role === ROLES.SUPERVISOR || role === ROLES.GERENTE_VENTAS) {
+    // Walk the hierarchy one level down so a gerente picks up states from
+    // the supervisors+reps that report to them, and a supervisor picks up
+    // states from their reps.
+    const subordinateIds = await localDb('users')
+      .select('id')
+      .where('manager_id', userScope.userId);
+    const subIdList = subordinateIds.map((r) => r.id);
+
+    const repIdList = role === ROLES.GERENTE_VENTAS && subIdList.length
+      ? (await localDb('users')
+        .select('id')
+        .whereIn('manager_id', subIdList)).map((r) => r.id)
+      : [];
+
+    const ownerColumns = role === ROLES.GERENTE_VENTAS
+      ? ['assigned_gerente_id', 'assigned_supervisor_id', 'assigned_rep_id']
+      : ['assigned_supervisor_id', 'assigned_rep_id'];
+    const ownerIds = role === ROLES.GERENTE_VENTAS
+      ? [userScope.userId, ...subIdList, ...repIdList]
+      : [userScope.userId, ...subIdList];
+
+    const stateRows = await localDb('marzam_clients as mc')
+      .join('pharmacies as ph', 'ph.id', 'mc.pharmacy_id')
+      .where(function whereOwned() {
+        ownerColumns.forEach((col) => this.orWhereIn(`mc.${col}`, ownerIds));
+      })
+      .whereNotNull('ph.state')
+      .distinct('ph.state');
+    const states = stateRows.map((r) => r.state).filter(Boolean);
+    if (!states.length) return { kind: 'all' };
+    return { kind: 'state', states };
+  }
+
+  // Unknown role — be conservative and return nothing.
+  return { kind: 'pharmacy_ids', ids: [] };
+}
+
+/**
  * GET /api/marzam/universe — devuelve TODO el universo de farmacias
  * (Marzam + prospectos) desde la tabla LOCAL `pharmacies`, ya con
  * coordenadas geocodificadas por el sync de `int_marzam_prospect_scored`.
@@ -406,12 +482,27 @@ async function getClients(scope = null, { limit = null } = {}) {
  * Filtra automáticamente las filas sin coordenadas (no se pueden
  * renderizar en mapa).
  *
+ * Cuando se pasa `userScope` (proveniente del JWT), aplica el filtrado
+ * por rol descrito en `resolveUniverseScope()`. Sin `userScope`, devuelve
+ * el universo completo (back-compat — mantiene el comportamiento del
+ * endpoint público para el front-end de demo).
+ *
  * @param {object} opts
  * @param {number} [opts.limit=5000]
  * @param {{west,south,east,north}} [opts.bbox]
+ * @param {{userId,role,isGlobal}} [opts.userScope] — when present, applies role-based scoping
  */
-async function getUniverse({ limit = 5000, bbox = null } = {}) {
-  const cacheKey = `universe:${limit}:${bbox ? JSON.stringify(bbox) : 'all'}`;
+async function getUniverse({ limit = 5000, bbox = null, userScope = null } = {}) {
+  const scope = userScope ? await resolveUniverseScope(userScope) : { kind: 'all' };
+  if (scope.kind === 'pharmacy_ids' && scope.ids.length === 0) {
+    return { total: 0, marzam: [], prospects: [], bbox_applied: !!bbox, truncated: false, scope: 'mine_empty' };
+  }
+
+  const cacheKey = `universe:${limit}:${bbox ? JSON.stringify(bbox) : 'all'}:${
+    scope.kind === 'all' ? 'all'
+      : scope.kind === 'state' ? `s:${scope.states.slice().sort().join(',')}`
+        : `p:${scope.ids.slice().sort().join(',')}`
+  }`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
@@ -426,6 +517,16 @@ async function getUniverse({ limit = 5000, bbox = null } = {}) {
     `;
     params.push(bbox.west, bbox.south, bbox.east, bbox.north);
   }
+
+  let scopeClause = '';
+  if (scope.kind === 'state') {
+    scopeClause = `AND state IN (${scope.states.map(() => '?').join(',')})`;
+    params.push(...scope.states);
+  } else if (scope.kind === 'pharmacy_ids') {
+    scopeClause = `AND id IN (${scope.ids.map(() => '?').join(',')})`;
+    params.push(...scope.ids);
+  }
+
   params.push(limit);
 
   const { rows } = await localDb.raw(`
@@ -450,6 +551,7 @@ async function getUniverse({ limit = 5000, bbox = null } = {}) {
     WHERE coordinates IS NOT NULL
       AND source IN ('marzam', 'blackprint')
       ${bboxClause}
+      ${scopeClause}
     ORDER BY source DESC, pareto NULLS LAST
     LIMIT ?
   `, params);
@@ -492,6 +594,9 @@ async function getUniverse({ limit = 5000, bbox = null } = {}) {
     prospects,
     bbox_applied: !!bbox,
     truncated: rows.length === limit,
+    scope: scope.kind === 'all' ? 'all'
+      : scope.kind === 'state' ? `state:${scope.states.length}`
+        : `pharmacy_ids:${scope.ids.length}`,
   };
   return setCached(cacheKey, out);
 }

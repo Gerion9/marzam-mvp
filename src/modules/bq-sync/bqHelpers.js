@@ -204,6 +204,59 @@ function logMissingColumn(jobName, expected, presentKeys) {
   console.warn(`[marzam-sync:${jobName}] expected column "${expected}" not found. Available: ${presentKeys.slice(0, 30).join(', ')}`);
 }
 
+/**
+ * Detect schema drift in a source table by checking, before the per-row loop,
+ * that each logical field in `candidatesByLogicalName` has at least ONE
+ * candidate column present in the row's `keyMap`. Source schema is uniform
+ * across rows of a single fetch, so this is a once-per-job check — much less
+ * noisy than calling logMissingColumn after every pickFirst().
+ *
+ * Logs a warning for every logical name that's MISSING and listed in
+ * `requiredLogicalNames`. Optional fields are still reported in the return
+ * value (so the job can surface them) but don't trigger a console warning.
+ *
+ * @returns {{ missing: string[], missing_required: string[] }}
+ */
+function auditCandidateColumns(jobName, keyMap, candidatesByLogicalName, requiredLogicalNames = []) {
+  const missing = [];
+  const required = new Set(requiredLogicalNames);
+  for (const [logicalName, candidates] of Object.entries(candidatesByLogicalName)) {
+    const found = candidates.some((c) => keyMap.has(normalizeKey(c)));
+    if (!found) {
+      missing.push(logicalName);
+      if (required.has(logicalName)) {
+        logMissingColumn(jobName, candidates.join('/'), [...keyMap.keys()]);
+      }
+    }
+  }
+  return {
+    missing,
+    missing_required: missing.filter((n) => required.has(n)),
+  };
+}
+
+/**
+ * Coerce `stats` into a final job status. The doc's heuristic: if the job
+ * accumulated more than `threshold * rows` warnings, the run is unhealthy
+ * enough to mark as `failed` (visible in cron_runs) so an oncall human can
+ * investigate. Returns `{ status, reason }`.
+ */
+function evaluateJobHealth(stats, { warningThreshold = 0.5 } = {}) {
+  const rows = Number(stats?.rows) || 0;
+  const warnings = Number(stats?.warnings) || 0;
+  if (rows === 0) {
+    return { status: 'ok', reason: null };
+  }
+  const ratio = warnings / rows;
+  if (ratio > warningThreshold) {
+    return {
+      status: 'failed',
+      reason: `warnings_ratio=${ratio.toFixed(2)} exceeds threshold=${warningThreshold}`,
+    };
+  }
+  return { status: 'ok', reason: null };
+}
+
 module.exports = {
   SOURCE_TABLES,
   // back-compat
@@ -221,4 +274,6 @@ module.exports = {
   asBool,
   asDate,
   logMissingColumn,
+  auditCandidateColumns,
+  evaluateJobHealth,
 };

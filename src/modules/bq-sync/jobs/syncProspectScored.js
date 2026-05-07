@@ -58,6 +58,7 @@ const {
   asString,
   asNumeric,
   asBool,
+  auditCandidateColumns,
 } = require('../bqHelpers');
 
 const JOB_NAME = 'prospect_scored';
@@ -225,6 +226,10 @@ async function run({ limit = null } = {}) {
       continue;
     }
     const keyMap = buildKeyMap(rows[0]);
+    // Surface schema drift early — `name` is the only column whose absence
+    // would silently produce nothing-useful rows. dataplor_id / clave_mostrador
+    // are checked per-row already (skip if missing).
+    auditCandidateColumns(JOB_NAME, keyMap, COL_CANDIDATES, ['name']);
     stats.by_source[table] = { rows: rows.length, inserted: 0, updated: 0, skipped: 0 };
     stats.rows += rows.length;
 

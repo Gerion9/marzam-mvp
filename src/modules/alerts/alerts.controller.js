@@ -1,5 +1,6 @@
 const service = require('./alerts.service');
 const engine = require('./alerts.engine');
+const { secretsEqual } = require('../../utils/secretCompare');
 
 async function feed(req, res, next) {
   try {
@@ -30,7 +31,7 @@ async function evaluateTick(req, res, next) {
     const cronSecret = process.env.CRON_SECRET;
     const headerSecret = req.headers['x-cron-secret'];
     const queryToken = req.query.token;
-    const fromCron = cronSecret && (headerSecret === cronSecret || queryToken === cronSecret);
+    const fromCron = cronSecret && (secretsEqual(headerSecret, cronSecret) || secretsEqual(queryToken, cronSecret));
     const fromAdmin = req.user && (req.user.role === 'admin' || req.user.is_global);
     if (!fromCron && !fromAdmin) {
       return res.status(401).json({ error: 'Unauthorized' });

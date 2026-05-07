@@ -130,6 +130,19 @@
     if (isMarzamPharmacy(pharmacy)) {
       return openMarzamFlow(pharmacy);
     }
+    // Para farmacias NO Marzam (prospectos / "Nuevas"), abrimos el wizard
+    // completo de alta — RFC, persona física/moral, forma de pago efectivo
+    // /crédito, razón social vs nombre comercial, dirección, fachada (1
+    // foto si está en padrón, 3 si no), docs legales (3 ó 5 según persona),
+    // productos.  El wizard también crea la visita al final para que la
+    // parada se marque como completada en el plan diario.
+    //
+    // Fallback: si el rol no puede usar el wizard (director_sucursal /
+    // gerente_ventas) o el script no está cargado, caemos al openProspectFlow
+    // corto — al menos queda registrada la visita.
+    if (window.MarzamOnboarding?.openWizard && window.MarzamOnboarding.canUseWizard?.()) {
+      return window.MarzamOnboarding.openWizard({ pharmacy });
+    }
     return openProspectFlow(pharmacy);
   }
 
