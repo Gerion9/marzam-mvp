@@ -1,0 +1,13 @@
+{
+  "watch": ["src"],
+  "ext": "js,mjs,cjs,json",
+  "ignore": [
+    "src/public/**",
+    "src/**/*.test.js",
+    "tmp_*",
+    "node_modules"
+  ],
+  "delay": "1500",
+  "signal": "SIGTERM",
+  "verbose": false
+}

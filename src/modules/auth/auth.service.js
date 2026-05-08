@@ -11,9 +11,28 @@ const SALT_ROUNDS = 10;
 
 async function buildAuthResult(user, extra = {}) {
   const scope = await computeUserScope(user);
+  // Marzam identity tokens — only present in external/virtual mode (the
+  // accessDirectory carries them). When loading from the `users` table we
+  // copy whatever is on the row so production migrates seamlessly.
+  const employee_code = user.employee_code || null;
+  const employee_number = user.employee_number || null;
+  const branch_code = user.branch_code || null;
+  const manager_code = user.manager_code || null;
+
+  // The JWT subject (`id`) is ALWAYS the canonical UUID that lives in the
+  // `users` table. When auth comes from the virtual access directory the
+  // canonical UUID is `db_user_id` (deterministic uuidv5 of the virtual id).
+  // When auth comes from the DB users table the UUID is just `user.id`.
+  // `external_id` keeps the legacy/virtual identifier (e.g. `u-dir-001`) so
+  // legacy code paths and external systems (BQ sync, demo data) can still
+  // resolve it. Backend services should always prefer `req.user.id`.
+  const canonicalId = user.db_user_id || user.id;
+  const externalId = user.db_user_id ? user.id : (user.external_id || null);
+
   const token = jwt.sign(
     {
-      id: user.id,
+      id: canonicalId,
+      external_id: externalId,
       email: user.email,
       full_name: user.full_name,
       role: user.role,
@@ -21,6 +40,10 @@ async function buildAuthResult(user, extra = {}) {
       territory_ids: scope.territoryIds,
       accessible_territory_ids: scope.accessibleTerritoryIds,
       is_global: scope.isGlobal,
+      employee_code,
+      employee_number,
+      branch_code,
+      manager_code,
       impersonated_by: extra.impersonated_by || null,
       original_role: extra.original_role || null,
     },
@@ -31,13 +54,19 @@ async function buildAuthResult(user, extra = {}) {
   return {
     token,
     user: {
-      id: user.id,
+      id: canonicalId,
+      external_id: externalId,
       email: user.email,
       full_name: user.full_name,
       role: user.role,
       data_scope: user.data_scope || null,
       territory_ids: scope.territoryIds,
       is_global: scope.isGlobal,
+      employee_code,
+      employee_number,
+      branch_code,
+      manager_code,
+      must_change_password: user.must_change_password === true,
     },
     ...(extra.impersonated_by ? { impersonated_by: extra.impersonated_by } : {}),
   };
@@ -96,7 +125,10 @@ async function login({ email, password }) {
     throw err;
   }
 
-  await db('users').where({ id: user.id }).update({ last_login_at: db.fn.now() });
+  db('users')
+    .where({ id: user.id })
+    .update({ last_login_at: db.fn.now() })
+    .catch((err) => console.warn(`[auth] failed to update last_login_at for ${user.id}: ${err.message}`));
 
   return buildAuthResult(user);
 }
@@ -109,7 +141,25 @@ async function me(userId) {
       err.status = 404;
       throw err;
     }
-    return user;
+    // Reshape so the response matches the JWT contract: `id` is the canonical
+    // UUID (db_user_id) and `external_id` carries the legacy/virtual id.
+    // accessDirectory returns the virtual id as `.id`; we swap them here so
+    // any frontend that uses `me().id` for subsequent backend calls gets the
+    // same UUID it received in the login response.
+    return {
+      id: user.db_user_id || user.id,
+      external_id: user.db_user_id ? user.id : null,
+      email: user.email,
+      full_name: user.full_name,
+      role: user.role,
+      is_active: user.is_active,
+      data_scope: user.data_scope,
+      employee_code: user.employee_code,
+      employee_number: user.employee_number,
+      branch_code: user.branch_code,
+      manager_code: user.manager_code,
+      must_change_password: user.must_change_password,
+    };
   }
 
   const user = await db('users')
@@ -230,13 +280,16 @@ async function impersonate(managerId, targetUserId) {
 
   if (isExternalDataMode()) {
     const manager = accessDirectory.getUserById(managerId);
-    if (!manager || !isGlobalRole(manager.role)) {
+    // Audit Fix #1: external mode now mirrors DB-mode's is_active gate.
+    // The AUTH_DIRECTORY_JSON entries may carry an explicit `is_active`
+    // boolean; treat undefined/missing as true (back-compat).
+    if (!manager || !isGlobalRole(manager.role) || manager.is_active === false) {
       const err = new Error('Only administrators can impersonate');
       err.status = 403;
       throw err;
     }
     const target = accessDirectory.getUserById(targetUserId);
-    if (!target) {
+    if (!target || target.is_active === false) {
       const err = new Error('Target user not found or inactive');
       err.status = 404;
       throw err;
@@ -286,8 +339,11 @@ async function impersonate(managerId, targetUserId) {
 async function stopImpersonation(managerId) {
   if (isExternalDataMode()) {
     const manager = accessDirectory.getUserById(managerId);
-    if (!manager) {
-      const err = new Error('User not found');
+    // Audit Fix #1: a manager who was deactivated AFTER starting an
+    // impersonation must not be able to "stop" their way back into a
+    // privileged session. Mirror DB-mode's is_active check here.
+    if (!manager || manager.is_active === false) {
+      const err = new Error('User not found or inactive');
       err.status = 404;
       throw err;
     }
@@ -296,7 +352,7 @@ async function stopImpersonation(managerId) {
 
   const manager = await db('users').where({ id: managerId, is_active: true }).first();
   if (!manager) {
-    const err = new Error('User not found');
+    const err = new Error('User not found or inactive');
     err.status = 404;
     throw err;
   }
@@ -304,9 +360,137 @@ async function stopImpersonation(managerId) {
   return buildAuthResult(manager);
 }
 
+// Bootstrap the very first admin user — Marzam Execution Doc §3 says only
+// admin can create users, but the chicken-and-egg of "who creates the first
+// admin" is solved here:
+//   - Caller must present the env var BOOTSTRAP_TOKEN as a header.
+//   - We refuse if any admin user already exists (one-shot in practice).
+//   - We refuse in external auth mode (admin is provisioned through the
+//     directory provider in that case, not the DB).
+async function bootstrapAdmin({ email, password, full_name, providedToken }) {
+  if (isExternalDataMode()) {
+    const err = new Error('Bootstrap admin is disabled in external auth mode');
+    err.status = 501;
+    throw err;
+  }
+  const expected = process.env.BOOTSTRAP_TOKEN;
+  if (!expected) {
+    const err = new Error('Bootstrap is disabled — BOOTSTRAP_TOKEN env var not set');
+    err.status = 501;
+    err.code = 'bootstrap_disabled';
+    throw err;
+  }
+  if (!providedToken || providedToken !== expected) {
+    const err = new Error('Invalid bootstrap token');
+    err.status = 401;
+    err.code = 'invalid_bootstrap_token';
+    throw err;
+  }
+  if (!email || !password || !full_name) {
+    const err = new Error('email, password, full_name are required');
+    err.status = 422;
+    throw err;
+  }
+  if (String(password).length < 12) {
+    const err = new Error('Bootstrap admin password must be at least 12 characters');
+    err.status = 422;
+    err.code = 'bootstrap_password_weak';
+    throw err;
+  }
+
+  const existingAdmin = await db('users').where({ role: 'admin' }).first();
+  if (existingAdmin) {
+    const err = new Error('Admin already exists — bootstrap is a one-shot');
+    err.status = 409;
+    err.code = 'admin_already_exists';
+    throw err;
+  }
+
+  const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+  const [user] = await db('users')
+    .insert({
+      email,
+      password_hash,
+      full_name,
+      role: 'admin',
+      is_active: true,
+      must_change_password: false,
+    })
+    .returning(['id', 'email', 'full_name', 'role', 'is_active', 'created_at']);
+  return user;
+}
+
+/**
+ * [S5] Issue a short-lived SSE ticket from an authenticated user. The ticket
+ * is a UUID stored in `sse_tickets` (mig 081); the caller passes it as
+ * ?ticket= on the SSE URL instead of leaking the long-lived JWT in query
+ * params and access logs.
+ *
+ * The full user shape is stored as JSONB so the auth middleware can hydrate
+ * req.user without re-reading the JWT secret.
+ */
+async function issueSseTicket(user) {
+  if (!user || !user.id) {
+    const err = new Error('Cannot issue SSE ticket without an authenticated user');
+    err.status = 401;
+    throw err;
+  }
+  const ttlSeconds = Math.max(10, Number(process.env.SSE_TICKET_TTL_SECONDS) || 60);
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+  // Store the same shape applyPayload() in src/middleware/auth.js expects.
+  const payload = {
+    id: user.id,
+    external_id: user.external_id || null,
+    email: user.email,
+    full_name: user.full_name || null,
+    role: user.role,
+    is_global: !!user.is_global,
+    data_scope: user.data_scope || null,
+    territory_ids: Array.isArray(user.territory_ids) ? user.territory_ids : [],
+    accessible_territory_ids: Array.isArray(user.accessible_territory_ids) ? user.accessible_territory_ids : [],
+    employee_code: user.employee_code || null,
+    employee_number: user.employee_number || null,
+    branch_code: user.branch_code || null,
+    manager_code: user.manager_code || null,
+    impersonated_by: user.impersonated_by || null,
+    original_role: user.original_role || null,
+  };
+  const [row] = await db('sse_tickets')
+    .insert({
+      user_id: user.id,
+      payload,
+      expires_at: expiresAt,
+    })
+    .returning(['id']);
+  return {
+    ticket: row.id,
+    expires_at: expiresAt.toISOString(),
+    expires_in_seconds: ttlSeconds,
+  };
+}
+
+// Issue a JWT for an already-trusted user row (used right after invitation
+// activation or password reset, where credentials were just verified through
+// a one-shot token rather than email + password).
+async function loginByUserRow(user) {
+  if (!user || !user.id) {
+    const err = new Error('User row missing id');
+    err.status = 500;
+    throw err;
+  }
+  db('users')
+    .where({ id: user.id })
+    .update({ last_login_at: db.fn.now() })
+    .catch((err) => console.warn(`[auth] failed to update last_login_at for ${user.id}: ${err.message}`));
+  return buildAuthResult(user);
+}
+
 module.exports = {
   register,
   login,
+  loginByUserRow,
+  bootstrapAdmin,
+  issueSseTicket,
   me,
   listUsers,
   updateUser,

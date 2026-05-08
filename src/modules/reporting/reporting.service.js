@@ -608,6 +608,399 @@ async function getFlotillaSummary() {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Marzam Execution Doc §10 KPIs (locked set):
+//   - Route adherence (planned vs completed)
+//   - Visit duration (manual start/end)
+//   - Prospect conversion funnel (visited → docs submitted → approved → onboarded)
+//   - Sales vs target by role
+//   - "Routes started on time" (Item 6 follow-up)
+// All accept an optional `{ from, to }` window (ISO date strings).  Defaults:
+// last 7 days for adherence/duration, last 30 days for funnel.
+// ─────────────────────────────────────────────────────────────────────────
+
+function defaultWindow({ from, to } = {}, daysBack = 7) {
+  const tt = to ? new Date(to) : new Date();
+  const ff = from ? new Date(from) : new Date(tt.getTime() - daysBack * 24 * 60 * 60 * 1000);
+  return { from: ff.toISOString().slice(0, 10), to: tt.toISOString().slice(0, 10) };
+}
+
+async function getRouteAdherence({ from, to } = {}) {
+  if (isExternalDataMode()) return { warning: 'external_mode', overall: null, by_user: [] };
+  const w = defaultWindow({ from, to }, 7);
+  // visit_plan_assignments status: planned/done/skipped/rescheduled.
+  // Adherence = done / (planned + done + skipped) — excludes rescheduled (which is intentional change of plan, not skipped execution).
+  const overallRow = await db.raw(`
+    SELECT COUNT(*) FILTER (WHERE status = 'done')                          AS done,
+           COUNT(*) FILTER (WHERE status IN ('planned','done','skipped'))    AS denom
+      FROM visit_plan_assignments
+     WHERE scheduled_date BETWEEN ?::date AND ?::date
+  `, [w.from, w.to]);
+  const denom = Number(overallRow.rows?.[0]?.denom || 0);
+  const done = Number(overallRow.rows?.[0]?.done || 0);
+  const overall = denom > 0 ? Number((done / denom).toFixed(4)) : null;
+
+  const byUser = await db.raw(`
+    SELECT vpa.visitor_user_id              AS user_id,
+           u.full_name                       AS full_name,
+           u.role                            AS role,
+           COUNT(*) FILTER (WHERE status = 'done')                          AS done,
+           COUNT(*) FILTER (WHERE status IN ('planned','done','skipped'))    AS denom
+      FROM visit_plan_assignments vpa
+      JOIN users u ON u.id = vpa.visitor_user_id
+     WHERE vpa.scheduled_date BETWEEN ?::date AND ?::date
+     GROUP BY vpa.visitor_user_id, u.full_name, u.role
+     ORDER BY done DESC
+  `, [w.from, w.to]);
+
+  return {
+    window: w,
+    overall_adherence: overall,
+    overall_done: done,
+    overall_denom: denom,
+    by_user: byUser.rows.map((r) => ({
+      user_id: r.user_id,
+      full_name: r.full_name,
+      role: r.role,
+      done: Number(r.done),
+      denom: Number(r.denom),
+      adherence: Number(r.denom) ? Number((Number(r.done) / Number(r.denom)).toFixed(4)) : null,
+    })),
+  };
+}
+
+async function getVisitDuration({ from, to } = {}) {
+  if (isExternalDataMode()) return { warning: 'external_mode' };
+  const w = defaultWindow({ from, to }, 7);
+  // Visit duration is derived from visit_sessions when available (session has
+  // started_at and ended_at). Falls back to NULL otherwise — the brief
+  // explicitly mandates "manual start/end" so this is the expected source.
+  const overallRow = await db.raw(`
+    SELECT COUNT(*)::int                                                    AS sessions,
+           AVG(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60.0)          AS avg_minutes,
+           AVG(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60.0
+               / NULLIF(pharmacies_visited, 0))                              AS avg_minutes_per_pharmacy
+      FROM visit_sessions
+     WHERE status = 'ended'
+       AND started_at::date BETWEEN ?::date AND ?::date
+       AND ended_at IS NOT NULL
+  `, [w.from, w.to]);
+  return {
+    window: w,
+    sessions: Number(overallRow.rows?.[0]?.sessions || 0),
+    avg_minutes: overallRow.rows?.[0]?.avg_minutes != null ? Number(Number(overallRow.rows[0].avg_minutes).toFixed(2)) : null,
+    avg_minutes_per_pharmacy: overallRow.rows?.[0]?.avg_minutes_per_pharmacy != null ? Number(Number(overallRow.rows[0].avg_minutes_per_pharmacy).toFixed(2)) : null,
+  };
+}
+
+async function getProspectFunnel({ from, to } = {}) {
+  if (isExternalDataMode()) return { warning: 'external_mode' };
+  const w = defaultWindow({ from, to }, 30);
+  // Stages per Marzam Execution Doc §10:
+  //   1) visited      — at least one visit_report on the prospect pharmacy
+  //   2) docs_submitted — pharmacy_onboarding row created (with docs)
+  //   3) approved     — onboarding.status='aprobado'
+  //   4) onboarded    — onboarding.status='pendiente_creacion_interna' OR linked to a marzam_clients
+  // Defensive: pharmacy_onboarding may not exist (mig 038 not applied yet).
+  const onboardingExists = await db.raw(`SELECT to_regclass('pharmacy_onboarding') AS t`);
+  const visited = await db.raw(`
+    SELECT COUNT(DISTINCT vr.pharmacy_id)::int AS n
+      FROM visit_reports vr
+      JOIN pharmacies p ON p.id = vr.pharmacy_id
+     WHERE vr.created_at::date BETWEEN ?::date AND ?::date
+       AND p.source <> 'marzam'
+  `, [w.from, w.to]);
+
+  let docsSubmitted = 0; let approved = 0; let onboarded = 0;
+  if (onboardingExists.rows?.[0]?.t) {
+    const o = await db.raw(`
+      SELECT
+        COUNT(*) FILTER (WHERE created_at::date BETWEEN ?::date AND ?::date)            AS docs,
+        COUNT(*) FILTER (WHERE status = 'aprobado'  AND updated_at::date BETWEEN ?::date AND ?::date) AS approved,
+        COUNT(*) FILTER (WHERE status = 'pendiente_creacion_interna' AND updated_at::date BETWEEN ?::date AND ?::date) AS onboarded
+        FROM pharmacy_onboarding
+    `, [w.from, w.to, w.from, w.to, w.from, w.to]);
+    docsSubmitted = Number(o.rows?.[0]?.docs || 0);
+    approved = Number(o.rows?.[0]?.approved || 0);
+    onboarded = Number(o.rows?.[0]?.onboarded || 0);
+  }
+  return {
+    window: w,
+    stages: {
+      visited: Number(visited.rows?.[0]?.n || 0),
+      docs_submitted: docsSubmitted,
+      approved,
+      onboarded,
+    },
+    notes: onboardingExists.rows?.[0]?.t ? null : 'pharmacy_onboarding table missing — only "visited" stage available',
+  };
+}
+
+async function getSalesVsTarget({ from, to } = {}) {
+  if (isExternalDataMode()) return { warning: 'external_mode' };
+  const w = defaultWindow({ from, to }, 30);
+  // sales_targets has a per-cliente periodic objective; daily_sales is the
+  // realized fact. We aggregate both at the (marzam_client_id) level then
+  // compare. Result is keyed by client; FE rolls up to rep/sup/gerente.
+  const exists = await db.raw(`
+    SELECT to_regclass('daily_sales') AS s, to_regclass('sales_targets') AS t
+  `);
+  if (!exists.rows?.[0]?.s || !exists.rows?.[0]?.t) {
+    return { window: w, warning: 'sales_or_targets_missing', items: [] };
+  }
+  const rows = await db.raw(`
+    WITH realized AS (
+      SELECT marzam_client_id, COALESCE(SUM(amount), 0) AS realized
+        FROM daily_sales
+       WHERE sale_date BETWEEN ?::date AND ?::date
+       GROUP BY marzam_client_id
+    ),
+    target_by_client AS (
+      SELECT mc.id AS marzam_client_id, COALESCE(SUM(st.objetivo), 0) AS target
+        FROM marzam_clients mc
+        LEFT JOIN sales_targets st ON st.cpadre = mc.cpadre
+       GROUP BY mc.id
+    )
+    SELECT mc.id           AS marzam_client_id,
+           mc.cpadre,
+           mc.farmacia_nombre,
+           mc.pareto,
+           COALESCE(r.realized, 0)::numeric AS realized,
+           COALESCE(t.target, 0)::numeric   AS target,
+           CASE WHEN COALESCE(t.target, 0) > 0
+                THEN COALESCE(r.realized, 0)::numeric / t.target::numeric
+                ELSE NULL
+           END                                AS attainment
+      FROM marzam_clients mc
+      LEFT JOIN realized r       ON r.marzam_client_id = mc.id
+      LEFT JOIN target_by_client t ON t.marzam_client_id = mc.id
+     WHERE COALESCE(r.realized, 0) > 0 OR COALESCE(t.target, 0) > 0
+     ORDER BY COALESCE(r.realized, 0) DESC
+     LIMIT 500
+  `, [w.from, w.to]);
+  return { window: w, items: rows.rows };
+}
+
+async function getRoutesStartedOnTime({ from, to } = {}) {
+  if (isExternalDataMode()) return { warning: 'external_mode' };
+  const w = defaultWindow({ from, to }, 7);
+  // Compares actual_start_time vs expected_start_time +/- 15min grace.
+  // Uses fields added in mig 053 (hard schedule). Defensive: if those columns
+  // don't exist, returns warning.
+  const colExists = await db.raw(`
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'visit_plan_assignments' AND column_name = 'actual_start_time'
+     LIMIT 1
+  `);
+  if (!colExists.rows?.length) {
+    return { window: w, warning: 'hard_schedule_columns_missing', overall: null };
+  }
+  const row = await db.raw(`
+    SELECT
+      COUNT(*)                                                                     AS denom,
+      COUNT(*) FILTER (
+        WHERE expected_start_time IS NOT NULL
+          AND actual_start_time IS NOT NULL
+          AND actual_start_time <= expected_start_time + INTERVAL '15 minutes'
+      )                                                                             AS on_time,
+      COUNT(*) FILTER (
+        WHERE expected_start_time IS NOT NULL
+          AND actual_start_time IS NULL
+      )                                                                             AS not_started
+      FROM visit_plan_assignments
+     WHERE scheduled_date BETWEEN ?::date AND ?::date
+       AND expected_start_time IS NOT NULL
+  `, [w.from, w.to]);
+  const denom = Number(row.rows?.[0]?.denom || 0);
+  const onTime = Number(row.rows?.[0]?.on_time || 0);
+  return {
+    window: w,
+    overall_pct: denom > 0 ? Number((onTime / denom).toFixed(4)) : null,
+    on_time: onTime,
+    not_started: Number(row.rows?.[0]?.not_started || 0),
+    denom,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Coverage — actionable views over `pharmacies` × `pharmacy_presence`.
+// `pharmacy_presence` is populated by the daily reconcile-presence cron
+// (mig 079); it surfaces the difference between "rep was physically there"
+// (presence) and "rep submitted a visit_report" (visit). The coverage pending
+// view filters the padrón for pharmacies that are stale OR have unmatched
+// presence in the last N days.
+// ─────────────────────────────────────────────────────────────────────────
+
+function clampDays(days) {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n < 1) return 30;
+  return Math.min(Math.floor(n), 365);
+}
+
+function clampLimit(limit, fallback = 500) {
+  const n = Number(limit);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(Math.floor(n), 5000);
+}
+
+async function presenceTableExists() {
+  const r = await db.raw(`SELECT to_regclass('pharmacy_presence') AS t`);
+  return Boolean(r.rows?.[0]?.t);
+}
+
+async function getCoveragePending(filters = {}) {
+  if (isExternalDataMode()) {
+    return { warning: 'external_mode', items: [] };
+  }
+  const days = clampDays(filters.days);
+  const limit = clampLimit(filters.limit);
+  const hasPresence = await presenceTableExists();
+
+  const q = db('pharmacies as p')
+    .leftJoin('marzam_clients as mc', 'mc.pharmacy_id', 'p.id')
+    .leftJoin('users as u', 'u.id', 'p.assigned_rep_id')
+    .select(
+      'p.id as pharmacy_id',
+      'p.name',
+      'p.municipality',
+      db.raw(`COALESCE(mc.pareto, 'D') AS pareto`),
+      'p.last_visited_at',
+      'p.last_visit_outcome',
+      db.raw(`
+        CASE WHEN p.last_visited_at IS NULL THEN NULL
+             ELSE FLOOR(EXTRACT(EPOCH FROM (NOW() - p.last_visited_at)) / 86400)::int
+        END AS last_visit_age_days
+      `),
+      'p.assigned_rep_id',
+      db.raw('u.full_name AS assigned_rep_name'),
+    )
+    .where('p.is_independent', true)
+    .andWhere(function () {
+      this.whereNull('p.last_visited_at')
+        .orWhereRaw(`p.last_visited_at < NOW() - (?::int * INTERVAL '1 day')`, [days]);
+    })
+    .orderByRaw('p.last_visited_at NULLS FIRST')
+    .limit(limit);
+
+  if (filters.pareto) {
+    const list = String(filters.pareto).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+    if (list.length) q.whereIn(db.raw(`COALESCE(mc.pareto, 'D')`), list);
+  }
+  if (filters.rep_id) q.where('p.assigned_rep_id', filters.rep_id);
+  if (filters.municipality) q.where('p.municipality', filters.municipality);
+  if (filters.branch_id) q.where('mc.branch_id', filters.branch_id);
+
+  applyPharmacyScope(q, 'p.territory_id');
+
+  const rows = await q;
+  if (!hasPresence || rows.length === 0) {
+    return { warning: hasPresence ? null : 'pharmacy_presence_missing', days, items: rows.map((r) => ({
+      ...r,
+      presence_no_report_count: 0,
+      last_presence_at: null,
+    })) };
+  }
+
+  // Annotate with presence-without-report aggregates in one query.
+  const ids = rows.map((r) => r.pharmacy_id);
+  const presenceRows = await db('pharmacy_presence')
+    .select('pharmacy_id')
+    .count({ cnt: '*' })
+    .max({ last_presence_at: 'last_seen_at' })
+    .whereIn('pharmacy_id', ids)
+    .andWhere('has_visit_report', false)
+    .andWhereRaw(`presence_date >= CURRENT_DATE - (?::int * INTERVAL '1 day')`, [days])
+    .groupBy('pharmacy_id');
+
+  const byPharmacy = new Map(presenceRows.map((r) => [r.pharmacy_id, r]));
+  return {
+    days,
+    items: rows.map((r) => {
+      const p = byPharmacy.get(r.pharmacy_id);
+      return {
+        ...r,
+        presence_no_report_count: p ? Number(p.cnt) : 0,
+        last_presence_at: p?.last_presence_at || null,
+      };
+    }),
+  };
+}
+
+async function getMyCoverage({ userId, days } = {}) {
+  if (!userId) return { items: [] };
+  if (isExternalDataMode()) return { warning: 'external_mode', items: [] };
+  const window = clampDays(days);
+  const hasPresence = await presenceTableExists();
+
+  // Padrón of pharmacies the rep is responsible for: union of (1) pharmacies
+  // with assigned_rep_id = me and (2) marzam_clients pareto C/B/A where me is
+  // the assigned rep/supervisor/gerente. We render at the pharmacy level.
+  const rows = await db.raw(`
+    WITH mine AS (
+      SELECT p.id AS pharmacy_id,
+             p.name,
+             p.last_visited_at,
+             p.last_visit_outcome,
+             COALESCE(mc.pareto, 'D') AS pareto,
+             mc.id AS marzam_client_id,
+             mc.farmacia_nombre AS marzam_name
+        FROM pharmacies p
+        LEFT JOIN marzam_clients mc ON mc.pharmacy_id = p.id
+       WHERE p.assigned_rep_id = ?
+          OR mc.assigned_rep_id = ?
+          OR mc.assigned_supervisor_id = ?
+          OR mc.assigned_gerente_id = ?
+    )
+    SELECT pharmacy_id,
+           COALESCE(marzam_name, name) AS name,
+           pareto,
+           marzam_client_id,
+           last_visited_at,
+           last_visit_outcome,
+           CASE WHEN last_visited_at IS NULL THEN NULL
+                ELSE FLOOR(EXTRACT(EPOCH FROM (NOW() - last_visited_at)) / 86400)::int
+           END AS last_visit_age_days
+      FROM mine
+     ORDER BY last_visited_at NULLS FIRST
+  `, [userId, userId, userId, userId]);
+
+  const items = rows.rows || [];
+  if (!hasPresence || items.length === 0) {
+    return {
+      days: window,
+      warning: hasPresence ? null : 'pharmacy_presence_missing',
+      items: items.map((r) => ({
+        ...r,
+        dwell_no_report_seconds_30d: 0,
+        distance_warning_count_30d: 0,
+      })),
+    };
+  }
+
+  const ids = items.map((r) => r.pharmacy_id);
+  const aggRows = await db('pharmacy_presence')
+    .select('pharmacy_id')
+    .sum({ dwell: db.raw(`CASE WHEN has_visit_report = false THEN dwell_seconds ELSE 0 END`) })
+    .sum({ warn_count: db.raw(`CASE WHEN distance_warning = true THEN 1 ELSE 0 END`) })
+    .whereIn('pharmacy_id', ids)
+    .andWhere('rep_id', userId)
+    .andWhereRaw(`presence_date >= CURRENT_DATE - (?::int * INTERVAL '1 day')`, [window])
+    .groupBy('pharmacy_id');
+
+  const byPharm = new Map(aggRows.map((r) => [r.pharmacy_id, r]));
+  return {
+    days: window,
+    items: items.map((r) => {
+      const a = byPharm.get(r.pharmacy_id);
+      return {
+        ...r,
+        dwell_no_report_seconds_30d: a ? Number(a.dwell || 0) : 0,
+        distance_warning_count_30d: a ? Number(a.warn_count || 0) : 0,
+      };
+    }),
+  };
+}
+
 module.exports = {
   refreshViews,
   getPharmacyFunnel,
@@ -620,4 +1013,13 @@ module.exports = {
   getRepAssignmentsForExport,
   getVisitDetail,
   getFlotillaSummary,
+  // Marzam Execution Doc §10 KPI set:
+  getRouteAdherence,
+  getVisitDuration,
+  getProspectFunnel,
+  getSalesVsTarget,
+  getRoutesStartedOnTime,
+  // Coverage views (mig 079 — pharmacy_presence):
+  getCoveragePending,
+  getMyCoverage,
 };

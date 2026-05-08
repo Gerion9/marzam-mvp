@@ -3,3 +3,9 @@ node_modules/
 uploads/
 dist/
 *.log
+inicial/
+.cursor/
+docs/
+scripts/
+tests/
+.playwright-mcp/

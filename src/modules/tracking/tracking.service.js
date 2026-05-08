@@ -5,15 +5,115 @@ const externalDeviceLocationRepository = require('../../repositories/external/de
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { parseStopId } = require('../externalData/externalAssignmentIds');
 const accessDirectory = require('../../services/accessDirectory');
+const liveBus = require('../live/live.service');
+const { haversineMeters, DISTANCE_WARNING_THRESHOLD_M } = require('../../utils/geoDistance');
 
-const DISTANCE_WARNING_THRESHOLD_M = 500;
+// Per-rep hierarchy cache so /ping doesn't issue an extra users JOIN per call.
+// TTL 60s — long enough that 1 ping/30s reuses; short enough that role/manager
+// changes propagate to live-ops within a minute. Key: rep_id → {role,
+// manager_id, manager_name, branch_id, branch_name, employee_code, expiresAt}.
+const HIERARCHY_TTL_MS = 60_000;
+const hierarchyCache = new Map();
 
-async function recordPing({ rep_id, assignment_id, verification_id, lat, lng, accuracy_meters }) {
+async function fetchHierarchyForRep(repId) {
+  if (!repId) return null;
+  const now = Date.now();
+  const hit = hierarchyCache.get(repId);
+  if (hit && hit.expiresAt > now) return hit;
+  try {
+    const row = await db('users as u')
+      .leftJoin('users as m', 'm.id', 'u.manager_id')
+      .leftJoin('branches as b', 'b.id', 'u.branch_id')
+      .select(
+        'u.role',
+        'u.employee_code',
+        'u.manager_id',
+        db.raw('m.full_name as manager_name'),
+        db.raw('m.role as manager_role'),
+        db.raw('m.employee_code as manager_employee_code'),
+        'u.branch_id',
+        db.raw('b.name as branch_name'),
+        db.raw('b.code as branch_code'),
+      )
+      .where('u.id', repId)
+      .first();
+    if (!row) return null;
+    const entry = {
+      role: row.role || null,
+      employee_code: row.employee_code || null,
+      manager_id: row.manager_id || null,
+      manager_name: row.manager_name || null,
+      manager_role: row.manager_role || null,
+      manager_employee_code: row.manager_employee_code || null,
+      branch_id: row.branch_id || null,
+      branch_name: row.branch_name || null,
+      branch_code: row.branch_code || null,
+      expiresAt: now + HIERARCHY_TTL_MS,
+    };
+    hierarchyCache.set(repId, entry);
+    return entry;
+  } catch {
+    // Best-effort: never break ping ingestion because of a metadata lookup.
+    return null;
+  }
+}
+
+// Mexico bounding box (loose). Pings outside this are rejected to avoid
+// (0,0) garbage from misconfigured devices and global VPN exits.
+const MX_BBOX = { minLng: -119, maxLng: -86, minLat: 14, maxLat: 33 };
+
+function inMxBbox(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= MX_BBOX.minLat && lat <= MX_BBOX.maxLat
+    && lng >= MX_BBOX.minLng && lng <= MX_BBOX.maxLng;
+}
+
+// Lazy require to avoid circular load order with visit-sessions module.
+function visitSessionsService() {
+  return require('../visit-sessions/visitSessions.service');
+}
+
+async function pingActiveSession(repId) {
+  if (isExternalDataMode()) return;
+  try {
+    const active = await visitSessionsService().getActiveForUser(repId);
+    if (active) await visitSessionsService().recordPing(active.id);
+  } catch (err) {
+    // Best-effort; we never want to break tracking because of session bookkeeping.
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[tracking] pingActiveSession failed: ${err.message}`);
+    }
+  }
+}
+
+async function recordVisitForActiveSession(repId) {
+  if (isExternalDataMode()) return;
+  try {
+    const active = await visitSessionsService().getActiveForUser(repId);
+    if (active) await visitSessionsService().recordVisit(active.id);
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[tracking] recordVisitForActiveSession failed: ${err.message}`);
+    }
+  }
+}
+
+async function recordPing({ rep_id, rep_name, assignment_id, verification_id, lat, lng, accuracy_meters }) {
+  // Reject obvious garbage early (0,0 sentinel, GPS jitter to other continents)
+  if (!inMxBbox(lat, lng)) {
+    const err = new Error(`Coordinates out of MX bbox: lat=${lat}, lng=${lng}`);
+    err.status = 400;
+    err.code = 'coords_out_of_bbox';
+    throw err;
+  }
+  const repNameSnapshot = rep_name
+    || (isExternalDataMode() ? accessDirectory.getUserById(rep_id)?.full_name : null)
+    || 'Unknown Rep';
+
   if (isExternalDataMode()) {
-    const rep = accessDirectory.getUserById(rep_id);
     const event = {
       repId: rep_id,
-      repName: rep?.full_name || 'Unknown Rep',
+      repName: repNameSnapshot,
       assignmentId: assignment_id || null,
       verificationId: verification_id || null,
       lat,
@@ -31,11 +131,10 @@ async function recordPing({ rep_id, assignment_id, verification_id, lat, lng, ac
     };
   }
 
-  const rep = await db('users').select('full_name').where({ id: rep_id }).first();
   const [ping] = await db('rep_tracking_points')
     .insert({
       rep_id,
-      rep_name_snapshot: rep?.full_name || 'Unknown Rep',
+      rep_name_snapshot: repNameSnapshot,
       verification_id: verification_id || null,
       assignment_id: assignment_id || null,
       lat,
@@ -44,7 +143,119 @@ async function recordPing({ rep_id, assignment_id, verification_id, lat, lng, ac
       point: db.raw(`ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography`, [lng, lat]),
     })
     .returning('*');
+  await pingActiveSession(rep_id);
+  // First-ping bootstrapping: degraded fallback only.
+  //
+  // Phase D shifts home_lat/lng population to a proactive geocoder run on
+  // import (src/services/geocoder.js + nightly Vercel Cron). The reactive
+  // bootstrap below now ONLY fires when the user has no home AND no
+  // home_geocode_source — so it can't overwrite a manual or geocoder-set
+  // home with a noisier first GPS ping.
+  try {
+    if (Number.isFinite(lat) && Number.isFinite(lng)
+        && (accuracy_meters == null || accuracy_meters <= 200)) {
+      let columnsAvailable = true;
+      let u;
+      try {
+        u = await db('users')
+          .select('id', 'home_lat', 'home_geocode_source')
+          .where({ id: rep_id }).first();
+      } catch (e) {
+        // Migration 066 may not be applied yet — fall through to legacy logic.
+        if (/column .* does not exist/.test(String(e.message || ''))) {
+          columnsAvailable = false;
+          u = await db('users').select('id', 'home_lat').where({ id: rep_id }).first();
+        } else { throw e; }
+      }
+      const allow = !u?.home_lat && (!columnsAvailable || u?.home_geocode_source == null || u?.home_geocode_source === 'gps_bootstrap');
+      if (u && allow) {
+        const update = {
+          home_lat: lat,
+          home_lng: lng,
+          home_geohash7: require('../../utils/geohash').encode(lat, lng, 7),
+        };
+        if (columnsAvailable) {
+          update.home_geocoded_at = db.fn.now();
+          update.home_geocode_source = 'gps_bootstrap';
+        }
+        await db('users').where({ id: rep_id }).update(update);
+      }
+    }
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[tracking] home bootstrap failed: ${err.message}`);
+    }
+  }
+  // Push to the live SSE bus so manager dashboards see the rep move in real
+  // time. Payload carries the hierarchy (role, manager, branch) so the
+  // frontend can group/filter by rank without an extra /api/team/cascade
+  // round-trip per event.
+  try {
+    const hier = await fetchHierarchyForRep(rep_id);
+    liveBus.publish({
+      type: 'position',
+      subjectUserId: rep_id,
+      payload: {
+        rep_id,
+        rep_name: repNameSnapshot,
+        lat,
+        lng,
+        accuracy_meters: accuracy_meters || null,
+        recorded_at: ping.recorded_at || new Date().toISOString(),
+        assignment_id: assignment_id || null,
+        role: hier?.role || null,
+        employee_code: hier?.employee_code || null,
+        manager_id: hier?.manager_id || null,
+        manager_name: hier?.manager_name || null,
+        manager_role: hier?.manager_role || null,
+        manager_employee_code: hier?.manager_employee_code || null,
+        branch_id: hier?.branch_id || null,
+        branch_name: hier?.branch_name || null,
+        branch_code: hier?.branch_code || null,
+      },
+    });
+  } catch { /* never break ping ingest because of bus */ }
   return ping;
+}
+
+async function recordPingBatch({ rep_id, rep_name, pings }) {
+  if (!Array.isArray(pings) || pings.length === 0) return { inserted: 0 };
+  const repNameSnapshot = rep_name
+    || (isExternalDataMode() ? accessDirectory.getUserById(rep_id)?.full_name : null)
+    || 'Unknown Rep';
+
+  if (isExternalDataMode()) {
+    let inserted = 0;
+    for (const p of pings) {
+      await externalDeviceLocationRepository.insertLocation({
+        repId: rep_id,
+        repName: repNameSnapshot,
+        assignmentId: p.assignment_id || null,
+        verificationId: p.verification_id || null,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: p.accuracy_meters || null,
+        recordedAt: p.recorded_at || new Date().toISOString(),
+      });
+      inserted += 1;
+    }
+    return { inserted };
+  }
+
+  const rows = pings.map((p) => ({
+    rep_id,
+    rep_name_snapshot: repNameSnapshot,
+    verification_id: p.verification_id || null,
+    assignment_id: p.assignment_id || null,
+    lat: p.lat,
+    lng: p.lng,
+    accuracy_meters: p.accuracy_meters || null,
+    recorded_at: p.recorded_at || db.fn.now(),
+    point: db.raw(`ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography`, [p.lng, p.lat]),
+  }));
+  const result = await db('rep_tracking_points').insert(rows);
+  await pingActiveSession(rep_id);
+  return { inserted: Array.isArray(result) ? result.length : pings.length };
 }
 
 async function checkin({ rep_id, pharmacy_id, assignment_stop_id, lat, lng }) {
@@ -57,13 +268,7 @@ async function checkin({ rep_id, pharmacy_id, assignment_stop_id, lat, lng }) {
 
   let distanceM = null;
   if (pharmacy) {
-    const toRad = (value) => (value * Math.PI) / 180;
-    const earthRadiusM = 6371000;
-    const dLat = toRad(Number(pharmacy.lat) - Number(lat));
-    const dLng = toRad(Number(pharmacy.lng) - Number(lng));
-    const a = Math.sin(dLat / 2) ** 2
-      + Math.cos(toRad(Number(lat))) * Math.cos(toRad(Number(pharmacy.lat))) * Math.sin(dLng / 2) ** 2;
-    distanceM = 2 * earthRadiusM * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    distanceM = haversineMeters(lat, lng, pharmacy.lat, pharmacy.lng);
   }
 
   if (isExternalDataMode()) {
@@ -107,6 +312,8 @@ async function checkin({ rep_id, pharmacy_id, assignment_stop_id, lat, lng }) {
     lng,
     distance_to_pharmacy_m: distanceM,
   });
+
+  await recordVisitForActiveSession(rep_id);
 
   return {
     ...checkinRow,
@@ -210,19 +417,49 @@ async function getLatestPositions() {
       lng: row.lng,
       recorded_at: row.recorded_at,
       full_name: row.rep_name || null,
+      role: null,
+      employee_code: null,
+      manager_id: null,
+      manager_name: null,
+      branch_id: null,
+      branch_name: null,
     }));
   }
 
+  // Joined with `users` + `branches` so the live-ops view can group/filter by
+  // role and hierarchy without a second round-trip. We left-join: a user
+  // deactivated mid-day still surfaces their last position with null hier.
   return db('rep_tracking_points as rtp')
     .distinctOn('rtp.rep_id')
+    .leftJoin('users as u', 'u.id', 'rtp.rep_id')
+    .leftJoin('users as m', 'm.id', 'u.manager_id')
+    .leftJoin('branches as b', 'b.id', 'u.branch_id')
     .select(
       'rtp.rep_id',
       'rtp.lat',
       'rtp.lng',
       'rtp.recorded_at',
-      db.raw('rtp.rep_name_snapshot AS full_name'),
+      db.raw('COALESCE(u.full_name, rtp.rep_name_snapshot) AS full_name'),
+      db.raw('u.role AS role'),
+      db.raw('u.employee_code AS employee_code'),
+      db.raw('u.manager_id AS manager_id'),
+      db.raw('m.full_name AS manager_name'),
+      db.raw('m.role AS manager_role'),
+      db.raw('m.employee_code AS manager_employee_code'),
+      db.raw('u.branch_id AS branch_id'),
+      db.raw('b.name AS branch_name'),
+      db.raw('b.code AS branch_code'),
     )
     .orderBy(['rtp.rep_id', { column: 'rtp.recorded_at', order: 'desc' }]);
 }
 
-module.exports = { recordPing, checkin, getCheckins, getBreadcrumbs, getLatestPositions };
+module.exports = {
+  recordPing,
+  recordPingBatch,
+  checkin,
+  getCheckins,
+  getBreadcrumbs,
+  getLatestPositions,
+  // Exposed for tests; not part of the public API.
+  _internals: { fetchHierarchyForRep, hierarchyCache, HIERARCHY_TTL_MS },
+};

@@ -35,10 +35,16 @@ function deriveRegularizationStatus(outcome) {
 async function getRepNameMap(repIds) {
   if (!repIds.length) return new Map();
   if (isExternalDataMode()) {
-    return new Map(repIds
-      .map((id) => accessDirectory.getUserById(id))
-      .filter(Boolean)
-      .map((user) => [String(user.id), user.full_name]));
+    // Keep the map keyed by the original repId (typically a canonical UUID
+    // from the verifications/visits store). Switching to `user.id` breaks
+    // downstream lookups that match against the original column value.
+    const map = new Map();
+    for (const repId of repIds) {
+      if (!repId) continue;
+      const user = accessDirectory.getUserById(repId);
+      if (user) map.set(String(repId), user.full_name);
+    }
+    return map;
   }
   const reps = await db('users').select('id', 'full_name').whereIn('id', repIds);
   return new Map(reps.map((row) => [String(row.id), row.full_name]));

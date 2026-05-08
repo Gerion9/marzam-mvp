@@ -1,5 +1,9 @@
 const authService = require('../auth/auth.service');
 const { isGlobal } = require('../permissions/permissions');
+const db = require('../../config/database');
+const { canActorManage } = require('../../services/teamScope');
+const { encode: geohashEncode } = require('../../utils/geohash');
+const accessDirectory = require('../../services/accessDirectory');
 
 async function list(req, res, next) {
   try {
@@ -64,4 +68,38 @@ async function resetPassword(req, res, next) {
   }
 }
 
-module.exports = { list, create, update, deactivate, resetPassword };
+/**
+ * Set / update a rep's home depot. Reps can edit their own; a manager can
+ * edit any rep in their subtree.
+ *
+ * Routes through accessDirectory so a virtual id (demo / external mode)
+ * resolves to the canonical UUID before hitting the users table.
+ */
+async function updateHome(req, res, next) {
+  try {
+    const targetId = accessDirectory.toCanonicalId(req.params.id);
+    const { home_lat, home_lng } = req.body || {};
+    if (!Number.isFinite(home_lat) || !Number.isFinite(home_lng)) {
+      return res.status(400).json({ error: 'home_lat / home_lng must be numbers' });
+    }
+    if (home_lat < -90 || home_lat > 90 || home_lng < -180 || home_lng > 180) {
+      return res.status(400).json({ error: 'home_lat / home_lng out of range' });
+    }
+    if (req.user.id !== targetId && !req.user.is_global) {
+      if (!await canActorManage(req.user.id, targetId)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    }
+    const [updated] = await db('users').where({ id: targetId }).update({
+      home_lat,
+      home_lng,
+      home_geohash7: geohashEncode(home_lat, home_lng, 7),
+    }).returning(['id', 'home_lat', 'home_lng', 'home_geohash7']);
+    if (!updated) return res.status(404).json({ error: 'User not found' });
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { list, create, update, deactivate, resetPassword, updateHome };

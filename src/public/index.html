@@ -6,51 +6,185 @@
   <title>Marzam — Iniciar Sesión</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/app-shell.css">
 </head>
-<body class="bg-gradient-to-br from-[#1b365d] via-[#152845] to-[#1b365d] min-h-screen flex items-center justify-center p-4">
+<body class="bg-gradient-to-br from-[#1b365d] via-[#152845] to-[#0f1f3a] min-h-screen flex items-center justify-center p-4">
 
-  <div class="w-full max-w-sm">
-    <div class="text-center mb-8">
-      <img src="/images/logo_marzam.svg" alt="Logo de Marzam" class="h-14 w-auto mx-auto mb-4">
-      <p class="text-blue-200 text-sm mt-1">Plataforma de Captura de Mercado Farmacéutico</p>
+  <div class="w-full max-w-md">
+    <div class="text-center mb-7">
+      <img src="/images/logo_marzam.svg" alt="Logo de Marzam" class="h-14 w-auto mx-auto mb-3">
+      <p class="text-blue-200 text-sm">Plataforma Comercial Marzam · Marketing en Campo</p>
     </div>
 
-    <form id="login-form" class="bg-white rounded-2xl shadow-2xl p-8 space-y-5">
+    <!-- Demo quick-picks: hidden by default; shown only in non-production envs
+         (toggled by the inline script after probing /api/health). Hiding via
+         `hidden` instead of `display:none` so production users never see it
+         even if the env probe fails. -->
+    <div id="demo-quick-picks" class="bg-white/10 backdrop-blur-xl rounded-2xl shadow-xl p-5 border border-white/20 mb-4" hidden>
+      <p class="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-3 text-center">Probar con cuenta demo</p>
+      <div class="grid grid-cols-2 gap-2">
+        <button data-demo-role="director_sucursal"  class="demo-btn role-gradient--director_sucursal">
+          <div class="demo-btn-icon">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M12 2L4 7l8 5 8-5-8-5zM4 17l8 5 8-5M4 12l8 5 8-5"/></svg>
+          </div>
+          <div class="text-left flex-1">
+            <div class="font-bold text-sm leading-tight">Director</div>
+            <div class="text-[10px] opacity-80">Vista completa</div>
+          </div>
+        </button>
+        <button data-demo-role="gerente_ventas" class="demo-btn role-gradient--gerente_ventas">
+          <div class="demo-btn-icon">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="17" cy="7" r="3"/></svg>
+          </div>
+          <div class="text-left flex-1">
+            <div class="font-bold text-sm leading-tight">Gerente</div>
+            <div class="text-[10px] opacity-80">Sup + Reps</div>
+          </div>
+        </button>
+        <button data-demo-role="supervisor" class="demo-btn role-gradient--supervisor">
+          <div class="demo-btn-icon">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m22 11-3 3-1.5-1.5"/></svg>
+          </div>
+          <div class="text-left flex-1">
+            <div class="font-bold text-sm leading-tight">Supervisor</div>
+            <div class="text-[10px] opacity-80">Mis Reps</div>
+          </div>
+        </button>
+        <button data-demo-role="representante" class="demo-btn role-gradient--representante">
+          <div class="demo-btn-icon">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          </div>
+          <div class="text-left flex-1">
+            <div class="font-bold text-sm leading-tight">Representante</div>
+            <div class="text-[10px] opacity-80">Mi ruta</div>
+          </div>
+        </button>
+      </div>
+    </div>
+
+    <!-- Real login -->
+    <form id="login-form" class="bg-white rounded-2xl shadow-2xl p-6 space-y-4">
+      <p id="login-form-heading" class="text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Inicia con tu cuenta</p>
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1" for="email">Correo electrónico</label>
-        <input id="email" type="email" autofocus
-          class="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+        <label class="block text-xs font-bold text-slate-700 mb-1" for="email">Correo electrónico</label>
+        <input id="email" type="email" autocomplete="email"
+          class="login-input w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
           placeholder="usuario@marzam.mx">
       </div>
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1" for="password">Contraseña</label>
-        <input id="password" type="password"
-          class="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+        <label class="block text-xs font-bold text-slate-700 mb-1" for="password">Contraseña</label>
+        <input id="password" type="password" autocomplete="current-password"
+          class="login-input w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
           placeholder="••••••••">
       </div>
-      <div id="login-error" class="text-red-600 text-sm hidden"></div>
+      <div id="login-error" class="text-rose-600 text-xs hidden"></div>
       <button type="submit" id="btn-login"
-        class="w-full py-2.5 bg-[#e5730a] hover:bg-[#c96205] text-white font-semibold rounded-lg transition disabled:opacity-50">
+        class="w-full py-2.5 bg-[#e5730a] hover:bg-[#c96205] text-white font-bold text-sm rounded-lg transition disabled:opacity-50">
         Iniciar sesión
       </button>
     </form>
 
-    <p class="text-center text-blue-400/60 text-xs mt-6">Desarrollado por BlackPrint</p>
+    <p class="text-center text-blue-300/60 text-[11px] mt-5">Desarrollado por BlackPrint</p>
   </div>
+
+  <style>
+    .demo-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      color: white;
+      transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      cursor: pointer;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+      border: none;
+    }
+    .demo-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.2); }
+    .demo-btn:active { transform: translateY(0); }
+    .demo-btn-icon {
+      width: 36px; height: 36px;
+      background: rgba(255,255,255,0.25);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    /* Mobile: 16px font-size on inputs prevents iOS auto-zoom on focus.
+       Desktop scales back down for tighter density. */
+    .login-input { font-size: 16px; }
+    @media (min-width: 768px) {
+      .login-input { font-size: 14px; }
+    }
+  </style>
 
   <script src="/js/api.js"></script>
   <script>
-    const isDemo = localStorage.getItem('marzam_demo') === '1';
-    if (API.isAuth() || isDemo) {
-      const u = API.user();
-      if (u?.role === 'manager') {
-        location.href = '/manager.html';
-      } else if (u?.role === 'field_rep') {
-        location.href = '/rep.html';
-      } else {
-        localStorage.clear();
-      }
+    const DEMO_CREDS = {
+      director_sucursal: { email: 'director@demo.marzam.mx', password: 'Demo2026!' },
+      gerente_ventas:    { email: 'gerente@demo.marzam.mx', password: 'Demo2026!' },
+      supervisor:        { email: 'supervisor@demo.marzam.mx', password: 'Demo2026!' },
+      representante:     { email: 'rep@demo.marzam.mx', password: 'Demo2026!' },
+    };
+
+    // Show the demo quick-picks only when the backend reports a non-production
+    // env (development / preview / etc). In production we keep the block hidden
+    // so the login screen shows only the real-account form. Failures default
+    // to "stay hidden" — never show demo by accident on a misconfigured deploy.
+    (async () => {
+      try {
+        const r = await fetch('/api/health', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j && j.env && j.env !== 'production') {
+          const el = document.getElementById('demo-quick-picks');
+          if (el) el.hidden = false;
+          // When the demo block is shown, the form heading reads as a
+          // continuation ("o inicia…"). Otherwise we keep the cleaner
+          // standalone heading set in the markup.
+          const h = document.getElementById('login-form-heading');
+          if (h) h.textContent = 'o inicia con tu cuenta real';
+        }
+      } catch { /* keep hidden */ }
+    })();
+
+    // Landing route depends on role: admin → /admin, everyone else → /app
+    function landingFor(user) {
+      const role = String(user?.role || '').toLowerCase();
+      return (role === 'admin' || role === 'national_admin') ? '/admin' : '/app';
     }
+
+    // If already authenticated, jump to landing
+    if (API.isAuth()) {
+      const u = API.user();
+      if (u && (u.role || u.email)) location.href = landingFor(u);
+    }
+
+    // Demo quick-picks
+    document.querySelectorAll('[data-demo-role]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const role = btn.dataset.demoRole;
+        const creds = DEMO_CREDS[role];
+        if (!creds) return;
+        btn.disabled = true;
+        try {
+          const user = await API.login(creds.email, creds.password);
+          localStorage.setItem('marzam_demo', '1');
+          location.href = landingFor(user);
+        } catch (err) {
+          // Fallback offline-only demo (cuando el backend no está corrido)
+          const demoUser = {
+            id: `u-${role.split('_')[0].slice(0, 3)}-001`,
+            email: creds.email,
+            full_name: btn.querySelector('.font-bold').textContent + ' Demo',
+            role,
+          };
+          localStorage.setItem('token', `demo_${role}`);
+          localStorage.setItem('user', JSON.stringify(demoUser));
+          localStorage.setItem('marzam_demo', '1');
+          location.href = landingFor(demoUser);
+        }
+      });
+    });
 
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -64,9 +198,10 @@
           document.getElementById('email').value.trim(),
           document.getElementById('password').value,
         );
-        location.href = user.role === 'manager' ? '/manager.html' : '/rep.html';
+        localStorage.removeItem('marzam_demo');
+        location.href = landingFor(user);
       } catch (err) {
-        errEl.textContent = err.error || 'Error al iniciar sesión. Verifica tus credenciales.';
+        errEl.textContent = err.error || 'Error al iniciar sesión.';
         errEl.classList.remove('hidden');
         btn.disabled = false;
         btn.textContent = 'Iniciar sesión';

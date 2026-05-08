@@ -14,10 +14,13 @@ router.get(
   controller.list,
 );
 
+// User CRUD (create/update/deactivate/reset-password) is admin-only per
+// Marzam Execution Doc §3. Listing is allowed to all management roles since
+// supervisores and gerentes need to see their team rosters.
 router.post(
   '/',
   authenticate,
-  authorize({ roles: ['national_admin', 'regional_manager'] }),
+  authorize({ adminOnly: true }),
   validate({
     email: { required: true, type: 'string' },
     password: { required: true, type: 'string' },
@@ -25,7 +28,11 @@ router.post(
     role: {
       required: true,
       type: 'string',
-      oneOf: ['national_admin', 'regional_manager', 'area_coordinator', 'field_rep'],
+      oneOf: [
+        'admin',
+        'director_sucursal', 'gerente_ventas', 'supervisor', 'representante',
+        'national_admin', 'regional_manager', 'area_coordinator', 'field_rep',
+      ],
     },
   }),
   auditLog('user.created'),
@@ -35,7 +42,7 @@ router.post(
 router.patch(
   '/:id',
   authenticate,
-  authorize({ roles: ['national_admin', 'regional_manager'] }),
+  authorize({ adminOnly: true }),
   auditLog('user.updated'),
   controller.update,
 );
@@ -43,7 +50,7 @@ router.patch(
 router.delete(
   '/:id',
   authenticate,
-  authorize({ roles: ['national_admin', 'regional_manager'] }),
+  authorize({ adminOnly: true }),
   auditLog('user.deactivated'),
   controller.deactivate,
 );
@@ -51,9 +58,22 @@ router.delete(
 router.post(
   '/:id/reset-password',
   authenticate,
-  authorize({ roles: ['national_admin', 'regional_manager'] }),
+  authorize({ adminOnly: true }),
   auditLog('user.password_reset'),
   controller.resetPassword,
+);
+
+// Set / update a rep's home depot. The rep can update their own home; a
+// manager can update any rep they manage (canActorManage).
+router.put(
+  '/:id/home',
+  authenticate,
+  validate({
+    home_lat: { required: true, type: 'number' },
+    home_lng: { required: true, type: 'number' },
+  }),
+  auditLog('user.home_updated'),
+  controller.updateHome,
 );
 
 module.exports = router;

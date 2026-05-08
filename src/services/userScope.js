@@ -1,7 +1,6 @@
 const territoriesRepository = require('../repositories/territoriesRepository');
 const { isExternalDataMode } = require('../repositories/runtime');
-
-const GLOBAL_ROLES = new Set(['national_admin', 'manager']);
+const { normalizeRole, isGlobalRole: isGlobalRoleConst } = require('../constants/roles');
 
 /**
  * Resolve the territorial scope of a user.
@@ -15,18 +14,19 @@ const GLOBAL_ROLES = new Set(['national_admin', 'manager']);
  *     dataScope: string|null                  // legacy data_scope flag (virtual directory)
  *   }
  *
- * For global roles (national_admin / legacy manager), isGlobal=true and the
- * territory arrays are empty — meaning "no filter".
+ * For global roles (admin / director_sucursal and their legacy aliases),
+ * isGlobal=true and the territory arrays are empty — meaning "no filter".
  */
 async function computeUserScope(user) {
   if (!user) {
     return { isGlobal: false, territoryIds: [], accessibleTerritoryIds: [], role: null, dataScope: null };
   }
 
-  const role = user.role;
+  const rawRole = user.role;
+  const role = normalizeRole(rawRole) || rawRole;
   const dataScope = user.data_scope || null;
 
-  if (GLOBAL_ROLES.has(role)) {
+  if (isGlobalRoleConst(role)) {
     return { isGlobal: true, territoryIds: [], accessibleTerritoryIds: [], role, dataScope };
   }
 
@@ -50,7 +50,7 @@ async function computeUserScope(user) {
 }
 
 function isGlobalRole(role) {
-  return GLOBAL_ROLES.has(role);
+  return isGlobalRoleConst(normalizeRole(role));
 }
 
 module.exports = { computeUserScope, isGlobalRole };

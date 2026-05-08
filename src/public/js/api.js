@@ -20,6 +20,15 @@ const API = (() => {
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${BASE}${path}`, opts);
     if (res.status === 401 && !_suppressAuthRedirect) {
+      // In demo mode the in-memory router intercepts most calls but a few
+      // endpoints fall through to the real backend (e.g. /poblaciones).
+      // Don't redirect for those — the demo app keeps rendering with empty
+      // data instead of bouncing to login.
+      const isDemo = localStorage.getItem('marzam_demo') === '1';
+      const t = token() || '';
+      if (isDemo || t.startsWith('demo_')) {
+        throw { status: 401, error: 'Endpoint no disponible en demo' };
+      }
       localStorage.clear(); location.href = '/'; return;
     }
     const data = res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text();

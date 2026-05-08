@@ -1,0 +1,271 @@
+/* ============================================================
+   Wizard "Alta de farmacia nueva" — mobile first.
+   Targets:
+     - Samsung A20/A20s/Redmi 10A/10C   → ~360 CSS px (720x1560/1600/1650)
+     - Samsung A30/A40 / Redmi 9        → ~360 CSS px (1080x2340)
+     - Desktop                           → ≥1024px → layout 2 columnas
+   ============================================================ */
+
+.onb-backdrop {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  /* dvh follows the visible viewport (shrinks with on-screen keyboard or
+     mobile URL bar); falls back to vh on browsers without dvh support. */
+  height: 100vh;
+  height: 100dvh;
+  z-index: 200;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(8px);
+  display: flex; align-items: stretch; justify-content: center;
+  padding: 0;
+}
+.onb-shell {
+  background: #fff;
+  width: 100%;
+  max-width: 100%;
+  /* Same dvh trick — keeps the footer accessible when the keyboard opens. */
+  height: 100%;
+  height: 100dvh;
+  /* CRITICAL: min-height: 0 lets flex children (.onb-body) shrink properly.
+     Without this, some browsers refuse to shrink the body and the footer
+     gets pushed off-screen on small viewports / when keyboard is open. */
+  min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  /* Respeto a la safe-area de iOS y a la barra inferior de Android */
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+@media (min-width: 768px) {
+  .onb-backdrop { padding: 24px; height: 100vh; height: 100dvh; }
+  .onb-shell {
+    max-width: 920px;
+    height: min(900px, calc(100vh - 48px));
+    height: min(900px, calc(100dvh - 48px));
+    border-radius: 24px;
+    box-shadow: 0 30px 80px rgba(0,0,0,.25);
+  }
+}
+
+/* Header */
+.onb-header {
+  flex-shrink: 0;
+  padding: 14px 16px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(180deg,#fff,#f8fafc);
+}
+.onb-header h2 { font-size: 16px; font-weight: 800; color: #0f172a; line-height: 1.1; }
+.onb-header p { font-size: 11px; color: #64748b; margin-top: 2px; }
+.onb-close {
+  width: 40px; height: 40px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  color: #64748b; background: #f1f5f9; border: 0; cursor: pointer;
+}
+.onb-close:hover { background: #e2e8f0; color: #0f172a; }
+
+/* Progress */
+.onb-progress {
+  flex-shrink: 0;
+  display: flex; gap: 4px; padding: 10px 16px 12px;
+}
+.onb-progress span {
+  flex: 1; height: 4px; border-radius: 999px; background: #e2e8f0;
+  transition: background .25s ease;
+}
+.onb-progress span.done { background: #10b981; }
+.onb-progress span.active { background: #e5730a; }
+
+/* Body */
+.onb-body {
+  flex: 1 1 auto;
+  /* min-height: 0 is the well-known fix for flex children that need to shrink
+     to fit their parent — without it, the body stays as tall as its content
+     and pushes the footer off-screen on small mobile viewports. */
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 18px 24px;
+  -webkit-overflow-scrolling: touch;
+  /* Prevent iOS rubber-band scroll from leaking into the page beneath. */
+  overscroll-behavior: contain;
+}
+.onb-step-title {
+  font-size: 22px; font-weight: 900; color: #0f172a; line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+.onb-step-sub {
+  font-size: 13px; color: #475569; margin-top: 6px; line-height: 1.45;
+}
+.onb-section { margin-top: 18px; }
+
+/* Tarjetas de opción */
+.onb-options { display: grid; gap: 10px; }
+.onb-option {
+  display: flex; align-items: center; gap: 14px;
+  padding: 16px;
+  border: 2px solid #e2e8f0; border-radius: 16px;
+  background: #fff; cursor: pointer; text-align: left;
+  transition: all .18s ease;
+  font-family: inherit;
+  width: 100%;
+  min-height: 64px;
+}
+.onb-option:hover { border-color: #cbd5e1; }
+.onb-option.selected {
+  border-color: #e5730a; background: #fff7ed;
+  box-shadow: 0 4px 12px rgba(229,115,10,.12);
+}
+.onb-option .onb-option-icon {
+  width: 40px; height: 40px; border-radius: 12px;
+  background: #f1f5f9; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; color: #475569;
+}
+.onb-option.selected .onb-option-icon { background: #ffedd5; color: #c2410c; }
+.onb-option .onb-option-body { flex: 1; min-width: 0; }
+.onb-option .onb-option-title { font-weight: 700; font-size: 15px; color: #0f172a; }
+.onb-option .onb-option-desc  { font-size: 12px; color: #64748b; margin-top: 2px; }
+
+/* Inputs */
+.onb-field { display: block; margin-top: 14px; }
+.onb-label {
+  display: block; font-size: 12px; font-weight: 700; color: #334155;
+  margin-bottom: 6px; letter-spacing: .02em;
+}
+.onb-label .opt { color: #94a3b8; font-weight: 500; }
+.onb-input, .onb-textarea {
+  width: 100%; box-sizing: border-box;
+  border: 2px solid #e2e8f0; border-radius: 12px;
+  padding: 14px 14px;
+  font-size: 16px; /* >=16px para que iOS no haga zoom al focar */
+  background: #fff; color: #0f172a;
+  font-family: inherit;
+  transition: border-color .15s ease;
+}
+.onb-input:focus, .onb-textarea:focus { outline: none; border-color: #e5730a; }
+.onb-textarea { min-height: 90px; resize: vertical; }
+
+/* Doc card (cada documento que hay que subir) */
+.onb-doclist { display: grid; gap: 12px; margin-top: 14px; }
+.onb-doc {
+  border: 2px solid #e2e8f0; border-radius: 16px;
+  padding: 14px; background: #fff;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.onb-doc.uploaded { border-color: #10b981; background: #ecfdf5; }
+.onb-doc-head { display: flex; align-items: center; gap: 12px; }
+.onb-doc-num {
+  width: 32px; height: 32px; border-radius: 10px;
+  background: #f1f5f9; color: #475569;
+  font-weight: 800; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.onb-doc.uploaded .onb-doc-num { background: #10b981; color: #fff; }
+.onb-doc-name { flex: 1; font-weight: 700; font-size: 14px; color: #0f172a; }
+.onb-doc-status { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+.onb-doc.uploaded .onb-doc-status { color: #059669; }
+.onb-doc-thumb {
+  width: 100%; max-height: 220px;
+  border-radius: 12px; object-fit: cover;
+  background: #f8fafc;
+}
+.onb-doc-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.onb-doc-actions.single { grid-template-columns: 1fr; }
+.onb-btn-cap {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 13px;
+  border-radius: 12px; border: 2px solid #e2e8f0;
+  background: #fff; color: #0f172a;
+  font-weight: 700; font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  min-height: 48px;
+}
+.onb-btn-cap:hover { border-color: #cbd5e1; background: #f8fafc; }
+.onb-btn-cap svg { width: 18px; height: 18px; }
+.onb-btn-cap.primary {
+  border-color: #e5730a; color: #c2410c;
+  background: #fff7ed;
+}
+
+/* Footer (acciones) */
+.onb-footer {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: grid; grid-template-columns: auto 1fr; gap: 10px;
+  padding: 12px 16px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+  border-top: 1px solid #f1f5f9;
+  background: #fff;
+}
+.onb-btn {
+  appearance: none; border: 0; cursor: pointer;
+  font-family: inherit; font-weight: 800; font-size: 15px;
+  border-radius: 14px;
+  padding: 14px 18px;
+  min-height: 52px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  transition: transform .12s ease, opacity .15s ease, background .15s ease;
+}
+.onb-btn:active { transform: scale(.98); }
+.onb-btn:disabled { opacity: .5; cursor: not-allowed; }
+.onb-btn-back {
+  background: #f1f5f9; color: #334155;
+}
+.onb-btn-next {
+  background: linear-gradient(135deg, #e5730a, #f97316);
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(229,115,10,.28);
+}
+.onb-btn-next:hover { box-shadow: 0 10px 26px rgba(229,115,10,.36); }
+.onb-btn-danger { background: #ef4444; color: #fff; }
+
+/* Confirm modal interno (overlay) */
+.onb-confirm-mask {
+  position: absolute; inset: 0;
+  background: rgba(15,23,42,.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10; padding: 16px;
+}
+.onb-confirm-card {
+  background: #fff; border-radius: 20px; max-width: 380px; width: 100%;
+  padding: 22px; box-shadow: 0 20px 50px rgba(0,0,0,.25);
+}
+.onb-confirm-card h3 { font-size: 18px; font-weight: 900; color: #0f172a; }
+.onb-confirm-card p  { font-size: 13px; color: #475569; margin-top: 8px; line-height: 1.5; }
+.onb-confirm-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 16px; }
+
+/* Resumen */
+.onb-summary { display: grid; gap: 8px; }
+.onb-summary-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; background: #f8fafc; border-radius: 10px;
+}
+.onb-summary-row .k { font-size: 12px; color: #64748b; font-weight: 600; }
+.onb-summary-row .v { font-size: 13px; color: #0f172a; font-weight: 700; text-align: right; }
+
+/* Banner GPS y notificaciones inline */
+.onb-banner {
+  border-radius: 12px; padding: 12px 14px;
+  font-size: 12px; font-weight: 600; line-height: 1.45;
+  display: flex; gap: 10px;
+}
+.onb-banner.info  { background: #eff6ff; color: #1d4ed8; }
+.onb-banner.warn  { background: #fef3c7; color: #92400e; }
+.onb-banner.ok    { background: #ecfdf5; color: #065f46; }
+.onb-banner.error { background: #fef2f2; color: #b91c1c; }
+
+/* Ajustes específicos para resoluciones de campo */
+@media (max-width: 380px) {
+  /* Samsung A20 / Redmi 10A / 10C en CSS px ronda 360px */
+  .onb-step-title { font-size: 20px; }
+  .onb-body { padding: 14px 14px 20px; }
+  .onb-option { padding: 14px; min-height: 60px; }
+  .onb-btn { font-size: 14px; min-height: 48px; padding: 12px 14px; }
+  .onb-input, .onb-textarea { font-size: 16px; padding: 12px; }
+}
+
+/* Tap-targets seguros: nada por debajo de 44px en mobile */
+.onb-shell button, .onb-shell label.onb-btn-cap {
+  -webkit-tap-highlight-color: transparent;
+}

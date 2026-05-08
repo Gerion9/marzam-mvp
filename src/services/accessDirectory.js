@@ -1,22 +1,49 @@
 const config = require('../config');
 const { v5: uuidv5 } = require('uuid');
+const { ROLES, ROLE_VALUES, normalizeRole } = require('../constants/roles');
 
 const DEVICE_USER_NAMESPACE = '74e8d182-c5ba-4f5c-bffe-7549315401a3';
+
+// Legacy roles still accepted while the rename rolls out.
+const LEGACY_ROLES = new Set(['manager', 'field_rep']);
 
 function pad(num) {
   return String(num).padStart(3, '0');
 }
 
+/**
+ * Accept any role in the canonical enum (`director_sucursal`, `gerente_ventas`,
+ * `supervisor`, `representante`) OR the two legacy values (`manager`,
+ * `field_rep`) that older tracking/seed code still emits.
+ *
+ * Falls back to `representante` (the safest least-privilege role) when an
+ * unknown value is provided.
+ */
+function resolveRole(role) {
+  if (!role) return ROLES.REPRESENTANTE;
+  const canonical = normalizeRole(role);
+  if (ROLE_VALUES.includes(canonical)) return canonical;
+  if (LEGACY_ROLES.has(role)) return role;
+  return ROLES.REPRESENTANTE;
+}
+
 function normalizeCustomUser(user, index) {
   return {
-    id: String(user.id || `custom${pad(index + 1)}`),
+    id: String(user.id || user.employee_code || `custom${pad(index + 1)}`),
     email: String(user.email || '').trim().toLowerCase(),
     password: String(user.password || config.authDirectory.repDefaultPassword),
     full_name: String(user.full_name || user.name || `Custom User ${index + 1}`),
-    role: user.role === 'manager' ? 'manager' : 'field_rep',
+    role: resolveRole(user.role),
     is_active: user.is_active !== false,
     db_user_id: user.db_user_id || uuidv5(String(user.id || user.email || `custom${index + 1}`), DEVICE_USER_NAMESPACE),
     data_scope: user.data_scope || null,
+    // Marzam-specific identity tokens propagated end-to-end so the
+    // /api/marzam/* read-through layer can scope by employee_code.
+    employee_code: user.employee_code || null,
+    employee_number: user.employee_number || null,
+    branch_code: user.branch_code || null,
+    manager_code: user.manager_code || null,
+    must_change_password: user.must_change_password !== false,
   };
 }
 
@@ -63,7 +90,11 @@ function listUsers() {
 }
 
 function listFieldReps() {
-  return listUsers().filter((user) => user.role === 'field_rep' && user.is_active);
+  // Treat both the legacy `field_rep` and the canonical `representante`
+  // as field reps for downstream consumers (assignments, reporting).
+  return listUsers().filter((user) => (
+    (user.role === 'field_rep' || user.role === ROLES.REPRESENTANTE) && user.is_active
+  ));
 }
 
 function sanitizeUser(user) {
@@ -76,11 +107,27 @@ function sanitizeUser(user) {
     is_active: user.is_active,
     db_user_id: user.db_user_id,
     data_scope: user.data_scope || null,
+    employee_code: user.employee_code || null,
+    employee_number: user.employee_number || null,
+    branch_code: user.branch_code || null,
+    manager_code: user.manager_code || null,
+    must_change_password: user.must_change_password === true,
   };
 }
 
+// `id` may be the virtual identifier (`u-dir-001`), the canonical UUID
+// (`db_user_id`), the `employee_code`, or the email. We try each in order
+// so backend code paths post-JWT-UUID-migration still resolve correctly.
 function getUserById(id) {
-  const user = listUsers().find((row) => String(row.id) === String(id) && row.is_active);
+  if (id == null) return null;
+  const needle = String(id).trim();
+  const lower = needle.toLowerCase();
+  const user = listUsers().find((row) => row.is_active && (
+    String(row.id) === needle
+    || String(row.db_user_id).toLowerCase() === lower
+    || String(row.employee_code || '').toLowerCase() === lower
+    || String(row.email || '').toLowerCase() === lower
+  ));
   return sanitizeUser(user);
 }
 
@@ -96,9 +143,43 @@ function getUserByDbUserId(dbUserId) {
   return sanitizeUser(user);
 }
 
+// Resolves any identifier (virtual id, UUID, employee_code, email) to the
+// canonical UUID stored in `users.id`. Idempotent for already-UUID inputs.
 function getDbUserId(userId) {
-  const user = listUsers().find((row) => String(row.id) === String(userId) && row.is_active);
+  const user = getUserById(userId);
   return user?.db_user_id || null;
+}
+
+// Lightweight UUID v1-v5 detector. We only need to disambiguate "is this
+// already a canonical UUID?" from "is this a virtual id / employee_code /
+// email that needs translation?" — RFC 4122 strict validation is overkill.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isCanonicalUuid(input) {
+  return typeof input === 'string' && UUID_RE.test(input.trim());
+}
+
+/**
+ * Translate any identifier shape into the canonical `users.id` UUID.
+ *
+ * Accepts:
+ *   - canonical UUID         → returned unchanged
+ *   - virtual id ('u-dir-001') → uuidv5(id, NS)
+ *   - employee_code ('UEA01')  → uuidv5(<owning user id>, NS)
+ *   - email                    → uuidv5(<owning user id>, NS)
+ *
+ * Returns the original input when nothing matches, so callers can decide
+ * whether to fail loudly or attempt a DB query as a fallback (DB lookups by
+ * UUID-shaped strings are safe; lookups by raw virtual ids would crash on
+ * uuid columns, which is exactly what we want to avoid here).
+ */
+function toCanonicalId(input) {
+  if (input == null) return null;
+  const value = String(input).trim();
+  if (!value) return null;
+  if (isCanonicalUuid(value)) return value;
+  const uuid = getDbUserId(value);
+  return uuid || value;
 }
 
 function authenticate(email, password) {
@@ -120,7 +201,9 @@ function listUsersByScope(scope) {
 }
 
 function listFieldRepsByScope(scope) {
-  return listUsersByScope(scope).filter((u) => u.role === 'field_rep' && u.is_active);
+  return listUsersByScope(scope).filter((u) => (
+    (u.role === 'field_rep' || u.role === ROLES.REPRESENTANTE) && u.is_active
+  ));
 }
 
 module.exports = {
@@ -132,5 +215,7 @@ module.exports = {
   getUserByEmail,
   getUserByDbUserId,
   getDbUserId,
+  toCanonicalId,
+  isCanonicalUuid,
   authenticate,
 };

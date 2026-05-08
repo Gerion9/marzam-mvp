@@ -2,6 +2,7 @@ const path = require('path');
 const { Storage } = require('@google-cloud/storage');
 
 const config = require('../config');
+const { assertImageBuffer } = require('./imageMagicBytes');
 
 let storageClient = null;
 
@@ -105,6 +106,11 @@ async function uploadVerificationPhoto({ state, municipality, verificationId, ph
     err.status = 500;
     throw err;
   }
+
+  // [S9] Verify the buffer's magic bytes match the claimed Content-Type.
+  // Multer's MIME filter in visits.routes.js trusts the client header, which
+  // is easily spoofed. assertImageBuffer throws status=400 on mismatch.
+  assertImageBuffer(buffer, contentType);
 
   const bucketName = config.gcs.bucketName;
   const objectPath = buildObjectPath({

@@ -1,0 +1,597 @@
+/* =============================================================
+   App Shell — unified UI for the Marzam multi-level platform.
+   Loads on top of app.css.
+   ============================================================= */
+
+/* ─── Role badges ──────────────────────────────────────────── */
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: #fff;
+  background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+}
+.role-badge--director_sucursal {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  box-shadow: 0 1px 3px rgba(245, 158, 11, 0.4);
+}
+.role-badge--gerente_ventas {
+  background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.4);
+}
+.role-badge--supervisor {
+  background: linear-gradient(135deg, #34d399 0%, #10b981 100%);
+  box-shadow: 0 1px 3px rgba(16, 185, 129, 0.4);
+}
+.role-badge--representante {
+  background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%);
+  box-shadow: 0 1px 3px rgba(229, 115, 10, 0.4);
+}
+
+.role-gradient { background: linear-gradient(135deg, #1b365d 0%, #2c4d80 100%); }
+.role-gradient.role-gradient--director_sucursal { background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); }
+.role-gradient.role-gradient--gerente_ventas    { background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); }
+.role-gradient.role-gradient--supervisor        { background: linear-gradient(135deg, #34d399 0%, #10b981 100%); }
+.role-gradient.role-gradient--representante     { background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%); }
+
+/* ─── Sidebar nav buttons ─────────────────────────────────── */
+.nav-tab {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 14px;
+  color: #475569;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  width: 100%;
+}
+.nav-tab:hover { background: rgba(27, 54, 93, 0.06); color: #1b365d; }
+.nav-tab.active {
+  background: linear-gradient(135deg, rgba(27, 54, 93, 0.1) 0%, rgba(229, 115, 10, 0.1) 100%);
+  color: #1b365d;
+}
+.nav-tab.active::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 18%;
+  bottom: 18%;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #1b365d 0%, #e5730a 100%);
+}
+.nav-icon-box {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.6);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.nav-tab.active .nav-icon-box {
+  background: linear-gradient(135deg, #1b365d 0%, #2c4d80 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(27, 54, 93, 0.3);
+}
+.tab-text-wrapper {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: all 0.25s ease;
+  font-size: 13px;
+  font-weight: 600;
+}
+.group\/sidebar:hover .tab-text-wrapper { opacity: 1; width: 130px; }
+@media (max-width: 767px) {
+  .nav-tab { flex-direction: column; gap: 2px; padding: 6px 8px; flex: 1; min-width: 0; }
+  .nav-tab.active::before { display: none; }
+  .nav-icon-box { width: 28px; height: 28px; }
+  .tab-text-wrapper { opacity: 1; width: auto; font-size: 9px; font-weight: 700; }
+  .nav-tab .tab-text-wrapper { opacity: 1; width: auto; }
+}
+
+/* ─── Mode pill (Mis rutas / Mi equipo) ──────────────────── */
+.mode-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  transition: all 0.25s ease;
+  white-space: nowrap;
+}
+.mode-pill-btn:hover { color: #1b365d; }
+.mode-pill-btn.active {
+  background: linear-gradient(135deg, #1b365d 0%, #2c4d80 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(27, 54, 93, 0.25);
+}
+
+/* ─── Live presence indicator ───────────────────────────── */
+.presence-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  flex-shrink: 0;
+}
+.presence-dot--live { background: #10b981; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); animation: pulse-live 2s infinite; }
+.presence-dot--idle { background: #f59e0b; box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); animation: pulse-idle 2.5s infinite; }
+.presence-dot--offline { background: #cbd5e1; }
+
+@keyframes pulse-live {
+  0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+  70%  { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+@keyframes pulse-idle {
+  0%   { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+  70%  { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+@keyframes pulse-live-ring {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50%      { transform: scale(1.4); opacity: 0.2; }
+}
+
+.animate-pulse-live { animation: pulse-live 1.6s infinite; }
+
+/* ─── Skeleton shimmer ─────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #e2e8f0 0%, #f1f5f9 50%, #e2e8f0 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite linear;
+  border-radius: 8px;
+}
+
+/* ─── Team cards ───────────────────────────────────────────── */
+.team-card {
+  background: white;
+  border-radius: 16px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  cursor: pointer;
+}
+.team-card:hover {
+  transform: translateY(-2px);
+  border-color: #cbd5e1;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+.team-card--live { border-left: 3px solid #10b981; }
+.team-card--idle { border-left: 3px solid #f59e0b; }
+.team-card--offline { border-left: 3px solid #cbd5e1; }
+
+.team-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 14px;
+  color: white;
+  flex-shrink: 0;
+  letter-spacing: 0.5px;
+}
+.team-avatar--director_sucursal { background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); }
+.team-avatar--gerente_ventas    { background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); }
+.team-avatar--supervisor        { background: linear-gradient(135deg, #34d399 0%, #10b981 100%); }
+.team-avatar--representante     { background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%); }
+
+/* Sparkline */
+.sparkline { display: flex; align-items: flex-end; gap: 2px; height: 22px; }
+.sparkline > i {
+  display: block;
+  width: 4px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #3b82f6 0%, #60a5fa 100%);
+  transition: all 0.25s ease;
+}
+.sparkline > i.warn { background: linear-gradient(180deg, #f59e0b 0%, #fbbf24 100%); }
+.sparkline > i.danger { background: linear-gradient(180deg, #ef4444 0%, #f87171 100%); }
+.sparkline > i.good { background: linear-gradient(180deg, #10b981 0%, #34d399 100%); }
+
+/* KPI mini */
+.kpi-mini {
+  flex: 1;
+  text-align: center;
+  padding: 8px 6px;
+  background: #f8fafc;
+  border-radius: 10px;
+}
+.kpi-mini__value { font-size: 16px; font-weight: 800; color: #1b365d; line-height: 1; }
+.kpi-mini__label { font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+
+/* ─── Heatmap ──────────────────────────────────────────────── */
+.heatmap-cell {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background: #f1f5f9;
+  transition: transform 0.2s ease;
+  cursor: pointer;
+}
+.heatmap-cell:hover { transform: scale(1.4); z-index: 10; position: relative; }
+.heatmap-cell[data-pct="0"]     { background: #f1f5f9; }
+.heatmap-cell[data-bucket="1"]  { background: #fee2e2; }
+.heatmap-cell[data-bucket="2"]  { background: #fecaca; }
+.heatmap-cell[data-bucket="3"]  { background: #fde68a; }
+.heatmap-cell[data-bucket="4"]  { background: #bbf7d0; }
+.heatmap-cell[data-bucket="5"]  { background: #6ee7b7; }
+.heatmap-cell[data-bucket="6"]  { background: #10b981; }
+
+/* ─── Visit mode ─────────────────────────────────────────── */
+.visit-stop-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: white;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 8px;
+  transition: all 0.2s ease;
+}
+.visit-stop-card[data-status="done"] {
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border-color: #bbf7d0;
+}
+.visit-stop-card[data-status="active"] {
+  border-color: #fb923c;
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  box-shadow: 0 4px 12px rgba(229, 115, 10, 0.15);
+}
+.stop-order-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 14px;
+  color: white;
+  flex-shrink: 0;
+  background: #1b365d;
+}
+.stop-order-badge[data-pareto="A"] { background: #dc2626; }
+.stop-order-badge[data-pareto="B"] { background: #f59e0b; }
+.stop-order-badge[data-pareto="C"] { background: #2563eb; }
+
+/* ─── Pareto badges ───────────────────────────────────────── */
+.pareto-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.pareto-tag[data-pareto="A"] { background: #fee2e2; color: #b91c1c; }
+.pareto-tag[data-pareto="B"] { background: #fef3c7; color: #b45309; }
+.pareto-tag[data-pareto="C"] { background: #dbeafe; color: #1d4ed8; }
+
+/* ─── Donut chart (CSS-only) ─────────────────────────────── */
+.donut {
+  --p: 0;
+  --c: #3b82f6;
+  width: 80px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: conic-gradient(var(--c) calc(var(--p) * 1%), #f1f5f9 0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.donut::before {
+  content: '';
+  width: 60%;
+  height: 60%;
+  background: white;
+  border-radius: 50%;
+}
+.donut__inner {
+  position: absolute;
+  font-weight: 800;
+  font-size: 14px;
+  color: #1b365d;
+}
+
+/* ─── Slider ──────────────────────────────────────────────── */
+.target-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #1b365d 0%, #1b365d var(--val, 50%), #e2e8f0 var(--val, 50%), #e2e8f0 100%);
+  outline: none;
+}
+.target-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid #1b365d;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(27, 54, 93, 0.3);
+}
+.target-slider::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: white; border: 2px solid #1b365d; cursor: pointer;
+}
+.target-slider:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ─── Sub-tabs (used inside Targets view) ─────────────────── */
+.subtab-btn {
+  color: #64748b;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.subtab-btn:hover { color: #1b365d; }
+.subtab-btn.active {
+  background: white;
+  color: #1b365d;
+  box-shadow: 0 1px 3px rgba(15,23,42,0.08);
+}
+
+/* ─── Role chips (used inside Mi equipo search/filter) ────── */
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.role-chip:hover { background: #e2e8f0; color: #1b365d; }
+.role-chip.active {
+  background: linear-gradient(135deg, #1b365d 0%, #2c4d80 100%);
+  color: white;
+  border-color: rgba(27, 54, 93, 0.4);
+  box-shadow: 0 2px 8px rgba(27, 54, 93, 0.25);
+}
+.role-chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 0 5px;
+  height: 16px;
+  border-radius: 9999px;
+  background: rgba(255,255,255,0.18);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 800;
+}
+.role-chip:not(.active) .role-chip-count {
+  background: white;
+  color: #475569;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+/* ─── Drilldown breadcrumbs ──────────────────────────────── */
+.drilldown-bc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.drilldown-bc a { color: #1b365d; text-decoration: none; cursor: pointer; }
+.drilldown-bc a:hover { text-decoration: underline; }
+
+/* ─── Map: live team markers ─────────────────────────────── */
+.live-marker-pulse {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  position: relative;
+  cursor: pointer;
+}
+.live-marker-pulse::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  opacity: 0.6;
+  animation: pulse-live-ring 1.6s infinite;
+}
+
+/* ─── Modal ──────────────────────────────────────────────── */
+.app-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+  z-index: 250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: fadeIn 0.2s ease;
+}
+.app-modal-card {
+  background: white;
+  border-radius: 22px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
+  max-width: 560px;
+  width: 100%;
+  max-height: 85vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: scaleIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(0.96) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+/* ─── Panel colapsado (desktop) ──────────────────────────── */
+@media (min-width: 768px) {
+  #panel.panel-collapsed {
+    transform: translateX(calc(-100% - 12px)) !important;
+    opacity: 0.96;
+  }
+  #panel.panel-collapsed ~ #fab-start-visit { right: 32px !important; }
+  /* El botón colapsar sigue accesible: lo movemos al borde para que
+     siempre se vea aunque el panel se haya deslizado fuera. */
+  #panel.panel-collapsed #btn-collapse-panel {
+    right: -50px;
+  }
+}
+
+/* En mobile el botón "‹" no aplica (el panel ya es bottom-sheet). */
+@media (max-width: 767px) {
+  #btn-collapse-panel { display: none !important; }
+}
+
+/* ─── Mobile-first tweaks ────────────────────────────────── */
+@media (max-width: 767px) {
+  /*
+    FAB "Iniciar Modo Visita":
+      - Lo subimos a bottom: 24vh para que NO solape el panel-handle
+        cuando el panel está en estado collapsed (handle queda alrededor
+        de bottom: 80px + altura del panel-handle).  Antes estaba en 88px
+        y tapaba el handle.
+      - Solo lo mostramos cuando el panel está collapsed (estado mapa).
+        Cuando el panel está half/expanded el usuario está enfocado en
+        el contenido y la "Iniciar Modo Visita" tiene su entrada en el
+        header del panel (`#btn-toggle-visit` en views.js).
+  */
+  #fab-start-visit {
+    right: 16px;
+    bottom: calc(20vh + 80px);
+    padding: 10px 14px;
+    font-size: 12px;
+  }
+  body.panel-state-half #fab-start-visit,
+  body.panel-state-expanded #fab-start-visit {
+    display: none !important;
+  }
+
+  #visit-mode-pill { top: 12px; right: 12px; left: 12px; max-width: none; }
+
+  /* Topbar */
+  #topbar { top: 16px; gap: 8px; }
+  #topbar .role-badge { font-size: 9px; padding: 3px 7px; }
+  #poblacion-pill { display: none !important; }
+  #user-menu { right: 0; left: auto; min-width: 220px; }
+
+  /* Sidebar mobile: tabs como bottom nav. */
+  #sidenav .nav-tab { min-width: 56px; padding: 8px 4px; }
+  #sidenav .tab-text-wrapper { display: none; }
+
+  /*
+    Leyenda "Mapa de farmacias":
+      - En desktop la leyenda vive en bottom-right como overlay sobre el
+        mapa.  En mobile la leyenda taparía el panel cuando éste está
+        abierto, así que la ocultamos cuando panel-state ∈
+        {half, expanded}.  Cuando el usuario quiera ver la leyenda
+        baja el panel a collapsed.
+  */
+  body.panel-state-half #pharmacies-legend,
+  body.panel-state-expanded #pharmacies-legend {
+    display: none !important;
+  }
+
+  /*
+    Panel mobile bottom-sheet:
+      - top:90px + bottom:80px reservan ~80px para la #sidenav
+        (bottom:12px + height:68px).
+      - El drag JS (setupMobilePanelDrag en app.js) escribe
+        `transform: translateY(...)` inline + setea
+        `body.panel-state-{collapsed|half|expanded}` para que el CSS de
+        arriba pueda condicionar overlays.
+      - z-index 58 (vía clase max-md:z-[58]) → arriba del legend (z-55)
+        y debajo del sidenav (z-60).  Así contenido del panel siempre se
+        lee bien sin tapar la barra de navegación.
+  */
+  #panel { will-change: transform; }
+  #panel-handle { touch-action: none; -webkit-user-select: none; user-select: none; }
+}
+
+/* Pantallas muy pequeñas (iPhone SE, Galaxy A series, etc.) */
+@media (max-width: 380px) {
+  #topbar { left: 8px !important; right: 8px !important; }
+  #topbar .flex-1 { padding: 6px 10px; }
+  /* Topbar search input: kept at 16px to prevent iOS auto-zoom on focus.
+     Use placeholder shrinking via ::placeholder for visual density instead. */
+  #topbar input { font-size: 16px; }
+  #topbar input::placeholder { font-size: 12px; }
+
+  #sidenav { left: 8px !important; right: 8px !important; bottom: 8px !important; height: 60px !important; }
+  #sidenav .nav-tab { min-width: 50px; padding: 6px 2px; }
+  #sidenav .nav-icon-box { width: 28px; height: 28px; }
+
+  #fab-start-visit { right: 12px; bottom: 76px; padding: 8px 12px; font-size: 11px; }
+  #fab-start-visit svg { width: 16px; height: 16px; }
+  #fab-start-visit span { display: none; }
+
+  #demo-banner { font-size: 9px; padding: 2px 4px; }
+  #pharmacies-legend { padding: 8px 10px; }
+}
+
+/* Touch / no-hover devices: hover gradients del sidebar no aplican.
+   Activamos visibilidad de labels en tap. */
+@media (hover: none) and (pointer: coarse) {
+  #sidenav { transition: none !important; }
+}
+
+/* ─── Desktop panel width (default + wide) ───────────────── */
+/* Default width — mirrors the removed Tailwind md:w-[480px] xl:w-[540px] */
+@media (min-width: 768px) {
+  #panel { width: 480px; }
+}
+@media (min-width: 1280px) {
+  #panel { width: 540px; }
+}
+
+/* Wide mode for Analytics and Plan & Metas tabs */
+@media (min-width: 768px) {
+  #panel.panel-wide {
+    width: calc(100vw - 160px) !important;
+    max-width: 1440px !important;
+  }
+}

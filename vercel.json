@@ -10,10 +10,69 @@
       "use": "@vercel/static"
     }
   ],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300
+    }
+  },
+  "regions": ["iad1"],
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/index.js" },
     { "src": "/manager", "dest": "/api/index.js" },
+    { "src": "/manager-live", "dest": "/api/index.js" },
     { "src": "/rep", "dest": "/api/index.js" },
+    { "src": "/app", "dest": "/api/index.js" },
+    { "src": "/admin", "dest": "/api/index.js" },
     { "src": "/(.*)", "dest": "/src/public/$1" }
+  ],
+  "crons": [
+    {
+      "path": "/api/admin/imports/_worker",
+      "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/admin/bq-sync/_worker",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/alerts/_evaluate",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/admin/cron/purge-route-cache",
+      "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/admin/cron/purge-tracking",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/admin/cron/geocode-backfill",
+      "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/admin/quadrants/snapshot",
+      "schedule": "0 8 * * 0"
+    },
+    {
+      "path": "/api/admin/cron/purge-live-outbox",
+      "schedule": "15 9 * * *"
+    },
+    {
+      "path": "/api/admin/cron/parse-opening-hours",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/admin/cron/audit-retention",
+      "schedule": "0 4 1 * *"
+    },
+    {
+      "path": "/api/admin/cron/reconcile-presence",
+      "schedule": "30 8 * * *"
+    },
+    {
+      "path": "/api/admin/cron/purge-rate-limit",
+      "schedule": "45 9 * * *"
+    }
   ]
 }

@@ -48,6 +48,25 @@ const OUTCOMES_SKIPPING_STOP = [
   'invalid',
 ];
 
+// Photo evidence is mandatory for completed visits per Marzam Execution Doc
+// §6.3 ("Upload required photo evidence (blocked if missing)") AND for skips
+// per the same section ("If skipping: must choose reason and upload evidence").
+// Effectively: every outcome submitted requires at least one photo. We keep
+// the constant explicit so future outcomes can opt out if business decides.
+const OUTCOMES_REQUIRING_PHOTO = [
+  'visited',
+  'contact_made',
+  'interested',
+  'not_interested',
+  'needs_follow_up',
+  'closed',
+  'duplicate',
+  'moved',
+  'wrong_category',
+  'chain_not_independent',
+  'invalid',
+];
+
 function validateOutcome(outcome) {
   if (!VISIT_OUTCOMES.includes(outcome)) {
     const err = new Error(`Invalid visit outcome: ${outcome}`);
@@ -63,5 +82,6 @@ module.exports = {
   OUTCOMES_REQUIRING_FOLLOWUP,
   OUTCOMES_CREATING_FLAG,
   OUTCOMES_SKIPPING_STOP,
+  OUTCOMES_REQUIRING_PHOTO,
   validateOutcome,
 };

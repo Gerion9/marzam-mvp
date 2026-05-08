@@ -1,8 +1,32 @@
 const db = require('../../config/database');
 const { isExternalDataMode } = require('../../repositories/runtime');
+const { createCache } = require('../../utils/memoryCache');
+
+const cache = createCache({
+  ttlSeconds: Number(process.env.CACHE_TTL_COLONIAS_SECONDS) || 120,
+  maxEntries: 100,
+});
+
+function invalidate() {
+  cache.clear();
+}
+
+function cacheKey(filters) {
+  return JSON.stringify({
+    m: filters.municipality || null,
+    s: filters.security_level || null,
+    q: filters.search || null,
+    bb: filters.bbox || null,
+    l: Math.min(Number(filters.limit) || 2000, 5000),
+  });
+}
 
 async function list(filters = {}) {
   if (isExternalDataMode()) return [];
+  return cache.wrap(`list:${cacheKey(filters)}`, () => listFromDb(filters));
+}
+
+async function listFromDb(filters = {}) {
   const q = db('colonias')
     .select(
       'id',
@@ -81,6 +105,7 @@ async function updateSecurityLevel(id, { security_level, updated_by }) {
     .update({ security_level, updated_by, updated_at: db.fn.now() })
     .returning('*');
 
+  invalidate();
   return { before, after: updated };
 }
 
@@ -101,6 +126,7 @@ async function batchUpdateSecurityLevel(ids, { security_level, updated_by }) {
     .whereIn('id', ids)
     .update({ security_level, updated_by, updated_at: db.fn.now() });
 
+  invalidate();
   return { updated: count };
 }
 
