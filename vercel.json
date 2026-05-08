@@ -3,18 +3,14 @@
   "builds": [
     {
       "src": "api/index.js",
-      "use": "@vercel/node"
+      "use": "@vercel/node",
+      "config": { "maxDuration": 300 }
     },
     {
       "src": "src/public/**",
       "use": "@vercel/static"
     }
   ],
-  "functions": {
-    "api/index.js": {
-      "maxDuration": 300
-    }
-  },
   "regions": ["iad1"],
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/index.js" },
