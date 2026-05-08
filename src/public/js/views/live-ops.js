@@ -27,6 +27,8 @@
   const HT = window.MarzamHierarchyTree;
   const SRC_USERS = 'live-users';
   const SRC_TRAIL = 'live-trail';
+  // Phase 3: subtle "where the team should be" plan layer beneath live pings.
+  const SRC_PLAN = 'live-plan-stops';
 
   // ── styling helpers ────────────────────────────────────────────
   const ROLE_COLORS = {
@@ -52,13 +54,71 @@
   function clearLayers() {
     const map = APP.map;
     if (!map) return;
-    [SRC_USERS, SRC_TRAIL].forEach((srcId) => {
+    [SRC_USERS, SRC_TRAIL, SRC_PLAN].forEach((srcId) => {
       ['line', 'circle', 'label'].forEach((kind) => {
         const id = `${srcId}-${kind}`;
         if (map.getLayer(id)) map.removeLayer(id);
       });
       if (map.getSource(srcId)) map.removeSource(srcId);
     });
+    // Floating legend chip (Phase 3) — single instance, removed on tab leave.
+    const legend = document.getElementById('live-legend-chip');
+    if (legend) legend.remove();
+  }
+
+  // Phase 3: paint plan stops as subtle gray dotted circles BELOW live positions.
+  // Helps the manager spot the gap between "where they should be" (plan) and
+  // "where they are" (live). Toggled by the panel switch; default ON.
+  function paintPlanLayer(stops) {
+    const map = APP.map;
+    if (!map) return;
+    const features = (stops || [])
+      .filter((s) => s.lat != null && s.lng != null)
+      .map((s) => ({
+        type: 'Feature',
+        properties: { name: s.farmacia_nombre || s.pharmacy_name || '', order: s.route_order || 0 },
+        geometry: { type: 'Point', coordinates: [Number(s.lng), Number(s.lat)] },
+      }));
+    upsertSource(map, SRC_PLAN, { type: 'FeatureCollection', features });
+    if (!map.getLayer(`${SRC_PLAN}-circle`)) {
+      map.addLayer({
+        id: `${SRC_PLAN}-circle`,
+        type: 'circle',
+        source: SRC_PLAN,
+        paint: {
+          'circle-radius': 6,
+          'circle-color': 'rgba(148,163,184,0.15)',
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#94a3b8',
+          'circle-stroke-opacity': 0.6,
+        },
+      }, map.getLayer(`${SRC_TRAIL}-line`) ? `${SRC_TRAIL}-line` : undefined);
+    }
+  }
+
+  function clearPlanLayer() {
+    const map = APP.map;
+    if (!map) return;
+    if (map.getLayer(`${SRC_PLAN}-circle`)) map.removeLayer(`${SRC_PLAN}-circle`);
+    if (map.getSource(SRC_PLAN)) map.removeSource(SRC_PLAN);
+  }
+
+  function renderLegendChip() {
+    if (document.getElementById('live-legend-chip')) return;
+    const chip = document.createElement('div');
+    chip.id = 'live-legend-chip';
+    chip.className = 'fixed z-[55] bg-white/95 backdrop-blur-xl rounded-xl shadow-lg border border-white/60 ring-1 ring-slate-200/50 px-3 py-2 text-[10px] font-semibold text-slate-700 '
+      + 'md:top-24 md:right-6 max-md:top-[100px] max-md:right-3';
+    chip.innerHTML = `
+      <div class="flex items-center gap-3">
+        <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>En vivo</span>
+        <span class="text-slate-300">·</span>
+        <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full border border-slate-400 bg-transparent"></span>Plan</span>
+        <span class="text-slate-300">·</span>
+        <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-0.5 bg-slate-400 opacity-60"></span>Recorrido</span>
+      </div>
+    `;
+    document.body.appendChild(chip);
   }
 
   function statusFor(lastSeenMs) {
@@ -241,16 +301,41 @@
   }
 
   // ── SSE ────────────────────────────────────────────────────────
+  // [P4 + S5] EventSource cannot send Authorization headers, so SSE auth
+  // historically used `?token=<JWT>` which leaked the long-lived JWT to access
+  // logs. The /api/auth/sse-ticket endpoint exchanges the JWT for a 60s UUID
+  // ticket; we fetch a fresh ticket on every (re)connect. If the ticket
+  // exchange fails we fall back to ?token= so older deploys keep working.
+  async function fetchSseTicket(token) {
+    try {
+      const r = await fetch('/api/auth/sse-ticket', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!r.ok) return null;
+      const j = await r.json();
+      return j && j.ticket ? j.ticket : null;
+    } catch {
+      return null;
+    }
+  }
+
   function openStream(token, onEvent) {
     let es;
     let backoff = 1000;
     let lastEventId = null;
     const ctrl = { closed: false, reconnects: 0 };
 
-    function connect() {
+    async function connect() {
       if (ctrl.closed) return;
       const url = new URL('/api/live/stream', location.origin);
-      url.searchParams.set('token', token);
+      // Prefer ticket; fall back to legacy ?token=.
+      const ticket = await fetchSseTicket(token);
+      if (ticket) url.searchParams.set('ticket', ticket);
+      else url.searchParams.set('token', token);
       if (lastEventId) url.searchParams.set('last_event_id', lastEventId);
       es = new EventSource(url.toString(), { withCredentials: true });
       es.addEventListener('open', () => { backoff = 1000; });
@@ -266,7 +351,9 @@
         try { es.close(); } catch { /* noop */ }
         if (ctrl.closed) return;
         ctrl.reconnects += 1;
-        setTimeout(connect, Math.min(backoff, 30000));
+        // Exponential backoff capped at 30s; lastEventId persists across
+        // reconnects so the server replays missed events from outbox.
+        setTimeout(() => { connect(); }, Math.min(backoff, 30000));
         backoff = Math.min(backoff * 2, 30000);
       });
     }
@@ -321,6 +408,13 @@
           </div>
           <div class="text-slate-400" x-show="!isDemo && reconnects > 0" x-text="'Reconexiones: ' + reconnects"></div>
         </div>
+
+        <!-- Phase 3: Plan-overlay toggle (manager-only signal) -->
+        <label class="flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer select-none bg-white rounded-xl border border-slate-100 px-3 py-2">
+          <input type="checkbox" x-model="showPlan" @change="onTogglePlan()" class="rounded border-slate-300">
+          <span class="font-semibold">Mostrar plan de hoy</span>
+          <span class="ml-auto text-[10px] text-slate-400" x-text="planStopsCount + ' paradas planificadas'"></span>
+        </label>
 
         <!-- Per-role counts (clickable filter shortcuts) -->
         <div class="flex items-center gap-2 text-[10px] text-slate-500" x-show="byRole.gerente_ventas + byRole.supervisor + byRole.representante > 0">
@@ -463,6 +557,11 @@
       events: [],
       selectedAlert: null,
 
+      // Phase 3: plan overlay state — default ON, persists in localStorage.
+      showPlan: localStorage.getItem('liveOps.showPlan') !== '0',
+      planStopsCount: 0,
+      _planStops: [],
+
       // Internal store
       _store: makeStore(),
 
@@ -472,6 +571,9 @@
           window.MarzamToast?.show('Sesión expirada', 'danger');
           return;
         }
+        renderLegendChip();
+        // Load today's plan stops (best-effort — empty state is fine).
+        this._loadPlanStops();
         // Load the actor's hierarchy (manager + descendants).
         try {
           _cascadeAbort = new AbortController();
@@ -531,6 +633,26 @@
         });
         // Tick every 5s so relative times stay fresh.
         _refreshTimer = setInterval(() => this._refreshDerived(), 5000);
+      },
+
+      // ── Plan overlay (Phase 3) ───────────────────────────────
+      async _loadPlanStops() {
+        try {
+          const today = new Date().toISOString().slice(0, 10);
+          const data = await API.get(`/visit-plans/assignments?from=${today}&to=${today}`);
+          this._planStops = Array.isArray(data) ? data : (data?.assignments || []);
+          this.planStopsCount = this._planStops.length;
+          if (this.showPlan) paintPlanLayer(this._planStops);
+        } catch (err) {
+          // Backend may not implement aggregate plan endpoint yet — non-fatal.
+          this._planStops = [];
+          this.planStopsCount = 0;
+        }
+      },
+      onTogglePlan() {
+        try { localStorage.setItem('liveOps.showPlan', this.showPlan ? '1' : '0'); } catch { /* ignore */ }
+        if (this.showPlan) paintPlanLayer(this._planStops);
+        else clearPlanLayer();
       },
 
       // ── Selection ────────────────────────────────────────────

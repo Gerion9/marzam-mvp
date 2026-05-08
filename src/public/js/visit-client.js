@@ -198,7 +198,27 @@
       body.appendChild(viewFor(cur));
       btnBack.disabled = state.step === 0;
       btnNext.textContent = cur === 'review' ? 'Registrar visita' : 'Siguiente';
-      btnNext.disabled = !canAdvance(cur);
+      const can = canAdvance(cur);
+      btnNext.disabled = !can;
+      // Phase 4: inline block-reason for Marzam-client flow as well.
+      if (root.blockReason) {
+        if (!can) {
+          root.blockReason.textContent = marzamBlockReason(cur) || '';
+          root.blockReason.style.display = 'block';
+        } else {
+          root.blockReason.style.display = 'none';
+        }
+      }
+    }
+    function marzamBlockReason(cur) {
+      switch (cur) {
+        case 'intro':           return 'Indica si visitaste la farmacia';
+        case 'order':           return 'Indica si hubo pedido';
+        case 'reason':          return 'Selecciona la razón del no-pedido';
+        case 'reason_no_visit': return 'Escribe al menos una nota breve (3+ caracteres)';
+        case 'evidence':        return 'Toma o sube la foto de evidencia';
+        default:                return '';
+      }
     }
 
     function canAdvance(cur) {
@@ -214,12 +234,19 @@
       }
     }
 
+    // revalidate() updates btnNext / blockReason based on current state
+    // WITHOUT re-rendering body — safe to call from input listeners.
+    const revalidate = makeRevalidate({
+      root, state, steps, canAdvance,
+      blockReason: (cur) => marzamBlockReason(cur),
+    });
+
     function viewFor(cur) {
       switch (cur) {
         case 'intro':           return renderMarzamIntro(state, refresh);
         case 'order':           return renderMarzamOrder(state, refresh);
         case 'reason':          return renderMarzamReason(state, refresh);
-        case 'reason_no_visit': return renderMarzamReasonNoVisit(state, refresh);
+        case 'reason_no_visit': return renderMarzamReasonNoVisit(state, refresh, revalidate);
         case 'products':        return renderMarzamProducts(state, refresh, root.shellRoot);
         case 'evidence':        return renderEvidencePhoto(state, refresh, 'evidence_photo', {
           title: '📸 Foto de evidencia *',
@@ -287,33 +314,34 @@
   function openProspectFlow(pharmacy) {
     const state = {
       step: 0,
-      // Step 1
+      // Phase 4: compressed prospect-positive flow merges datos_generales+contacto
+      // into "datos_prospecto" and comercial+observaciones into "info_comercial".
+      // Two new forcing-function fields prevent reps from skipping merged pages:
+      //   - buys_from_competition: required radio in info_comercial
+      //   - products_skipped: required if products list is empty
+      // Backend payload keys unchanged (submitProspectFull still reads contact_*,
+      // visit_observations, competition_*, etc.) — only step layout changes.
       outcome: '',
-      // Step 2
       notes: '',
-      // Step 3
+      // Datos prospecto (merged)
       contact_name: '',
       contact_email: '',
       persona_tipo: null,    // 'fisica' | 'moral'
-      // Step 4
+      contact_person: '',
+      contact_phone: '',
+      // Información comercial (merged)
       order_potential: '',
       wholesalers: '',
-      // Step 5
       visit_observations: '',
       competition_info: '',
       competition_prices: '',
       competition_offers: '',
-      // Step 6
-      contact_person: '',
-      contact_phone: '',
-      // Step 7 — productos que vende la farmacia HOY (con la competencia).
-      // Cada item: { product_name, competitor_brand, competitor_price,
-      //              monthly_volume, comment }
+      buys_from_competition: null,  // 'yes' | 'no' (forcing function)
+      // Productos
       products: [],
-      // Step 8 — foto de evidencia in situ (obligatoria si outcome positivo).
+      products_skipped: false,      // explicit "no vende productos relevantes"
+      // Evidencia + documentos (merged)
       evidence_photo: null,
-      // Step 9 — documentos legales para alta.  Map { doc_type: File } —
-      // 3 entradas si persona_tipo='fisica', 5 si 'moral'.
       legal_docs: {},
       // GPS
       lat: null, lng: null,
@@ -339,16 +367,14 @@
         // rep estuvo en sitio.
         return ['outcome', 'notes', 'evidence', 'review'];
       }
+      // Phase 4: compressed positive flow — 10 → 7 steps.
       return [
         'outcome',
         'notes',
-        'datos_generales',
-        'comercial',
-        'productos',          // productos que la farmacia vende con la competencia
-        'observaciones',
-        'contacto',
-        'evidence',           // foto in situ (obligatoria)
-        'docs_legales',       // CSF + comp. domicilio + INE  (+ acta + poder si moral)
+        'datos_prospecto',     // persona_tipo + contact_name/email + contact_person/phone
+        'info_comercial',      // potencial + wholesalers + observaciones + competencia
+        'productos',           // con forcing toggle "no vende productos"
+        'evidencia_y_docs',    // foto in-situ + 3-5 docs legales en una pantalla
         'review',
       ];
     }
@@ -363,45 +389,60 @@
       body.appendChild(viewFor(cur));
       btnBack.disabled = state.step === 0;
       btnNext.textContent = cur === 'review' ? 'Registrar visita' : 'Siguiente';
-      btnNext.disabled = !canAdvance(cur);
+      const can = canAdvance(cur);
+      btnNext.disabled = !can;
+      // Phase 4: inline block-reason — visible whenever the button is disabled
+      // (was: toast-on-click only, easy to miss).
+      if (root.blockReason) {
+        if (!can) {
+          root.blockReason.textContent = blockReason(cur, state) || '';
+          root.blockReason.style.display = 'block';
+        } else {
+          root.blockReason.style.display = 'none';
+        }
+      }
     }
 
     function canAdvance(cur) {
       switch (cur) {
         case 'outcome':           return !!state.outcome;
         case 'notes':             return state.notes.trim().length >= 3;
-        case 'datos_generales':   return !!state.persona_tipo;
-        case 'comercial':         return true;       // todo opcional
-        case 'productos':         return true;       // opcional, 0..N
-        case 'observaciones':     return true;
-        case 'contacto':          return true;
-        case 'evidence':          return !!state.evidence_photo;
-        case 'docs_legales': {
-          // Todos los docs requeridos según persona_tipo deben tener foto.
+        // Phase 4: merged steps — minimal forcing-function fields keep data quality up.
+        case 'datos_prospecto':   return !!state.persona_tipo && !!(state.contact_phone || '').trim();
+        case 'info_comercial':    return state.buys_from_competition === 'yes' || state.buys_from_competition === 'no';
+        case 'productos':         return state.products_skipped || (state.products && state.products.length > 0);
+        case 'evidencia_y_docs': {
+          if (!state.evidence_photo) return false;
           const required = legalDocsFor(state.persona_tipo);
           return required.every((d) => !!state.legal_docs[d.type]);
         }
+        case 'evidence':          return !!state.evidence_photo;
         case 'review':            return true;
         default: return true;
       }
     }
 
+    // revalidate() updates btnNext / blockReason based on current state
+    // WITHOUT re-rendering body — safe to call from input listeners.
+    const revalidate = makeRevalidate({
+      root, state, steps, canAdvance, blockReason,
+    });
+
     function viewFor(cur) {
       switch (cur) {
         case 'outcome':           return renderProspectOutcome(state, refresh);
-        case 'notes':             return renderProspectNotes(state, refresh);
-        case 'datos_generales':   return renderProspectDatosGenerales(state, refresh);
-        case 'comercial':         return renderProspectComercial(state, refresh);
+        case 'notes':             return renderProspectNotes(state, refresh, revalidate);
+        // Phase 4: merged renderers — see comment in steps() for the rationale.
+        case 'datos_prospecto':   return renderProspectDatosCombined(state, refresh, revalidate);
+        case 'info_comercial':    return renderProspectInfoComercial(state, refresh, revalidate);
         case 'productos':         return renderProspectProductos(state, refresh, root.shellRoot);
-        case 'observaciones':     return renderProspectObservaciones(state, refresh);
-        case 'contacto':          return renderProspectContacto(state, refresh);
+        case 'evidencia_y_docs':  return renderProspectEvidenciaYDocs(state, refresh);
         case 'evidence':          return renderEvidencePhoto(state, refresh, 'evidence_photo', {
           title: '📸 Foto de evidencia *',
           subtitle: POSITIVE_OUTCOMES.has(state.outcome)
             ? 'Toma una foto en sitio (fachada, anaquel o el contacto firmando) para que Marzam pueda confirmar que estuviste en la farmacia.'
             : 'Aunque no hubo proceso, necesitamos una foto del lugar (fachada cerrada, dirección distinta, etc.) para que el supervisor pueda validar.',
         });
-        case 'docs_legales':      return renderProspectLegalDocs(state, refresh);
         case 'review':            return renderProspectReview(state);
       }
       return el('<div></div>');
@@ -414,7 +455,7 @@
       const list = steps();
       const cur = list[state.step];
       if (!canAdvance(cur)) {
-        window.MarzamToast?.show(blockReason(cur), 'error');
+        window.MarzamToast?.show(blockReason(cur, state), 'error');
         return;
       }
       if (cur !== 'review') {
@@ -441,14 +482,23 @@
     refresh();
   }
 
-  function blockReason(cur) {
+  function blockReason(cur, state) {
     switch (cur) {
-      case 'outcome':         return 'Selecciona un resultado de visita';
-      case 'notes':           return 'Escribe al menos una nota breve (3+ caracteres)';
-      case 'datos_generales': return 'Indica si es persona física o moral';
-      case 'evidence':        return 'Toma o sube la foto de evidencia';
-      case 'docs_legales':    return 'Faltan documentos legales — sube todos los requeridos';
-      default:                return 'Falta información en este paso';
+      case 'outcome':           return 'Selecciona un resultado de visita';
+      case 'notes':             return 'Escribe al menos una nota breve (3+ caracteres)';
+      // Phase 4: more specific block messages per merged step.
+      case 'datos_prospecto':
+        if (!state?.persona_tipo) return 'Indica si es persona física o moral';
+        if (!(state?.contact_phone || '').trim()) return 'El teléfono del contacto es obligatorio para seguimiento';
+        return 'Falta información en datos del prospecto';
+      case 'info_comercial':    return 'Indica si la farmacia compra a la competencia (Sí o No)';
+      case 'productos':         return 'Agrega al menos 1 producto o marca "No vende productos relevantes"';
+      case 'evidencia_y_docs':
+        if (!state?.evidence_photo) return 'Toma o sube la foto de evidencia';
+        return 'Faltan documentos legales — sube todos los requeridos';
+      case 'evidence':          return 'Toma o sube la foto de evidencia';
+      case 'review':            return '';
+      default:                  return 'Falta información en este paso';
     }
   }
 
@@ -659,17 +709,36 @@
     }
 
     // Step 4 — subir documentos legales en paralelo.
+    // Phase 4: docs that fail (offline or transient) are enqueued in IndexedDB
+    // and drained automatically when the network recovers. The visit + alta
+    // are already saved in the backend at this point — only photos retry.
     if (onboarding?.id) {
-      const uploads = Object.entries(state.legal_docs || {})
-        .map(([type, file]) => uploadOnboardingDoc(onboarding.id, type, file)
-          .catch((e) => {
+      const docEntries = Object.entries(state.legal_docs || {});
+      const uploads = docEntries.map(([type, file]) =>
+        uploadOnboardingDoc(onboarding.id, type, file)
+          .catch(async (e) => {
             console.warn(`[visit-client] doc upload failed (${type}):`, e?.error || e);
-            return { failed: type, reason: e?.error || e?.message || 'error' };
+            try {
+              await window.MarzamOfflineQueue?.enqueueDocUpload?.({
+                onboardingId: onboarding.id,
+                docType: type,
+                file,
+              });
+              return { failed: type, reason: 'queued', queued: true };
+            } catch (qerr) {
+              console.warn(`[visit-client] doc enqueue failed (${type}):`, qerr);
+              return { failed: type, reason: e?.error || e?.message || 'error' };
+            }
           }));
       const results = await Promise.all(uploads);
       const failed = results.filter((r) => r && r.failed);
+      const queued = failed.filter((r) => r.queued).length;
       if (failed.length) {
-        window.MarzamToast?.show(`Subieron ${results.length - failed.length}/${results.length} docs. Reintenta los faltantes desde "Mis altas".`, 'warn');
+        if (queued > 0 && queued === failed.length) {
+          window.MarzamToast?.show(`${queued} doc${queued === 1 ? '' : 's'} en cola — se subirán automáticamente al recuperar conexión.`, 'info');
+        } else {
+          window.MarzamToast?.show(`Subieron ${results.length - failed.length}/${results.length} docs. Los faltantes se reintentan automáticamente.`, 'warn');
+        }
       }
     }
 
@@ -678,7 +747,7 @@
       await API.post(`/pharmacy-onboarding/${onboarding.id}/submit`, {});
     } catch (e) {
       console.warn('[visit-client] onboarding submit failed:', e?.error || e);
-      window.MarzamToast?.show('Alta creada como borrador — envía manualmente desde "Mis altas".', 'warn');
+      window.MarzamToast?.show('Alta creada como borrador — se enviará automáticamente cuando los documentos estén completos.', 'warn');
     }
 
     return { visit, onboarding };
@@ -750,6 +819,8 @@
           </div>
           <div class="onb-progress"></div>
           <div class="onb-body"></div>
+          <!-- Phase 4: inline error sits above the footer; refresh() updates it. -->
+          <div class="onb-block-reason" style="display:none; padding: 6px 16px 0; font-size: 12px; color: #dc2626; font-weight: 600; text-align: center;"></div>
           <div class="onb-footer">
             <button type="button" class="onb-btn onb-btn-back">Atrás</button>
             <button type="button" class="onb-btn onb-btn-next">Siguiente</button>
@@ -758,15 +829,66 @@
       </div>
     `);
     document.body.appendChild(root);
-    const close = () => root.remove();
+
+    // VisualViewport API hook: when the on-screen keyboard opens on mobile,
+    // scroll the focused field into view so the user can see what they're
+    // typing. Without this, the keyboard can cover the input + the footer
+    // button. Best-effort — older browsers without VisualViewport are fine.
+    let onVvResize = null;
+    if (window.visualViewport) {
+      onVvResize = () => {
+        const focused = document.activeElement;
+        if (focused && root.contains(focused)
+            && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')) {
+          try { focused.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+          catch (_) { /* noop */ }
+        }
+      };
+      window.visualViewport.addEventListener('resize', onVvResize);
+    }
+
+    const close = () => {
+      if (onVvResize && window.visualViewport) {
+        try { window.visualViewport.removeEventListener('resize', onVvResize); }
+        catch (_) { /* noop */ }
+      }
+      root.remove();
+    };
     root.querySelector('.onb-close').addEventListener('click', close);
+
     return {
       shellRoot: root,
       body: root.querySelector('.onb-body'),
       progress: root.querySelector('.onb-progress'),
+      blockReason: root.querySelector('.onb-block-reason'),
       btnBack: root.querySelector('.onb-btn-back'),
       btnNext: root.querySelector('.onb-btn-next'),
       close,
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // makeRevalidate — returns a closure that re-evaluates the "Siguiente"
+  // button's enabled state and the inline block-reason WITHOUT touching
+  // body.innerHTML. Called from input listeners so typing does not destroy
+  // the focused element. Compare with refresh() in each flow, which DOES
+  // re-render the body — that's only used by change events on radios /
+  // selects that actually alter the step list.
+  // ──────────────────────────────────────────────────────────
+  function makeRevalidate({ root, state, steps, canAdvance, blockReason }) {
+    return function revalidate() {
+      const list = steps();
+      const cur = list[state.step];
+      const can = canAdvance(cur);
+      root.btnNext.disabled = !can;
+      if (root.blockReason) {
+        if (!can) {
+          root.blockReason.textContent = blockReason(cur, state) || '';
+          root.blockReason.style.display = 'block';
+        } else {
+          root.blockReason.style.display = 'none';
+        }
+      }
     };
   }
 
@@ -873,7 +995,7 @@
     return w;
   }
 
-  function renderMarzamReasonNoVisit(state, refresh) {
+  function renderMarzamReasonNoVisit(state, refresh, revalidate) {
     const w = el(`
       <div>
         <h2 class="onb-step-title">¿Por qué no pudiste visitar?</h2>
@@ -884,7 +1006,11 @@
         </label>
       </div>
     `);
-    w.querySelector('#vc-notes').addEventListener('input', (e) => { state.notes = e.target.value; refresh(); });
+    // revalidate() — NOT refresh() — preserves caret/focus while typing.
+    w.querySelector('#vc-notes').addEventListener('input', (e) => {
+      state.notes = e.target.value;
+      revalidate();
+    });
     return w;
   }
 
@@ -997,7 +1123,7 @@
     return w;
   }
 
-  function renderProspectNotes(state, refresh) {
+  function renderProspectNotes(state, refresh, revalidate) {
     const w = el(`
       <div>
         <h2 class="onb-step-title">Notas *</h2>
@@ -1007,13 +1133,17 @@
         </label>
       </div>
     `);
+    // revalidate() — NOT refresh() — preserves caret/focus while typing.
     w.querySelector('#vp-notes').addEventListener('input', (e) => {
       state.notes = e.target.value;
-      refresh();
+      revalidate();
     });
     return w;
   }
 
+  // @deprecated post-Phase 4 — replaced by renderProspectDatosCombined.
+  // Kept for reference; not registered in viewFor. Do not re-enable without
+  // converting input listeners to use revalidate() (see Bug B fix).
   function renderProspectDatosGenerales(state, refresh) {
     const w = el(`
       <div>
@@ -1061,6 +1191,9 @@
     return w;
   }
 
+  // @deprecated post-Phase 4 — merged into renderProspectInfoComercial.
+  // Kept for reference; not registered in viewFor. Do not re-enable without
+  // converting input listeners to use revalidate() (see Bug B fix).
   function renderProspectComercial(state, refresh) {
     const w = el(`
       <div>
@@ -1084,9 +1217,21 @@
   function renderProspectProductos(state, refresh, shellRoot) {
     const w = el(`
       <div>
-        <h2 class="onb-step-title">Productos que vende hoy <span class="opt">opcional</span></h2>
-        <p class="onb-step-sub">Captura los productos que el cliente está abasteciendo con la competencia, con el precio al que se los compra.  Esto alimenta el dashboard de oportunidades de margen.</p>
-        <div class="onb-doclist">
+        <h2 class="onb-step-title">Productos que vende hoy</h2>
+        <p class="onb-step-sub">Captura los productos que el cliente está abasteciendo con la competencia, con el precio al que se los compra. Esto alimenta el dashboard de oportunidades de margen.</p>
+
+        <!-- Phase 4: forcing toggle — empty list + toggle off blocks Siguiente. -->
+        <div class="onb-section" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+          <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
+            <input type="checkbox" id="vp-prod-skip" ${state.products_skipped ? 'checked' : ''} style="width:16px; height:16px;">
+            <span style="font-size:13px; font-weight:600; color:#475569;">No vende productos relevantes</span>
+          </label>
+          <div style="font-size:11px; color:#64748b; margin-left:26px; margin-top:4px;">
+            Marca esta casilla solo si la farmacia no vende productos del catálogo Marzam.
+          </div>
+        </div>
+
+        <div class="onb-doclist" style="${state.products_skipped ? 'opacity:0.4; pointer-events:none;' : ''}">
           ${state.products.length ? state.products.map((p, i) => `
             <div class="onb-doc uploaded" style="background:#fff;">
               <div class="onb-doc-head">
@@ -1112,11 +1257,19 @@
             </div>
           `).join('') : '<div class="onb-banner info"><span>💊</span><div>Aún no hay productos. Agrega los que vimos en anaquel para tracking de oportunidad.</div></div>'}
         </div>
-        <div class="onb-section">
+        <div class="onb-section" style="${state.products_skipped ? 'opacity:0.4; pointer-events:none;' : ''}">
           <button type="button" id="vp-padd" class="onb-btn onb-btn-next" style="width:100%;">+ Agregar producto</button>
         </div>
       </div>
     `);
+    const skipCb = w.querySelector('#vp-prod-skip');
+    if (skipCb) skipCb.addEventListener('change', (e) => {
+      state.products_skipped = e.target.checked;
+      // If user marks skipped, clear any previously added products to prevent
+      // submitting a contradictory payload (skipped + products[]).
+      if (state.products_skipped) state.products = [];
+      refresh();
+    });
     w.querySelectorAll('[data-pdel]').forEach((b) => b.addEventListener('click', () => {
       state.products.splice(Number(b.dataset.pdel), 1);
       refresh();
@@ -1182,6 +1335,9 @@
     return w;
   }
 
+  // @deprecated post-Phase 4 — merged into renderProspectInfoComercial.
+  // Kept for reference; not registered in viewFor. Do not re-enable without
+  // converting input listeners to use revalidate() (see Bug B fix).
   function renderProspectObservaciones(state, refresh) {
     const w = el(`
       <div>
@@ -1212,6 +1368,9 @@
     return w;
   }
 
+  // @deprecated post-Phase 4 — merged into renderProspectDatosCombined.
+  // Kept for reference; not registered in viewFor. Do not re-enable without
+  // converting input listeners to use revalidate() (see Bug B fix).
   function renderProspectContacto(state, refresh) {
     const w = el(`
       <div>
@@ -1232,6 +1391,185 @@
     w.querySelector('#vp-contact').addEventListener('input', (e) => { state.contact_person = e.target.value; refresh(); });
     w.querySelector('#vp-phone').addEventListener('input', (e) => { state.contact_phone = e.target.value; refresh(); });
     return w;
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Phase 4: Merged renderers for the compressed prospect flow.
+  // Each combines what was previously 2 steps into one screen with
+  // collapsible <details> for optional sections, plus a forcing field.
+  // ──────────────────────────────────────────────────────────
+
+  function renderProspectDatosCombined(state, refresh, revalidate) {
+    const w = el(`
+      <div>
+        <h2 class="onb-step-title">Datos del prospecto</h2>
+        <p class="onb-step-sub">Régimen fiscal y persona que atendió la visita. El teléfono es obligatorio para que podamos darle seguimiento.</p>
+
+        <div class="onb-section">
+          <span class="onb-label" style="display:block; margin-bottom:8px;">Régimen fiscal *</span>
+          <div class="onb-options" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <button type="button" class="onb-option ${state.persona_tipo === 'fisica' ? 'selected' : ''}" data-pt="fisica">
+              <div class="onb-option-icon">👤</div>
+              <div class="onb-option-body">
+                <div class="onb-option-title">Persona Física</div>
+                <div class="onb-option-desc">3 documentos</div>
+              </div>
+            </button>
+            <button type="button" class="onb-option ${state.persona_tipo === 'moral' ? 'selected' : ''}" data-pt="moral">
+              <div class="onb-option-icon">🏢</div>
+              <div class="onb-option-body">
+                <div class="onb-option-title">Persona Moral</div>
+                <div class="onb-option-desc">5 documentos</div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <div class="onb-section">
+          <span class="onb-label" style="display:block; margin-bottom:8px;">Contacto en sitio</span>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <label class="onb-field" style="margin:0;">
+              <span class="onb-label" style="font-size:11px;">Nombre</span>
+              <input class="onb-input" id="vp-contact" placeholder="Nombre" value="${escapeHtml(state.contact_person)}">
+            </label>
+            <label class="onb-field" style="margin:0;">
+              <span class="onb-label" style="font-size:11px;">Teléfono *</span>
+              <input class="onb-input" id="vp-phone" type="tel" placeholder="55 1234 5678" value="${escapeHtml(state.contact_phone)}">
+            </label>
+          </div>
+        </div>
+
+        <details class="onb-section">
+          <summary style="cursor:pointer; font-size:12px; font-weight:700; color:#475569;">Datos adicionales <span class="opt">(opcional)</span></summary>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px;">
+            <label class="onb-field" style="margin:0;">
+              <span class="onb-label" style="font-size:11px;">Nombre razón social</span>
+              <input class="onb-input" id="vp-cname" placeholder="Si aplica" value="${escapeHtml(state.contact_name)}">
+            </label>
+            <label class="onb-field" style="margin:0;">
+              <span class="onb-label" style="font-size:11px;">Correo</span>
+              <input class="onb-input" id="vp-cemail" type="email" placeholder="correo@ejemplo.com" value="${escapeHtml(state.contact_email)}">
+            </label>
+          </div>
+        </details>
+      </div>
+    `);
+    // persona_tipo changes the structure (docs required → 3 vs 5), so it
+    // legitimately needs refresh() — not revalidate.
+    w.querySelectorAll('[data-pt]').forEach((b) => b.addEventListener('click', () => {
+      state.persona_tipo = b.dataset.pt;
+      refresh();
+    }));
+    // Plain inputs use revalidate() so typing preserves focus.
+    w.querySelector('#vp-contact').addEventListener('input', (e) => { state.contact_person = e.target.value; revalidate(); });
+    w.querySelector('#vp-phone').addEventListener('input', (e) => { state.contact_phone = e.target.value; revalidate(); });
+    w.querySelector('#vp-cname').addEventListener('input', (e) => { state.contact_name = e.target.value; });
+    w.querySelector('#vp-cemail').addEventListener('input', (e) => { state.contact_email = e.target.value; });
+    return w;
+  }
+
+  function renderProspectInfoComercial(state, refresh, revalidate) {
+    const w = el(`
+      <div>
+        <h2 class="onb-step-title">Información comercial</h2>
+        <p class="onb-step-sub">Capacidad de compra y entorno competitivo. La pregunta de competencia es obligatoria — define la prioridad comercial.</p>
+
+        <div class="onb-section">
+          <span class="onb-label" style="display:block; margin-bottom:8px;">¿Compra a la competencia? *</span>
+          <div class="onb-options" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <button type="button" class="onb-option ${state.buys_from_competition === 'yes' ? 'selected' : ''}" data-buys="yes">
+              <div class="onb-option-icon">🛒</div>
+              <div class="onb-option-body">
+                <div class="onb-option-title">Sí compra</div>
+                <div class="onb-option-desc">Hay oportunidad de migrar volumen</div>
+              </div>
+            </button>
+            <button type="button" class="onb-option ${state.buys_from_competition === 'no' ? 'selected' : ''}" data-buys="no">
+              <div class="onb-option-icon">🚫</div>
+              <div class="onb-option-body">
+                <div class="onb-option-title">No compra</div>
+                <div class="onb-option-desc">Solo se abastece de Marzam u otro</div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <details class="onb-section" ${state.buys_from_competition === 'yes' ? 'open' : ''}>
+          <summary style="cursor:pointer; font-size:12px; font-weight:700; color:#475569;">Detalles de la competencia</summary>
+          <div style="margin-top:8px;">
+            <label class="onb-field">
+              <span class="onb-label" style="font-size:11px;">Información de competencia</span>
+              <input class="onb-input" id="vp-comp" placeholder="Marcas y productos que tiene en anaquel" value="${escapeHtml(state.competition_info)}">
+            </label>
+            <label class="onb-field">
+              <span class="onb-label" style="font-size:11px;">Precios observados</span>
+              <input class="onb-input" id="vp-prices" placeholder="Precios de competencia" value="${escapeHtml(state.competition_prices)}">
+            </label>
+            <label class="onb-field">
+              <span class="onb-label" style="font-size:11px;">Ofertas / promociones</span>
+              <input class="onb-input" id="vp-offers" placeholder="Promociones activas" value="${escapeHtml(state.competition_offers)}">
+            </label>
+          </div>
+        </details>
+
+        <details class="onb-section">
+          <summary style="cursor:pointer; font-size:12px; font-weight:700; color:#475569;">Capacidad y proveedores <span class="opt">(opcional)</span></summary>
+          <div style="margin-top:8px;">
+            <label class="onb-field">
+              <span class="onb-label" style="font-size:11px;">Potencial de compra ($)</span>
+              <input class="onb-input" id="vp-pot" type="number" inputmode="decimal" step="100" placeholder="Demanda mensual estimada" value="${escapeHtml(state.order_potential)}">
+            </label>
+            <label class="onb-field">
+              <span class="onb-label" style="font-size:11px;">Mayoristas con los que trabaja</span>
+              <input class="onb-input" id="vp-whole" placeholder="Mayoristas actuales" value="${escapeHtml(state.wholesalers)}">
+            </label>
+          </div>
+        </details>
+
+        <details class="onb-section">
+          <summary style="cursor:pointer; font-size:12px; font-weight:700; color:#475569;">Observaciones generales <span class="opt">(opcional)</span></summary>
+          <label class="onb-field" style="margin-top:8px;">
+            <textarea class="onb-textarea" id="vp-obs" rows="3" placeholder="Notas cualitativas de la visita…">${escapeHtml(state.visit_observations)}</textarea>
+          </label>
+        </details>
+      </div>
+    `);
+    w.querySelectorAll('[data-buys]').forEach((b) => b.addEventListener('click', () => {
+      state.buys_from_competition = b.dataset.buys;
+      refresh();
+    }));
+    const wire = (id, key) => {
+      const el2 = w.querySelector(id);
+      if (el2) el2.addEventListener('input', (e) => { state[key] = e.target.value; });
+    };
+    wire('#vp-comp', 'competition_info');
+    wire('#vp-prices', 'competition_prices');
+    wire('#vp-offers', 'competition_offers');
+    wire('#vp-pot', 'order_potential');
+    wire('#vp-whole', 'wholesalers');
+    wire('#vp-obs', 'visit_observations');
+    return w;
+  }
+
+  function renderProspectEvidenciaYDocs(state, refresh) {
+    const wrap = el('<div></div>');
+
+    // Section 1: evidence photo (reuses renderEvidencePhoto component).
+    const evidence = renderEvidencePhoto(state, refresh, 'evidence_photo', {
+      title: '📸 Foto de evidencia *',
+      subtitle: 'Toma una foto en sitio (fachada, anaquel o el contacto firmando) para que Marzam pueda confirmar que estuviste en la farmacia.',
+    });
+    wrap.appendChild(evidence);
+
+    // Divider
+    const divider = el('<div style="border-top: 1px solid #e2e8f0; margin: 16px 0;"></div>');
+    wrap.appendChild(divider);
+
+    // Section 2: legal docs (reuses existing legal docs renderer).
+    const docs = renderProspectLegalDocs(state, refresh);
+    wrap.appendChild(docs);
+
+    return wrap;
   }
 
   function renderProspectReview(state) {

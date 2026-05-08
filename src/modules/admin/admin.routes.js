@@ -16,6 +16,7 @@ const authorize = require('../../middleware/rbac');
 const routesMatrix = require('../../services/routesMatrix');
 const db = require('../../config/database');
 const { secretsEqual } = require('../../utils/secretCompare');
+const { recordCronRun } = require('../../utils/cronRunRecorder');
 
 const router = Router();
 
@@ -91,6 +92,34 @@ router.get('/scheduler/health', authenticate, authorize({ adminOnly: true }), as
     }
     const rows = await db('cron_runs').orderBy('job_key').select('*');
     res.json({ jobs: rows });
+  } catch (err) { next(err); }
+});
+
+// [O4] ── Admin error log browser (rows from `error_log`, mig 082) ──────────
+// Paginated by occurred_at DESC. Filterable by status/path/since. Admin-only.
+router.get('/errors', authenticate, authorize({ adminOnly: true }), async (req, res, next) => {
+  try {
+    const exists = await db.raw("SELECT to_regclass('error_log') AS t");
+    if (!exists.rows?.[0]?.t) {
+      return res.json({ rows: [], note: 'error_log table not found — apply migration 082' });
+    }
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    let q = db('error_log').orderBy('occurred_at', 'desc');
+    if (req.query.status) {
+      q = q.where('status', Number(req.query.status));
+    }
+    if (req.query.path) {
+      q = q.where('path', 'like', '%' + String(req.query.path) + '%');
+    }
+    if (req.query.since) {
+      q = q.where('occurred_at', '>=', req.query.since);
+    }
+    if (req.query.request_id) {
+      q = q.where('request_id', String(req.query.request_id));
+    }
+    const rows = await q.limit(limit).offset(offset);
+    res.json({ rows, limit, offset });
   } catch (err) { next(err); }
 });
 
@@ -267,19 +296,62 @@ async function cronReconcilePresence(req, res, next) {
 router.get('/cron/reconcile-presence', adminOrCron, withCronLock('reconcile-presence', cronReconcilePresence));
 router.post('/cron/reconcile-presence', adminOrCron, withCronLock('reconcile-presence', cronReconcilePresence));
 
-async function recordCronRun(jobKey, status, payload) {
+/**
+ * Daily purge of expired ephemeral credential tables.
+ *
+ * - rate_limit_buckets (mig 080): rows whose expires_at has passed.
+ * - sse_tickets       (mig 081): tickets whose expires_at has passed.
+ *
+ * Both tables are write-heavy and short-lived; one cron at 09:45 UTC keeps
+ * them small. Each lookup is gated on `to_regclass` so a deploy without
+ * the migrations applied still records a "skipped" run instead of erroring.
+ */
+async function cronPurgeRateLimit(req, res, next) {
   try {
-    await db.raw(`
-      INSERT INTO cron_runs (job_key, last_run_at, last_status, last_payload)
-      VALUES (?, NOW(), ?, ?::jsonb)
-      ON CONFLICT (job_key) DO UPDATE
-        SET last_run_at = NOW(),
-            last_status = EXCLUDED.last_status,
-            last_payload = EXCLUDED.last_payload
-    `, [jobKey, status, JSON.stringify(payload || {})]);
-  } catch {
-    // cron_runs may not exist yet (pre-067) — best effort
+    const summary = {};
+    const rlExists = await db.raw("SELECT to_regclass('rate_limit_buckets') AS t");
+    if (rlExists.rows?.[0]?.t) {
+      summary.rate_limit_deleted = await db('rate_limit_buckets')
+        .where('expires_at', '<', db.fn.now())
+        .del();
+    } else {
+      summary.rate_limit_skipped = 'table missing — apply migration 080';
+    }
+    const tkExists = await db.raw("SELECT to_regclass('sse_tickets') AS t");
+    if (tkExists.rows?.[0]?.t) {
+      summary.sse_tickets_deleted = await db('sse_tickets')
+        .where('expires_at', '<', db.fn.now())
+        .del();
+    } else {
+      summary.sse_tickets_skipped = 'table missing — apply migration 081';
+    }
+    // [O7] bq_sync_warnings — append-only per CLAUDE.md, no purge cron existed.
+    // Default 90 days retention. Override with BQ_SYNC_WARNINGS_RETENTION_DAYS.
+    const wExists = await db.raw("SELECT to_regclass('bq_sync_warnings') AS t");
+    if (wExists.rows?.[0]?.t) {
+      const days = Number(process.env.BQ_SYNC_WARNINGS_RETENTION_DAYS) || 90;
+      summary.bq_sync_warnings_deleted = await db('bq_sync_warnings')
+        .whereRaw(`occurred_at < NOW() - INTERVAL '${days} days'`)
+        .del();
+      summary.bq_sync_warnings_retention_days = days;
+    }
+    // [O4] error_log — same purge channel for the new error log table.
+    const elExists = await db.raw("SELECT to_regclass('error_log') AS t");
+    if (elExists.rows?.[0]?.t) {
+      const days = Number(process.env.ERROR_LOG_RETENTION_DAYS) || 90;
+      summary.error_log_deleted = await db('error_log')
+        .whereRaw(`occurred_at < NOW() - INTERVAL '${days} days'`)
+        .del();
+      summary.error_log_retention_days = days;
+    }
+    await recordCronRun('purge-rate-limit', 'ok', summary);
+    res.json(summary);
+  } catch (err) {
+    await recordCronRun('purge-rate-limit', 'error', { message: err.message });
+    next(err);
   }
 }
+router.get('/cron/purge-rate-limit', adminOrCron, withCronLock('purge-rate-limit', cronPurgeRateLimit));
+router.post('/cron/purge-rate-limit', adminOrCron, withCronLock('purge-rate-limit', cronPurgeRateLimit));
 
 module.exports = router;

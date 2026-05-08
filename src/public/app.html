@@ -12,16 +12,23 @@
        window.MarzamApp / MarzamViews exist before Alpine starts traversing. -->
   <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet"/>
-  <link rel="stylesheet" href="/css/app.css?v=app-19">
-  <link rel="stylesheet" href="/css/app-shell.css?v=app-19">
-  <link rel="stylesheet" href="/css/onboarding-wizard.css?v=app-19">
-  <link rel="stylesheet" href="/css/views.css?v=app-19">
+  <link rel="stylesheet" href="/css/app.css?v=app-20">
+  <link rel="stylesheet" href="/css/app-shell.css?v=app-20">
+  <link rel="stylesheet" href="/css/onboarding-wizard.css?v=app-20">
+  <link rel="stylesheet" href="/css/views.css?v=app-20">
 </head>
 <body class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
 
-  <!-- Demo banner -->
-  <div id="demo-banner" class="hidden fixed top-0 inset-x-0 z-[9999] bg-gradient-to-r from-violet-600 to-blue-600 text-white text-center text-[11px] font-bold py-1 tracking-wide">
-    <span id="demo-banner-text">Modo Demo — Datos Sintéticos</span>
+  <!--
+    Demo banner — Phase 5: collapsed from full-width strip to topbar chip.
+    Frees up vertical space across the app while keeping the demo state
+    persistently visible (and click-to-stop-impersonate when applicable).
+    The chip floats in the topbar; the strip class is kept on the element
+    so legacy CSS that targets #demo-banner still works.
+  -->
+  <div id="demo-banner" class="hidden fixed top-[68px] right-4 z-[55] bg-gradient-to-r from-violet-600 to-blue-600 text-white text-[10px] font-bold py-1 px-2.5 rounded-full shadow-lg cursor-default tracking-wide items-center gap-1.5 max-md:top-[72px]" style="display:none;">
+    <span aria-hidden="true">🎭</span>
+    <span id="demo-banner-text">Demo</span>
   </div>
 
   <!-- Map canvas (always present, behind everything) -->
@@ -45,18 +52,6 @@
       <select id="poblacion-select" class="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer pr-1">
         <option>Cargando...</option>
       </select>
-    </div>
-
-    <!-- Mode pill (Mis rutas / Mi equipo) -->
-    <div id="mode-pill" class="hidden md:flex bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full p-1 border border-white/60 ring-1 ring-slate-200/50 flex-shrink-0">
-      <button data-mode="self" class="mode-pill-btn active">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
-        <span>Mis rutas</span>
-      </button>
-      <button data-mode="team" class="mode-pill-btn">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="17" cy="7" r="3" stroke-width="1.7"/><path d="M21 21v-2a3 3 0 0 0-2-2.83" stroke-width="1.7"/></svg>
-        <span>Mi equipo</span>
-      </button>
     </div>
 
     <!-- User menu -->
@@ -175,24 +170,25 @@
   </script>
 
   <!-- Scripts -->
-  <script src="/js/api.js?v=app-19"></script>
-  <script src="/js/lib/hierarchy-tree.js?v=app-19"></script>
-  <script src="/js/demoHierarchy.js?v=app-19"></script>
-  <script src="/js/app.js?v=app-19"></script>
-  <script src="/js/marzam-pharmacies-map.js?v=app-19"></script>
-  <script src="/js/marzam-charts.js?v=app-19"></script>
-  <script src="/js/views.js?v=app-19"></script>
+  <script src="/js/api.js?v=app-20"></script>
+  <script src="/js/ui-components.js?v=app-20"></script>
+  <script src="/js/lib/hierarchy-tree.js?v=app-20"></script>
+  <script src="/js/demoHierarchy.js?v=app-20"></script>
+  <script src="/js/app.js?v=app-20"></script>
+  <script src="/js/marzam-pharmacies-map.js?v=app-20"></script>
+  <script src="/js/marzam-charts.js?v=app-20"></script>
+  <script src="/js/views.js?v=app-20"></script>
   <!-- Routing-aware views (post-057). Each appends to window.MarzamViews
        and uses Alpine for scoped reactivity. Loaded AFTER views.js so they
        can extend the registry. -->
-  <script src="/js/views/plan-editor.js?v=app-19"></script>
-  <script src="/js/views/live-ops.js?v=app-19"></script>
-  <script src="/js/views/my-route.js?v=app-19"></script>
-  <script src="/js/views/post-mortem.js?v=app-19"></script>
-  <script src="/js/onboarding-wizard.js?v=app-19"></script>
-  <script src="/js/visit-client.js?v=app-19"></script>
-  <script src="/js/distribution.js?v=app-19"></script>
-  <script src="/js/marzam-analytics-ext.js?v=app-19"></script>
+  <script src="/js/views/plan-editor.js?v=app-20"></script>
+  <script src="/js/views/live-ops.js?v=app-20"></script>
+  <script src="/js/views/my-route.js?v=app-20"></script>
+  <script src="/js/views/post-mortem.js?v=app-20"></script>
+  <script src="/js/onboarding-wizard.js?v=app-20"></script>
+  <script src="/js/visit-client.js?v=app-20"></script>
+  <script src="/js/distribution.js?v=app-20"></script>
+  <script src="/js/marzam-analytics-ext.js?v=app-20"></script>
 </body>
 </html>
 

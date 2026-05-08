@@ -47,7 +47,8 @@
     "qa:diacritics": "node scripts/qa-token-diacritics.js",
     "qa:cron-dbl": "node scripts/qa-cron-double-fire.js",
     "qa:all": "node scripts/qa-run-all.js",
-    "probe:live": "node scripts/probe-live-hierarchy.js"
+    "probe:live": "node scripts/probe-live-hierarchy.js",
+    "docs:openapi": "node scripts/generate-openapi.js"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^8.1.1",

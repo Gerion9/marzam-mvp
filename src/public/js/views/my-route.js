@@ -269,27 +269,35 @@
         <!-- Sticky next-stop card -->
         <template x-if="next">
           <div class="mz-next-stop-card">
-            <div class="flex items-start gap-3">
-              <div class="flex-1 min-w-0">
-                <div class="text-[10px] font-bold uppercase tracking-widest text-orange-600">Siguiente parada · <span x-text="(nextIdx + 1) + ' de ' + total"></span></div>
-                <div class="text-base font-black text-slate-800 truncate mt-0.5" x-text="next.farmacia_nombre || 'Sin nombre'"></div>
-                <div class="text-[11px] text-slate-500 truncate" x-text="next.delegacion_municipio || ''"></div>
-                <div class="mt-2 flex items-center gap-3 text-xs">
-                  <span class="font-bold text-slate-700" x-text="'ETA ' + etaLabel"></span>
-                  <span class="text-slate-400">·</span>
-                  <span class="text-slate-600" x-text="etaMinutes + ' min'"></span>
-                  <span class="text-slate-400">·</span>
-                  <span class="mz-chip" :class="etaOnTime ? 'mz-chip-ontime' : 'mz-chip-late'" x-text="etaOnTime ? 'a tiempo' : 'tarde'"></span>
-                </div>
+            <div class="min-w-0">
+              <div class="text-[10px] font-bold uppercase tracking-widest text-orange-600">Siguiente parada · <span x-text="(nextIdx + 1) + ' de ' + total"></span></div>
+              <div class="text-base font-black text-slate-800 truncate mt-0.5" x-text="prettyName(next) || 'Sin nombre'"></div>
+              <div class="text-[11px] text-slate-500 truncate" x-text="next.delegacion_municipio || ''"></div>
+              <div class="mt-2 flex items-center gap-3 text-xs">
+                <span class="font-bold text-slate-700" x-text="'ETA ' + etaLabel"></span>
+                <span class="text-slate-400">·</span>
+                <span class="text-slate-600" x-text="etaMinutes + ' min'"></span>
+                <span class="text-slate-400">·</span>
+                <span class="mz-chip" :class="etaOnTime ? 'mz-chip-ontime' : 'mz-chip-late'" x-text="etaOnTime ? 'a tiempo' : 'tarde'"></span>
               </div>
-              <div class="flex flex-col gap-1.5">
-                <a :href="navUrl" target="_blank" rel="noopener" class="bg-blue-600 text-white text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg shadow text-center">Abrir</a>
-                <button @click="startStop()" class="bg-emerald-600 text-white text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg shadow" x-show="next.status !== 'in_progress'">Iniciar</button>
-                <button @click="registerStop(next)"
-                        class="text-white text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg shadow"
-                        :class="isProspect(next) ? 'bg-orange-600' : 'bg-violet-600'"
-                        x-text="isProspect(next) ? 'Iniciar proceso' : 'Registrar visita'"></button>
-              </div>
+            </div>
+            <!--
+              Action row redesigned (Phase 2): 1 primary button (registerStop)
+              + 1 secondary icon button (Navegar / Maps deep link).
+              The legacy "Iniciar" status-only button was merged into the wizard
+              flow — opening the wizard implies starting the stop. The legacy
+              "Abrir" was redundant with the new map icon button. See plan.
+            -->
+            <div class="mt-3 flex items-center gap-2">
+              <button @click="startStopAndRegister(next)"
+                      class="flex-1 text-white text-sm font-bold py-2.5 px-3 rounded-xl shadow-md active:translate-y-px"
+                      :class="isProspect(next) ? 'bg-orange-600 active:bg-orange-700' : 'bg-violet-600 active:bg-violet-700'"
+                      x-text="isProspect(next) ? 'Iniciar proceso' : 'Registrar visita'"></button>
+              <a :href="navUrl" target="_blank" rel="noopener"
+                 class="flex items-center justify-center w-12 h-12 rounded-xl bg-blue-50 text-blue-700 active:bg-blue-100"
+                 aria-label="Navegar a la farmacia">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              </a>
             </div>
             <!-- Progress bar -->
             <div class="mt-3 h-1.5 rounded-full bg-slate-100 overflow-hidden">
@@ -305,28 +313,50 @@
         <!-- Full list -->
         <div class="space-y-1.5">
           <template x-for="(s, i) in stops" :key="s.id">
-            <div class="bg-white rounded-xl border px-3 py-2 flex items-center gap-3"
+            <div class="relative bg-white rounded-xl border px-3 py-2 flex items-center gap-3"
                  :class="i === nextIdx ? 'border-orange-300 ring-1 ring-orange-200' : 'border-slate-100'">
               <span class="mz-avatar flex-shrink-0 text-[11px]"
                     :style="'background:' + colorFor(s)" x-text="s.route_order || (i+1)"></span>
               <div class="flex-1 min-w-0">
-                <div class="text-sm font-bold text-slate-800 truncate" x-text="s.farmacia_nombre || 'Sin nombre'"></div>
+                <div class="text-sm font-bold text-slate-800 truncate" x-text="prettyName(s) || 'Sin nombre'"></div>
                 <div class="text-[11px] text-slate-500 truncate" x-text="s.delegacion_municipio || ''"></div>
               </div>
               <div class="text-right text-[11px] flex flex-col items-end gap-1">
                 <div class="font-semibold text-slate-700" x-text="timeOf(s.expected_arrival_time)"></div>
                 <span class="mz-chip" :class="statusClass(s)" x-text="statusLabel(s)"></span>
-                <div class="flex items-center gap-1 mt-0.5 flex-wrap justify-end" x-show="s.status !== 'done' && s.status !== 'deviated' && s.status !== 'skipped'">
-                  <a :href="wazeUrl(s)" target="_blank" rel="noopener"
-                     class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-violet-100 text-violet-700">Waze</a>
-                  <button @click="deviateStop(s)"
-                     class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-rose-100 text-rose-700">Desviar</button>
+                <!--
+                  Per-row actions collapsed (Phase 2): 1 primary CTA + overflow.
+                  Was: Waze | Desviar | Iniciar proceso (3 tiny buttons).
+                  Now: [Iniciar] [⋯] — overflow opens row menu with Navegar + Desviar.
+                -->
+                <div class="flex items-center gap-1.5 mt-0.5" x-show="s.status !== 'done' && s.status !== 'deviated' && s.status !== 'skipped'">
                   <button @click="registerStop(s)"
-                     class="text-[10px] font-bold uppercase px-2 py-0.5 rounded text-white"
+                     class="text-[10px] font-bold uppercase px-2.5 py-1 rounded-md text-white"
                      :class="isProspect(s) ? 'bg-orange-600' : 'bg-violet-600'"
-                     x-text="isProspect(s) ? 'Iniciar proceso' : 'Registrar'"></button>
+                     x-text="isProspect(s) ? 'Iniciar' : 'Registrar'"></button>
+                  <button @click.stop="rowMenuIdx = rowMenuIdx === i ? null : i"
+                     class="w-6 h-6 rounded-md bg-slate-100 text-slate-500 flex items-center justify-center active:bg-slate-200"
+                     aria-label="Más opciones">
+                    <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+                  </button>
                 </div>
               </div>
+              <!-- Per-row overflow menu (Phase 2) -->
+              <template x-if="rowMenuIdx === i">
+                <div class="absolute right-2 top-full mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden text-left" @click.outside="rowMenuIdx = null">
+                  <a :href="wazeUrl(s)" target="_blank" rel="noopener"
+                     @click="rowMenuIdx = null"
+                     class="block px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                    <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                    Navegar
+                  </a>
+                  <button @click="deviateStop(s); rowMenuIdx = null"
+                     class="block w-full text-left px-4 py-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+                    Desviar parada
+                  </button>
+                </div>
+              </template>
             </div>
           </template>
         </div>
@@ -357,8 +387,19 @@
       deviationOpen: false,
       deviationStop: null,
       deviationReason: '',
+      // Phase 2: index of stop currently showing its overflow menu, or null.
+      rowMenuIdx: null,
 
       get next() { return this.stops[this.nextIdx]; },
+      // Phase 5: pretty-print pharmacy name for display. The stored value
+      // arrives in MAYÚSCULAS from the source DB; we don't mutate it,
+      // just title-case at render. Falls back gracefully if the helper
+      // hasn't loaded yet.
+      prettyName(s) {
+        if (!s) return '';
+        const raw = s.farmacia_nombre || s.name || '';
+        return window.MarzamUI?.titleCaseEs ? window.MarzamUI.titleCaseEs(raw) : raw;
+      },
       get total() { return this.stops.length; },
       get done() { return this.stops.filter((s) => s.status === 'done').length; },
       get progressPct() { return this.total ? (this.done / this.total) * 100 : 0; },
@@ -481,6 +522,18 @@
             this.etaLabel = '—';
           }
         } catch { /* keep prior values */ }
+      },
+      // Phase 2: combined "start visit + open wizard". The two-step legacy
+      // flow (Iniciar → Iniciar proceso) was the source of the verb collision
+      // QA flagged. Now opening the wizard is the commitment to start the
+      // stop — we mark it in_progress in parallel so the timeline is clean.
+      async startStopAndRegister(stop) {
+        if (!stop) return;
+        // Fire-and-forget the in-progress mark; don't block the wizard on it.
+        if (stop.status !== 'in_progress' && stop === this.next) {
+          this.startStop().catch((err) => console.warn('[my-route] startStop bg failed', err));
+        }
+        this.registerStop(stop);
       },
       async startStop() {
         const a = this.next; if (!a) return;
@@ -612,11 +665,15 @@
   // Override renderMyRoutes for representante role; keep manager flow intact.
   const _originalRenderMyRoutes = window.MarzamViews.renderMyRoutes;
   window.MarzamViews.renderMyRoutes = async function (body) {
-    if (APP.role === ROLES.REPRESENTANTE && APP.mode !== 'team') {
+    if (APP.role === ROLES.REPRESENTANTE) {
       return renderMyRouteRich(body);
     }
     if (typeof _originalRenderMyRoutes === 'function') return _originalRenderMyRoutes(body);
   };
   // Also expose direct entry point for testing.
   window.MarzamViews.renderMyRouteRich = renderMyRouteRich;
+  // Cleanup hook called by app.js when navigating away from routes tab.
+  // Without this, the SRC_ROUTE / SRC_STOPS / SRC_ME map layers persist
+  // and bleed into other tabs (notably Live). See plan Phase 1.
+  window.MarzamViews.cleanupMyRoute = clearLayers;
 })();

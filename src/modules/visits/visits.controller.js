@@ -3,6 +3,7 @@ const path = require('path');
 
 const config = require('../../config');
 const { uploadVerificationPhoto } = require('../../utils/gcsEvidence');
+const { assertImageBuffer } = require('../../utils/imageMagicBytes');
 const visitService = require('./visits.service');
 const pharmacyService = require('../pharmacies/pharmacies.service');
 
@@ -11,6 +12,10 @@ function resolvePhotoExtension(originalName = '') {
 }
 
 async function persistPhoto(file, visit, pharmacy) {
+  // [S9] Defense in depth — the GCS path checks magic bytes too, but the local
+  // dev path skips it without this guard, leaving local devs vulnerable to
+  // crafted uploads if they expose their dev port.
+  assertImageBuffer(file.buffer, file.mimetype);
   if (config.photos.provider === 'local') {
     if (config.env === 'production') {
       const err = new Error('Local photo storage is disabled in production. Set PHOTO_STORAGE_PROVIDER=gcs.');
@@ -82,6 +87,8 @@ async function uploadStagingPhoto(req, res, next) {
     if (!req.file) {
       return res.status(400).json({ error: 'Photo file is required' });
     }
+    // [S9] Magic-byte check before either branch (local or GCS).
+    assertImageBuffer(req.file.buffer, req.file.mimetype);
     if (config.photos.provider === 'local') {
       if (config.env === 'production') {
         const err = new Error('Local photo storage is disabled in production');

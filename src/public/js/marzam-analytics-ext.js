@@ -17,6 +17,16 @@
   }
   function fmtPct(n) { return ((Number(n) || 0) * 100).toFixed(0) + '%'; }
 
+  // Role label map — keeps in sync with app.js ROLE_LABEL but local to avoid
+  // tight coupling. Update both if you add a role.
+  const ROLE_LABEL = {
+    director_sucursal: 'Director',
+    gerente_ventas: 'Gerente',
+    supervisor: 'Supervisor',
+    representante: 'Representante',
+  };
+  function roleLabel(r) { return ROLE_LABEL[r] || r || ''; }
+
   function block(title, html) {
     return `
       <div class="bg-white border border-slate-200 rounded-2xl p-4 mt-4 shadow-sm">
@@ -29,6 +39,14 @@
     if (!container || container.dataset.marzamExtInjected) return;
     container.dataset.marzamExtInjected = '1';
 
+    const role = window.APP?.role || '';
+    const isManager = ['director_sucursal', 'gerente_ventas', 'supervisor'].includes(role);
+
+    // Phase 2: Reps get the personal scorecard rendered by views.js. The
+    // hierarchy/margin extensions below only make sense at manager scope —
+    // skip them entirely for reps to avoid the cross-team noise the QA flagged.
+    if (!isManager) return;
+
     const wrap = document.createElement('div');
     wrap.id = 'analytics-ext';
     wrap.innerHTML = `
@@ -38,13 +56,8 @@
     `;
     container.appendChild(wrap);
 
-    const role = window.APP?.role || '';
-    const isManager = ['director_sucursal', 'gerente_ventas', 'supervisor'].includes(role);
-
-    // Bloqueos: solo management
-    if (!isManager) {
-      wrap.querySelector('#ax-quotas').innerHTML = '<div class="text-xs text-slate-500">No disponible para tu rol.</div>';
-    } else {
+    // Bloqueos: solo management (already guarded above with the early return).
+    {
       try {
         const data = await API.get('/analytics/quotas-blockages');
         const rows = data.rows || [];
@@ -57,7 +70,7 @@
               ${blocked.slice(0, 8).map((r) => `
                 <div class="flex items-center gap-2 text-xs">
                   <span class="flex-1 font-bold text-slate-800 truncate">${escapeHtml(r.full_name || '')}</span>
-                  <span class="text-slate-500">${escapeHtml(r.role || '')}</span>
+                  <span class="text-slate-500">${escapeHtml(roleLabel(r.role))}</span>
                   ${r.gap_new > 0 ? `<span class="bg-emerald-100 text-emerald-700 font-bold rounded-full px-2">−${r.gap_new} nuevas</span>` : ''}
                   ${r.gap_existing > 0 ? `<span class="bg-blue-100 text-blue-700 font-bold rounded-full px-2">−${r.gap_existing} clientes</span>` : ''}
                 </div>
@@ -69,7 +82,6 @@
         wrap.querySelector('#ax-quotas').innerHTML = `<div class="text-xs text-rose-600">${escapeHtml(err?.error || 'Error')}</div>`;
       }
     }
-
     // Efectividad por nivel
     try {
       const data = await API.get('/analytics/hierarchy-effectiveness');
@@ -82,7 +94,7 @@
             ${rows.map((r) => `
               <div>
                 <div class="flex items-center justify-between text-xs mb-0.5">
-                  <span class="font-bold text-slate-800">${escapeHtml(r.role)}</span>
+                  <span class="font-bold text-slate-800">${escapeHtml(roleLabel(r.role))}</span>
                   <span class="text-slate-500">${r.visits} visitas · ${r.orders} pedidos · ${fmtPct(r.conversion_rate)}</span>
                 </div>
                 <div class="h-2 bg-slate-100 rounded-full overflow-hidden">

@@ -132,14 +132,26 @@
       const banner = document.getElementById('demo-banner');
       if (banner) {
         banner.classList.remove('hidden');
-        document.getElementById('demo-banner-text').textContent = `Modo Demo · Sesión como ${ROLE_LABEL[APP.role]} · ${user.full_name}`;
+        banner.style.display = 'inline-flex';
+        // Phase 5: chip-style content — short and glance-able. Was: full sentence.
+        // Demo accounts use full_names like "Director Demo" / "Representante Demo",
+        // so a naive split takes the role label as firstName and we'd render
+        // "Demo · Director Director". Skip the firstName when it just repeats
+        // the role label.
+        const roleLabel = ROLE_LABEL[APP.role] || '';
+        const firstName = (user.full_name || '').split(' ')[0] || '';
+        const displayName = firstName && firstName.toLowerCase() !== roleLabel.toLowerCase()
+          ? firstName
+          : '';
+        document.getElementById('demo-banner-text').textContent = displayName
+          ? `Demo · ${roleLabel} ${displayName}`
+          : `Demo · ${roleLabel}`;
       }
     }
 
     renderTopbar();
     renderSidebar();
     setupPoblacionPill();
-    setupModePill();
     setupVisitFAB();
     setupUserMenu();
     setupCollapsePanel();
@@ -223,9 +235,10 @@
     try {
       const data = await API.get('/poblaciones');
       const opts = (data?.options || []);
-      sel.innerHTML = opts.map((o) =>
-        `<option value="${o.value}" ${o.enabled ? '' : 'disabled style="color:#94a3b8"'}>${o.value}${o.enabled ? '' : ' (no disponible)'}</option>`
-      ).join('');
+      sel.innerHTML = opts.map((o) => {
+        const label = o.value === '__all__' ? 'Todas las poblaciones' : o.value;
+        return `<option value="${o.value}" ${o.enabled ? '' : 'disabled style="color:#94a3b8"'}>${label}${o.enabled ? '' : ' (no disponible)'}</option>`;
+      }).join('');
       sel.value = data.active;
       APP.poblacion = data.active;
       pill.classList.remove('hidden');
@@ -246,27 +259,10 @@
     }
   }
 
-  function setupModePill() {
-    const pill = document.getElementById('mode-pill');
-    if (APP.role === ROLES.REPRESENTANTE) {
-      pill.classList.add('hidden');
-      return;
-    }
-    pill.classList.remove('hidden');
-    pill.classList.add('flex');
-    pill.querySelectorAll('.mode-pill-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        APP.mode = btn.dataset.mode;
-        pill.querySelectorAll('.mode-pill-btn').forEach((b) => b.classList.toggle('active', b === btn));
-        if (APP.mode === 'team') selectTab('team');
-        else selectTab('routes');
-      });
-    });
-  }
-
   function setupVisitFAB() {
     const fab = document.getElementById('fab-start-visit');
-    fab.classList.remove('hidden');
+    // Initial visibility — only on routes tab. selectTab() also keeps this in sync.
+    syncFabVisibility('routes');
     fab.addEventListener('click', async () => {
       if (APP.activeSession) {
         await endVisitSession();
@@ -282,6 +278,17 @@
       // Tap on pill jumps to routes view
       selectTab('routes');
     });
+  }
+
+  // FAB "Iniciar Modo Visita" only makes sense in routes context. Hide it on
+  // analytics/team/live/plan to avoid the verb collision the QA review flagged.
+  // Active-session pill stays visible on every tab — it's a session indicator,
+  // not an action prompt.
+  function syncFabVisibility(tabId) {
+    const fab = document.getElementById('fab-start-visit');
+    if (!fab) return;
+    if (tabId === 'routes') fab.classList.remove('hidden');
+    else fab.classList.add('hidden');
   }
 
   function setupUserMenu() {
@@ -474,6 +481,7 @@
   function cleanupActiveView() {
     try { window.MarzamViews?.cleanupLiveOps?.(); } catch (e) { console.warn('[app] cleanupLiveOps failed', e); }
     try { window.MarzamViews?.cleanupPostMortem?.(); } catch (e) { console.warn('[app] cleanupPostMortem failed', e); }
+    try { window.MarzamViews?.cleanupMyRoute?.(); } catch (e) { console.warn('[app] cleanupMyRoute failed', e); }
     try { window.MarzamPharmaciesMap?.hide?.(); } catch (e) { console.warn('[app] hide pharmacies map failed', e); }
   }
 
@@ -483,6 +491,7 @@
     document.querySelectorAll('.nav-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tabId));
     setPanelTitle(tabId);
     renderActions(tabId);
+    syncFabVisibility(tabId);
     // Wide panel for Analytics and Plan & Metas (also covers legacy aliases that resolve to them)
     const WIDE_TABS = new Set(['analytics', 'plan', 'planEditor', 'postMortem', 'targets', 'distribution']);
     document.getElementById('panel').classList.toggle('panel-wide', WIDE_TABS.has(tabId));
@@ -531,7 +540,7 @@
 
   function setPanelTitle(tabId) {
     const titles = {
-      routes:    { title: APP.mode === 'team' ? 'Equipo · Plan del día' : 'Mis rutas', subtitle: APP.mode === 'team' ? 'Plan agregado de tu equipo' : `${ROLE_LABEL[APP.role]} · Plan del día` },
+      routes:    { title: 'Mis rutas', subtitle: `${ROLE_LABEL[APP.role]} · Plan del día` },
       team:      { title: 'Mi equipo', subtitle: 'Cascada · Tracking en vivo' },
       analytics: { title: 'Analíticas', subtitle: 'Cumplimiento, PARETO y tiempo' },
       plan:      { title: 'Plan & Metas', subtitle: 'Capacidad, overrides y cumplimiento mensual' },

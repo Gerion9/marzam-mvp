@@ -351,22 +351,115 @@
 
   // Create sources + layers + click handlers exactly once. After this
   // runs subsequent paints just update source data via setData().
+  // [P6] Sources are clustered so the map stays smooth at city-zoom levels
+  // where 3,121 features would otherwise overlap. Pins decluster automatically
+  // past clusterMaxZoom (street-level). Click on a cluster zooms in.
   function addStaticLayers(map) {
     if (STATE.layersAdded) return;
     STATE.layersAdded = true;
 
+    const CLUSTER_OPTS = {
+      type: 'geojson',
+      cluster: true,
+      clusterRadius: 50,
+      clusterMaxZoom: 12,
+      data: { type: 'FeatureCollection', features: [] },
+    };
+
     if (!map.getSource('marzam-pharmacies')) {
-      map.addSource('marzam-pharmacies', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addSource('marzam-pharmacies', CLUSTER_OPTS);
     }
     if (!map.getSource('marzam-pharmacies-prospects')) {
-      map.addSource('marzam-pharmacies-prospects', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addSource('marzam-pharmacies-prospects', CLUSTER_OPTS);
     }
+
+    // Cluster bubble + count label for both sources. Color by source so reps
+    // can distinguish padrón clusters (red-ish) from prospect clusters
+    // (blue-ish) at a glance.
+    if (!map.getLayer('marzam-pharmacies-clusters')) {
+      map.addLayer({
+        id: 'marzam-pharmacies-clusters',
+        type: 'circle',
+        source: 'marzam-pharmacies',
+        filter: ['has', 'point_count'],
+        paint: {
+          'circle-color': '#dc2626',
+          'circle-opacity': 0.65,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff',
+          'circle-radius': [
+            'step', ['get', 'point_count'],
+            14, 50, 18, 200, 24, 1000, 32,
+          ],
+        },
+      });
+      map.addLayer({
+        id: 'marzam-pharmacies-cluster-count',
+        type: 'symbol',
+        source: 'marzam-pharmacies',
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': ['get', 'point_count_abbreviated'],
+          'text-size': 12,
+        },
+        paint: { 'text-color': '#ffffff' },
+      });
+    }
+    if (!map.getLayer('marzam-pharmacies-prospects-clusters')) {
+      map.addLayer({
+        id: 'marzam-pharmacies-prospects-clusters',
+        type: 'circle',
+        source: 'marzam-pharmacies-prospects',
+        filter: ['has', 'point_count'],
+        paint: {
+          'circle-color': '#2563eb',
+          'circle-opacity': 0.55,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff',
+          'circle-radius': [
+            'step', ['get', 'point_count'],
+            12, 50, 16, 200, 22, 1000, 30,
+          ],
+        },
+      });
+      map.addLayer({
+        id: 'marzam-pharmacies-prospects-cluster-count',
+        type: 'symbol',
+        source: 'marzam-pharmacies-prospects',
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': ['get', 'point_count_abbreviated'],
+          'text-size': 11,
+        },
+        paint: { 'text-color': '#ffffff' },
+      });
+    }
+
+    // Click on a cluster → zoom in. Same handler covers both source clusters.
+    function onClusterClick(sourceId) {
+      return (e) => {
+        const features = map.queryRenderedFeatures(e.point, {
+          layers: [sourceId === 'marzam-pharmacies' ? 'marzam-pharmacies-clusters' : 'marzam-pharmacies-prospects-clusters'],
+        });
+        const clusterId = features[0]?.properties?.cluster_id;
+        const src = map.getSource(sourceId);
+        if (!src || clusterId == null) return;
+        src.getClusterExpansionZoom(clusterId, (err, zoom) => {
+          if (err) return;
+          map.easeTo({ center: features[0].geometry.coordinates, zoom });
+        });
+      };
+    }
+    map.on('click', 'marzam-pharmacies-clusters', onClusterClick('marzam-pharmacies'));
+    map.on('click', 'marzam-pharmacies-prospects-clusters', onClusterClick('marzam-pharmacies-prospects'));
 
     if (!map.getLayer('marzam-pharmacies-prospects')) {
       map.addLayer({
         id: 'marzam-pharmacies-prospects',
         type: 'circle',
         source: 'marzam-pharmacies-prospects',
+        // Only show the colored unclustered dot when we have NOT clustered.
+        filter: ['!', ['has', 'point_count']],
         paint: {
           'circle-radius': [
             'match', ['get', 'tier'],
@@ -390,7 +483,11 @@
         id: 'marzam-pharmacies-prospects-ring',
         type: 'circle',
         source: 'marzam-pharmacies-prospects',
-        filter: ['==', ['get', 'is_consultorio'], 1],
+        filter: [
+          'all',
+          ['!', ['has', 'point_count']],
+          ['==', ['get', 'is_consultorio'], 1],
+        ],
         paint: {
           'circle-radius': [
             'match', ['get', 'tier'],
@@ -409,6 +506,8 @@
         id: 'marzam-pharmacies',
         type: 'circle',
         source: 'marzam-pharmacies',
+        // Only show the colored unclustered dot when we have NOT clustered.
+        filter: ['!', ['has', 'point_count']],
         paint: {
           'circle-radius': [
             'match', ['get', 'pareto'],
@@ -568,17 +667,27 @@
 
   function renderLegend() {
     if (STATE.legendEl) STATE.legendEl.remove();
+    // Phase 3: legend defaults to COLLAPSED on desktop+mobile so it stops
+    // covering ~22% of the map area. State persists per user via localStorage.
+    // First-time users see the chip; clicking it expands the full filter UI.
+    const stored = (typeof localStorage !== 'undefined') ? localStorage.getItem('marzam_legend_collapsed') : null;
+    const isCollapsed = stored == null ? true : stored === '1';
     const wrap = document.createElement('div');
     wrap.id = 'pharmacies-legend';
     wrap.className = 'fixed z-[55] bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl border border-white/60 ring-1 ring-slate-200/50 p-3 text-xs '
       + 'md:bottom-4 md:right-4 md:w-[280px] md:max-h-[80vh] md:overflow-y-auto '
       + 'max-md:left-3 max-md:right-3 max-md:bottom-[88px] max-md:max-h-[60vh] max-md:overflow-y-auto';
+    if (isCollapsed) wrap.classList.add('legend-collapsed');
     wrap.innerHTML = `
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-[10px] font-black uppercase tracking-wider text-slate-700">Mapa de farmacias y consultorios</span>
-        <button id="legend-collapse" class="text-slate-400 hover:text-slate-700 text-base leading-none w-5 h-5 flex items-center justify-center" title="Ocultar">−</button>
+      <div class="flex items-center justify-between gap-2 ${isCollapsed ? '' : 'mb-2'}">
+        <button id="legend-toggle" class="flex-1 flex items-center gap-2 text-left">
+          <svg class="w-4 h-4 text-slate-500 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          <span class="text-[10px] font-black uppercase tracking-wider text-slate-700 truncate">Mapa de farmacias y consultorios</span>
+          <span id="legend-summary" class="text-[10px] font-semibold text-slate-500 ${isCollapsed ? '' : 'hidden'} truncate">Cargando…</span>
+        </button>
+        <button id="legend-collapse" class="text-slate-400 hover:text-slate-700 text-base leading-none w-5 h-5 flex items-center justify-center flex-shrink-0" title="${isCollapsed ? 'Expandir' : 'Ocultar'}">${isCollapsed ? '▾' : '−'}</button>
       </div>
-      <div id="legend-body">
+      <div id="legend-body" class="${isCollapsed ? 'hidden' : ''}">
         <div class="text-[9px] uppercase font-bold tracking-wider text-rose-600 mb-1 mt-1">Padrón Marzam · Pareto</div>
         <div class="space-y-0.5 mb-1">
           ${legendRow({ key: 'padron_A', color: PARETO_COLORS.A, title: 'A · Crítico',    subtitle: 'Cuentas top de revenue',   countId: 'count-padron-A' })}
@@ -634,10 +743,23 @@
       rerenderLegendBody();
       repaint();
     });
-    wrap.querySelector('#legend-collapse').addEventListener('click', () => {
+    function toggleCollapse() {
       const body = wrap.querySelector('#legend-body');
-      body.classList.toggle('hidden');
+      const summary = wrap.querySelector('#legend-summary');
+      const btn = wrap.querySelector('#legend-collapse');
+      const collapsed = body.classList.toggle('hidden');
+      if (summary) summary.classList.toggle('hidden', !collapsed);
+      if (btn) {
+        btn.textContent = collapsed ? '▾' : '−';
+        btn.setAttribute('title', collapsed ? 'Expandir' : 'Ocultar');
+      }
+      try { localStorage.setItem('marzam_legend_collapsed', collapsed ? '1' : '0'); } catch { /* ignore */ }
+    }
+    wrap.querySelector('#legend-collapse').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleCollapse();
     });
+    wrap.querySelector('#legend-toggle').addEventListener('click', toggleCollapse);
   }
 
   function rerenderLegendBody() {
@@ -676,6 +798,14 @@
       if (el) el.textContent = String(n);
     };
     Object.entries(counts).forEach(([k, n]) => setText(`#count-${k}`, n));
+    // Phase 3: also paint the collapsed chip summary so the manager sees a
+    // glance-able count without expanding the full legend.
+    const padronTotal = counts['padron-A'] + counts['padron-B'] + counts['padron-C'];
+    const prospTotal = Object.entries(counts)
+      .filter(([k]) => k.startsWith('prosp-'))
+      .reduce((s, [, n]) => s + n, 0);
+    const sum = STATE.legendEl.querySelector('#legend-summary');
+    if (sum) sum.textContent = `Padrón ${padronTotal.toLocaleString('es-MX')} · Prospectos ${prospTotal.toLocaleString('es-MX')}`;
   }
 
   function repaint() {

@@ -5,12 +5,12 @@
  */
 const OfflineQueue = (() => {
   const DB_NAME = 'marzam_offline';
-  // Bumped to v3 to add the generic `pending_ops` store used by my-route.js
-  // (start/deviate). Existing v2 stores are preserved by the upgrade path.
-  const DB_VERSION = 3;
+  // v3: pending_ops; v4: pending_docs for legal-doc uploads (Phase 4 offline).
+  const DB_VERSION = 4;
   const STORE_VISITS = 'pending_visits';
   const STORE_ASSIGNMENT = 'cached_assignment';
   const STORE_OPS = 'pending_ops';
+  const STORE_DOCS = 'pending_docs';
   const MAX_RETRIES = 10;
   const MAX_PHOTO_DIMENSION = 1280;
   const PHOTO_QUALITY = 0.7;
@@ -51,6 +51,10 @@ const OfflineQueue = (() => {
         if (!db.objectStoreNames.contains(STORE_OPS)) {
           const opsStore = db.createObjectStore(STORE_OPS, { keyPath: 'id' });
           opsStore.createIndex('createdAt', 'createdAt', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(STORE_DOCS)) {
+          const docsStore = db.createObjectStore(STORE_DOCS, { keyPath: 'id' });
+          docsStore.createIndex('onboardingId', 'onboardingId', { unique: false });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -426,6 +430,121 @@ const OfflineQueue = (() => {
     return ops.length;
   }
 
+  // ── Legal docs upload queue (Phase 4) ──────────────────────────────
+  // Stores failed/offline doc uploads with their file as an ArrayBuffer so
+  // they survive a tab close. Drained on `online`. Compresses the photo
+  // first to keep IndexedDB size bounded (Marzam reps capture lots of docs).
+
+  async function enqueueDocUpload({ onboardingId, docType, file }) {
+    if (!onboardingId || !docType || !file) {
+      throw new Error('enqueueDocUpload requires {onboardingId, docType, file}');
+    }
+    const compressed = await _compressPhoto(file);
+    const db = await openDB();
+    const id = _generateId();
+    const record = {
+      id,
+      onboardingId,
+      docType,
+      blob: compressed.blob || (await fileToArrayBuffer(file)),
+      filename: compressed.name || file.name,
+      mimetype: compressed.type || file.type,
+      createdAt: Date.now(),
+      retries: 0,
+    };
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_DOCS, 'readwrite');
+      tx.objectStore(STORE_DOCS).put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    return id;
+  }
+
+  async function listPendingDocs() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_DOCS, 'readonly');
+      const req = tx.objectStore(STORE_DOCS).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function pendingDocsCount() {
+    const docs = await listPendingDocs();
+    return docs.length;
+  }
+
+  async function _deleteDoc(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_DOCS, 'readwrite');
+      tx.objectStore(STORE_DOCS).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function _bumpDocRetry(id) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_DOCS, 'readwrite');
+      const store = tx.objectStore(STORE_DOCS);
+      const req = store.get(id);
+      req.onsuccess = () => {
+        const row = req.result;
+        if (!row) { resolve(); return; }
+        row.retries = (row.retries || 0) + 1;
+        store.put(row);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
+  let _drainingDocs = false;
+  async function drainDocs() {
+    if (_drainingDocs) return { drained: 0, failed: 0, skipped: true };
+    if (!navigator.onLine) return { drained: 0, failed: 0, skipped: true };
+    _drainingDocs = true;
+    try {
+      const docs = await listPendingDocs();
+      let drained = 0;
+      let failed = 0;
+      for (const d of docs) {
+        try {
+          const blob = d.blob instanceof ArrayBuffer ? new Blob([d.blob], { type: d.mimetype || 'image/jpeg' }) : d.blob;
+          const fd = new FormData();
+          fd.append('file', blob, d.filename || 'doc.jpg');
+          fd.append('doc_type', d.docType);
+          const token = localStorage.getItem('token');
+          const res = await fetch(`/api/pharmacy-onboarding/${d.onboardingId}/documents`, {
+            method: 'POST',
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+            body: fd,
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          await _deleteDoc(d.id);
+          drained += 1;
+        } catch (err) {
+          await _bumpDocRetry(d.id);
+          if ((d.retries || 0) + 1 >= MAX_RETRIES) await _deleteDoc(d.id);
+          failed += 1;
+        }
+      }
+      if (drained > 0) {
+        window.MarzamToast?.show(
+          `Subidos ${drained} documento${drained === 1 ? '' : 's'} pendiente${drained === 1 ? '' : 's'}.`,
+          'success',
+        );
+      }
+      return { drained, failed };
+    } finally {
+      _drainingDocs = false;
+    }
+  }
+
   return {
     openDB,
     enqueueVisit,
@@ -447,6 +566,11 @@ const OfflineQueue = (() => {
     listPendingOps,
     pendingOpsCount,
     drain,
+    // Phase 4: legal docs upload queue
+    enqueueDocUpload,
+    listPendingDocs,
+    pendingDocsCount,
+    drainDocs,
   };
 })();
 
@@ -456,8 +580,10 @@ if (typeof window !== 'undefined') {
   window.MarzamOfflineQueue = OfflineQueue;
   window.addEventListener('online', () => {
     OfflineQueue.drain().catch(() => { /* logged inside drain */ });
+    OfflineQueue.drainDocs().catch(() => { /* logged inside drain */ });
   });
   if (navigator.onLine) {
     setTimeout(() => OfflineQueue.drain().catch(() => {}), 1500);
+    setTimeout(() => OfflineQueue.drainDocs().catch(() => {}), 2500);
   }
 }

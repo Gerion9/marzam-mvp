@@ -420,6 +420,55 @@ async function bootstrapAdmin({ email, password, full_name, providedToken }) {
   return user;
 }
 
+/**
+ * [S5] Issue a short-lived SSE ticket from an authenticated user. The ticket
+ * is a UUID stored in `sse_tickets` (mig 081); the caller passes it as
+ * ?ticket= on the SSE URL instead of leaking the long-lived JWT in query
+ * params and access logs.
+ *
+ * The full user shape is stored as JSONB so the auth middleware can hydrate
+ * req.user without re-reading the JWT secret.
+ */
+async function issueSseTicket(user) {
+  if (!user || !user.id) {
+    const err = new Error('Cannot issue SSE ticket without an authenticated user');
+    err.status = 401;
+    throw err;
+  }
+  const ttlSeconds = Math.max(10, Number(process.env.SSE_TICKET_TTL_SECONDS) || 60);
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+  // Store the same shape applyPayload() in src/middleware/auth.js expects.
+  const payload = {
+    id: user.id,
+    external_id: user.external_id || null,
+    email: user.email,
+    full_name: user.full_name || null,
+    role: user.role,
+    is_global: !!user.is_global,
+    data_scope: user.data_scope || null,
+    territory_ids: Array.isArray(user.territory_ids) ? user.territory_ids : [],
+    accessible_territory_ids: Array.isArray(user.accessible_territory_ids) ? user.accessible_territory_ids : [],
+    employee_code: user.employee_code || null,
+    employee_number: user.employee_number || null,
+    branch_code: user.branch_code || null,
+    manager_code: user.manager_code || null,
+    impersonated_by: user.impersonated_by || null,
+    original_role: user.original_role || null,
+  };
+  const [row] = await db('sse_tickets')
+    .insert({
+      user_id: user.id,
+      payload,
+      expires_at: expiresAt,
+    })
+    .returning(['id']);
+  return {
+    ticket: row.id,
+    expires_at: expiresAt.toISOString(),
+    expires_in_seconds: ttlSeconds,
+  };
+}
+
 // Issue a JWT for an already-trusted user row (used right after invitation
 // activation or password reset, where credentials were just verified through
 // a one-shot token rather than email + password).
@@ -441,6 +490,7 @@ module.exports = {
   login,
   loginByUserRow,
   bootstrapAdmin,
+  issueSseTicket,
   me,
   listUsers,
   updateUser,

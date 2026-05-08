@@ -556,7 +556,10 @@
 @media (max-width: 380px) {
   #topbar { left: 8px !important; right: 8px !important; }
   #topbar .flex-1 { padding: 6px 10px; }
-  #topbar input { font-size: 12px; }
+  /* Topbar search input: kept at 16px to prevent iOS auto-zoom on focus.
+     Use placeholder shrinking via ::placeholder for visual density instead. */
+  #topbar input { font-size: 16px; }
+  #topbar input::placeholder { font-size: 12px; }
 
   #sidenav { left: 8px !important; right: 8px !important; bottom: 8px !important; height: 60px !important; }
   #sidenav .nav-tab { min-width: 50px; padding: 6px 2px; }

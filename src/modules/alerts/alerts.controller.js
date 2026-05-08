@@ -1,6 +1,7 @@
 const service = require('./alerts.service');
 const engine = require('./alerts.engine');
 const { secretsEqual } = require('../../utils/secretCompare');
+const { recordCronRun } = require('../../utils/cronRunRecorder');
 
 async function feed(req, res, next) {
   try {
@@ -27,6 +28,7 @@ async function resolve(req, res, next) {
 
 // Cron tick — auth via shared secret OR an authenticated admin.
 async function evaluateTick(req, res, next) {
+  const startedAt = Date.now();
   try {
     const cronSecret = process.env.CRON_SECRET;
     const headerSecret = req.headers['x-cron-secret'];
@@ -37,8 +39,19 @@ async function evaluateTick(req, res, next) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     const summary = await engine.evaluateAll();
+    // [O1] Record cron run for scheduler/health observability.
+    await recordCronRun('alerts-evaluate', 'ok', {
+      ...(summary && typeof summary === 'object' ? summary : {}),
+      duration_ms: Date.now() - startedAt,
+    });
     res.json({ ok: true, evaluated_at: new Date().toISOString(), summary });
-  } catch (err) { next(err); }
+  } catch (err) {
+    await recordCronRun('alerts-evaluate', 'error', {
+      message: err && err.message ? err.message : String(err),
+      duration_ms: Date.now() - startedAt,
+    });
+    next(err);
+  }
 }
 
 async function listDismissals(req, res, next) {

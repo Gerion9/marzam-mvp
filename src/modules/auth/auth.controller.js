@@ -83,4 +83,16 @@ async function stopImpersonation(req, res, next) {
   }
 }
 
-module.exports = { register, bootstrapAdmin, login, me, listUsers, impersonate, stopImpersonation };
+async function issueSseTicket(req, res, next) {
+  try {
+    const result = await authService.issueSseTicket(req.user);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  register, bootstrapAdmin, login, me, listUsers, impersonate, stopImpersonation,
+  issueSseTicket,
+};

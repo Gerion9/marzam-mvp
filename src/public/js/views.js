@@ -468,8 +468,8 @@
             ${newBadge}
             ${statusBadge}
           </div>
-          <div class="text-sm font-bold text-slate-800 mt-1 truncate">${s.name}</div>
-          <div class="text-[11px] text-slate-500 truncate">${s.address || ''}</div>
+          <div class="text-sm font-bold text-slate-800 mt-1 truncate">${window.MarzamUI?.titleCaseEs ? window.MarzamUI.titleCaseEs(s.name) : s.name}</div>
+          <div class="text-[11px] text-slate-500 truncate">${window.MarzamUI?.titleCaseEs ? window.MarzamUI.titleCaseEs(s.address || '') : (s.address || '')}</div>
           <button type="button" class="btn-stop-visit mt-2 text-[11px] font-bold rounded-lg px-2.5 py-1.5 transition ${ctaDisabled
               ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
               : isNew
@@ -953,8 +953,8 @@
              <span class="text-[10px] text-slate-400 font-mono">${escapeHtml(bucket.code)}</span>
            </div>`
         : `<div class="flex items-center gap-2 truncate">
-             <span class="mz-chip" style="background:#fef3c7;color:#92400e">VACANTE</span>
-             <span class="font-semibold text-sm text-slate-400 italic truncate">Gerencia ${escapeHtml(bucket.code)} sin titular</span>
+             <span class="mz-chip" style="background:#fef3c7;color:#92400e">SIN TITULAR</span>
+             <span class="font-semibold text-sm text-slate-400 italic truncate">Gerencia ${escapeHtml(bucket.code)}</span>
            </div>`;
       const headerHtml = `
         <button data-team-section="${bucket.code}" class="w-full flex items-center justify-between gap-2 bg-violet-50 hover:bg-violet-100 px-3 py-2 rounded-xl border border-violet-100">
@@ -971,10 +971,12 @@
       if (ger) inner.push(`<div class="ml-3">${teamCardHtml(ger)}</div>`);
       for (const [, supEntry] of bucket.supervisors.entries()) {
         const sup = supEntry.sup;
+        // Phase 3: kill the duplicate "Plaza vacante VACANTE" pattern.
+        // The badge already conveys vacancy; the title just shows the code.
         const supTitle = sup
           ? `<span class="font-semibold text-xs text-slate-700 truncate">${escapeHtml(sup.full_name)}</span><span class="text-[10px] text-slate-400 font-mono ml-1">${escapeHtml(supEntry.code + '00')}</span>`
-          : `<span class="text-xs italic text-slate-400 truncate">Plaza vacante</span><span class="text-[10px] text-slate-400 font-mono ml-1">${escapeHtml(supEntry.code + '00')}</span>`;
-        const supChip = sup ? '' : '<span class="mz-chip" style="background:#fef3c7;color:#92400e">VACANTE</span>';
+          : `<span class="text-xs italic text-slate-400 truncate">Plaza ${escapeHtml(supEntry.code + '00')}</span>`;
+        const supChip = sup ? '' : '<span class="mz-chip" style="background:#fef3c7;color:#92400e">SIN TITULAR</span>';
         // Each supervisor block is its own accordion (data-team-subsection)
         // so the manager can collapse a whole supervisor's reps when scanning
         // a big tree. Default state: expanded; click toggles.
@@ -1051,8 +1053,7 @@
             <div class="w-10 h-10 rounded-full border-2 border-dashed border-amber-400 flex items-center justify-center text-amber-500 text-lg">✕</div>
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 flex-wrap">
-                <span class="font-bold text-sm text-slate-500 italic truncate">Plaza vacante</span>
-                <span class="mz-chip" style="background:#fef3c7;color:#92400e">VACANTE</span>
+                <span class="font-bold text-sm text-slate-500 italic truncate">Plaza sin titular</span>
               </div>
               <div class="flex items-center gap-1.5 text-[11px] text-slate-500 mt-1 flex-wrap">
                 <span class="role-badge role-badge--${role}" style="font-size:9px;padding:1px 6px">${ROLE_LABEL[role] || ''}</span>
@@ -1125,8 +1126,148 @@
     poblacion: null,      // Entidad Federativa (col. marzam_clients.poblacion)
   };
 
+  // ──────────────────────────────────────────────────────────
+  // Rep personal scorecard (Phase 2). Replaces the role/person filtered
+  // dashboard for reps — that view shows "Top performers" / "Necesitan
+  // apoyo" relative to peers, which is meaningless when scope is self.
+  //
+  // Layout: 4 plain-text KPIs, one horizontal progress bar (cumplimiento),
+  // one sparkline (14 days). Per Plan agent recommendation (text-heavy >
+  // chart-heavy at 5-second glance distance for field reps).
+  // ──────────────────────────────────────────────────────────
+  async function renderRepScorecard(body) {
+    if (window.MarzamPharmaciesMap) window.MarzamPharmaciesMap.hide();
+    body.innerHTML = `<div class="space-y-3">${window.MarzamSkeleton ? window.MarzamSkeleton() : ''}${window.MarzamSkeleton ? window.MarzamSkeleton() : ''}</div>`;
+
+    const meId = APP.user && APP.user.id;
+    const role = normalizeRole(APP.user && APP.user.role);
+    const inStore = APP.isDemo && DEMO_H && DEMO_H.STORE;
+    const dayTarget = inStore ? (DEMO_H.STORE.day_targets[role] || 5) : 5;
+    const seed = (inStore && DEMO_H.STORE.compliance_seeds[meId]) || { today: 0, month: 0, trend: [] };
+
+    // Real data first; fall back to seed for empty pre-launch state.
+    let visits = [];
+    try { visits = await API.get(`/visits/by-user/${meId}?days=30`); } catch { /* keep empty */ }
+    const total = Array.isArray(visits) ? visits.length : 0;
+    const interested = Array.isArray(visits)
+      ? visits.filter((v) => v.outcome === 'interested').length
+      : 0;
+    const monthTarget = dayTarget * 22;
+    const monthDone = total || Math.round((seed.month / 100) * monthTarget);
+    const monthPct = monthTarget ? Math.min(100, Math.round((monthDone / monthTarget) * 100)) : 0;
+    const interestedPct = total ? Math.round((interested / total) * 100) : 0;
+
+    // Km — best-effort, may be unavailable pre-launch
+    let kmWeek = 0, kmMonth = 0;
+    try {
+      const k = await API.get(`/tracking/km-summary/${meId}`).catch(() => null);
+      if (k) { kmWeek = Number(k.week_km || 0); kmMonth = Number(k.month_km || 0); }
+    } catch { /* ignore */ }
+
+    // Ranking — only show if top-3 or bottom-3 (motivational filter per plan).
+    let myRankRow = null;
+    try {
+      const team = await API.get('/reporting/reps').catch(() => []);
+      if (Array.isArray(team) && team.length) {
+        const sorted = team.slice().sort((a, b) => (b.total_visits || 0) - (a.total_visits || 0));
+        const myIdx = sorted.findIndex((r) => r.rep_id === meId);
+        if (myIdx >= 0) {
+          const isTop3 = myIdx < 3;
+          const isBottom3 = myIdx >= sorted.length - 3 && sorted.length > 3;
+          if (isTop3 || isBottom3) myRankRow = { rank: myIdx + 1, total: sorted.length, isTop3, isBottom3 };
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Trend sparkline data — last 14 days.
+    const trend = Array.isArray(seed.trend) && seed.trend.length
+      ? seed.trend.slice(-14)
+      : Array.from({ length: 14 }, () => 0);
+
+    body.innerHTML = `
+      <div class="space-y-3">
+        <!-- Cumplimiento del mes (most prominent — visit goal) -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+          <div class="flex items-center justify-between mb-2">
+            <div>
+              <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Cumplimiento del mes</div>
+              <div class="text-xl font-black text-slate-800 mt-0.5">${monthDone}<span class="text-base text-slate-400">/${monthTarget}</span> visitas</div>
+            </div>
+            <div class="text-2xl font-black ${monthPct >= 80 ? 'text-emerald-600' : monthPct >= 50 ? 'text-amber-600' : 'text-rose-600'}">
+              ${monthPct}%
+            </div>
+          </div>
+          <div class="h-2 rounded-full bg-slate-100 overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-500 ${monthPct >= 80 ? 'bg-emerald-500' : monthPct >= 50 ? 'bg-amber-500' : 'bg-rose-500'}"
+                 style="width:${monthPct}%"></div>
+          </div>
+          <div class="text-[10px] text-slate-400 mt-2">Meta: ${monthTarget} visitas (${dayTarget}/día × 22 días hábiles)</div>
+        </div>
+
+        <!-- Mi tasa de interesados — competitive metric, prominent -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Mi tasa de interesados</div>
+              <div class="text-lg font-black text-slate-800 mt-0.5">${interested}<span class="text-sm text-slate-400">/${total}</span> prospectos</div>
+              <div class="text-[11px] text-slate-500 mt-0.5">Visitas con outcome "Interesado"</div>
+            </div>
+            <div class="text-3xl font-black text-orange-600">${interestedPct}%</div>
+          </div>
+        </div>
+
+        <!-- Km recorridos -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm grid grid-cols-2 gap-4">
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Km esta semana</div>
+            <div class="text-lg font-black text-slate-800 mt-0.5">${kmWeek.toFixed(0)} km</div>
+          </div>
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Km este mes</div>
+            <div class="text-lg font-black text-slate-800 mt-0.5">${kmMonth.toFixed(0)} km</div>
+          </div>
+        </div>
+
+        <!-- Ranking — solo si está en top-3 o bottom-3 -->
+        ${myRankRow ? `
+          <div class="bg-gradient-to-br ${myRankRow.isTop3 ? 'from-amber-50 to-orange-50 border-amber-200' : 'from-slate-50 to-slate-100 border-slate-200'} border rounded-2xl p-4">
+            <div class="flex items-center gap-3">
+              <div class="w-12 h-12 rounded-full ${myRankRow.isTop3 ? 'bg-amber-500' : 'bg-slate-400'} text-white flex items-center justify-center font-black text-lg">
+                #${myRankRow.rank}
+              </div>
+              <div>
+                <div class="text-[10px] font-bold uppercase tracking-widest ${myRankRow.isTop3 ? 'text-amber-700' : 'text-slate-600'}">${myRankRow.isTop3 ? '🏆 Top performers' : 'Sigue empujando'}</div>
+                <div class="text-sm font-bold text-slate-800 mt-0.5">Posición ${myRankRow.rank} de ${myRankRow.total} en tu equipo</div>
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Trend sparkline -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">Visitas últimos 14 días</div>
+          ${sparkline(trend)}
+        </div>
+
+        <!-- Empty hint when no data yet -->
+        ${total === 0 && monthDone === 0 ? `
+          <div class="text-center py-4 text-[12px] text-slate-400">
+            Aún no tienes visitas registradas. Tu progreso se llenará automáticamente conforme trabajes en campo.
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
   async function renderAnalytics(body) {
     if (window.MarzamPharmaciesMap) window.MarzamPharmaciesMap.hide();
+    // Phase 2: Reps see a personal scorecard, not the manager dashboard with
+    // role/person filters and Top performers / Necesitan apoyo. The latter is
+    // demoralizing on a one-rep view ("you are #5 of 7") and the filters are
+    // useless when scope = self.
+    if (APP.role === ROLES.REPRESENTANTE) {
+      return renderRepScorecard(body);
+    }
     // Pre-load EF list (canonical + per-user) for the filter dropdown.
     let efOptions = [];
     let _teamForAnalytics = [];
@@ -1754,10 +1895,10 @@
             <div class="flex items-center gap-2 py-1.5 border-b border-slate-100 last:border-0">
               <span class="pareto-tag" data-pareto="${r.pareto}">${r.pareto}</span>
               <div class="flex-1 min-w-0">
-                <div class="text-xs font-bold text-slate-800 truncate">${r.farmacia_nombre}</div>
+                <div class="text-xs font-bold text-slate-800 truncate">${window.MarzamUI?.titleCaseEs ? window.MarzamUI.titleCaseEs(r.farmacia_nombre) : r.farmacia_nombre}</div>
                 <div class="text-[10px] text-slate-400">${r.delegacion_municipio} · ${r.cpadre}</div>
               </div>
-              <span class="text-[11px] font-bold text-rose-600">${r.days_without}d</span>
+              <span class="text-[11px] font-bold text-rose-600">${r.days_without ?? 0}d</span>
             </div>
           `).join('')}
         </div>`}
@@ -2533,23 +2674,26 @@
     const matBody = wrap.querySelector('#matrix-body');
     function renderMatrixRows() {
       matBody.innerHTML = ROLES_DEF.map((role) => {
+        const canEdit = canEditRole(role);
         const cells = MATRIX_COLS.map((col) => {
           const cell = (matrixLookup[role]?.[col.kind === 'marzam' ? 'marzam' : 'prospecto']?.[col.p]) || null;
           const val = cell?.daily_contacts_per_person ?? 0;
-          const canEdit = canEditRole(role);
           const borderCol = col.kind === 'marzam' ? 'border-blue-200' : 'border-violet-200';
           return `
-            <td class="py-1 px-1 text-center">
+            <td class="py-1 px-1 text-center ${canEdit ? '' : 'bg-slate-50/60'}">
               <input type="number" min="0" max="30" value="${val}"
-                class="matrix-cell-input w-full min-w-[2.5rem] text-center border ${borderCol} rounded px-1 py-0.5 text-xs tabular-nums ${canEdit ? '' : 'bg-slate-50 pointer-events-none'}"
+                class="matrix-cell-input w-full min-w-[2.5rem] text-center border ${borderCol} rounded px-1 py-0.5 text-xs tabular-nums ${canEdit ? '' : 'bg-slate-50 text-slate-400 pointer-events-none'}"
                 data-role="${role}" data-kind="${col.kind}" data-pareto="${col.p}" ${canEdit ? '' : 'disabled'}
-                title="${ROLE_LABEL[role] || role} · ${col.kind === 'marzam' ? 'Marzam' : 'Nuevas'} ${col.p}">
+                title="${canEdit ? `${ROLE_LABEL[role] || role} · ${col.kind === 'marzam' ? 'Marzam' : 'Nuevas'} ${col.p}` : `Solo niveles superiores pueden editar la cuota de ${ROLE_LABEL[role] || role}`}">
             </td>
           `;
         }).join('');
+        // Phase 3: Read-only rows (above your rank) get a lock icon + muted styling
+        // so the manager understands the cascade without being blocked from seeing it.
+        const lock = canEdit ? '' : `<svg class="inline-block w-3 h-3 ml-1 text-slate-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-label="Solo lectura"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 1 1 8 0v3"/></svg>`;
         return `
-          <tr class="border-b border-slate-50">
-            <td class="py-1.5 px-1 text-xs font-semibold text-slate-600 whitespace-nowrap">${ROLE_LABEL[role] || role}</td>
+          <tr class="border-b border-slate-50 ${canEdit ? '' : 'bg-slate-50/30'}">
+            <td class="py-1.5 px-1 text-xs font-semibold ${canEdit ? 'text-slate-600' : 'text-slate-400'} whitespace-nowrap">${ROLE_LABEL[role] || role}${lock}</td>
             ${cells}
           </tr>
         `;

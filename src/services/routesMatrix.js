@@ -30,6 +30,32 @@ const config = require('../config');
 const { encode: geohashEncode } = require('../utils/geohash');
 const log = require('../utils/logger');
 
+// [P10] Lifetime aggregated counters so /api/admin/cockpit/routes-matrix-stats
+// can report the cache hit rate without scrubbing logs. Reset on process boot
+// (Vercel cold start), so an admin observing the value sees roughly the
+// throughput since the last cold-start. Per-instance — won't be globally
+// accurate across N concurrent Vercel instances, but good enough for trend.
+const _stats = Object.seal({
+  matrix_calls: 0,
+  pairs_total: 0,
+  pairs_cached: 0,
+  pairs_fresh: 0,
+  pairs_estimated: 0,
+  api_calls: 0,
+  api_failures: 0,
+  fallback_haversine: 0,
+  started_at: new Date().toISOString(),
+});
+
+function getStats() {
+  const total = _stats.pairs_total || 1;
+  return {
+    ..._stats,
+    cache_hit_rate: _stats.pairs_cached / total,
+    estimated_rate: _stats.pairs_estimated / total,
+  };
+}
+
 const ROUTES_ENDPOINT = 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix';
 const ROUTE_ENDPOINT  = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 const MATRIX_FIELD_MASK = 'originIndex,destinationIndex,duration,distanceMeters,condition';
@@ -437,6 +463,7 @@ async function computeMatrix(origins, destinations, opts = {}) {
  */
 async function computeMatrixCached(origins, destinations, opts = {}) {
   if (!origins.length || !destinations.length) return [];
+  _stats.matrix_calls += 1;
   const departureTime = opts.departureTime || new Date();
   const preference = opts.preference || 'TRAFFIC_UNAWARE';
   const fieldMask = opts.fieldMask || 'basic';
@@ -546,6 +573,11 @@ async function computeMatrixCached(origins, destinations, opts = {}) {
   for (const { i, j, key } of pairToKey) {
     const r = cacheMap.get(key);
     if (r) {
+      // [P10] global stats aggregation — same flag taxonomy as the per-call sink.
+      _stats.pairs_total += 1;
+      if (r.flag === 'cached') _stats.pairs_cached += 1;
+      else if (r.flag === 'estimated') _stats.pairs_estimated += 1;
+      else _stats.pairs_fresh += 1;
       if (sink) {
         if (r.flag === 'cached') sink.cached = (sink.cached || 0) + 1;
         else if (r.flag === 'estimated') sink.estimated = (sink.estimated || 0) + 1;
@@ -717,6 +749,7 @@ module.exports = {
   purgeExpired,
   getDailyBudgetStatus,
   getMatrixBreakdown,
+  getStats,
   RoutesBudgetExceededError,
   // exported for tests
   _hourBucket: hourBucket,

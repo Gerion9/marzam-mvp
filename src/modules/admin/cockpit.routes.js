@@ -15,6 +15,14 @@ const router = Router();
 
 const adminOnly = [authenticate, authorize({ adminOnly: true })];
 
+// [P10] Routes API matrix cache statistics — exposes hit rate, total pairs,
+// API call count for the admin cockpit so we can tune cache TTL with data.
+router.get('/routes-matrix-stats', ...adminOnly, (_req, res) => {
+  // eslint-disable-next-line global-require
+  const routesMatrix = require('../../services/routesMatrix');
+  res.json(routesMatrix.getStats());
+});
+
 router.get('/hero',             ...adminOnly, ctrl.hero);
 router.get('/trend',            ...adminOnly, ctrl.trend);
 router.get('/coverage-heatmap', ...adminOnly, ctrl.coverageHeatmap);

@@ -25,6 +25,11 @@ const config = {
   },
 
   jwt: {
+    // Dev fallback is intentionally weak so jwt.sign/verify still work in
+    // local dev and tests. Production boot is gated by validateBootEnvironment()
+    // in src/config/validate.js — which refuses to start if JWT_SECRET is unset,
+    // equal to this placeholder, or shorter than 32 chars under any
+    // production-like environment (NODE_ENV=production OR VERCEL_ENV in {production,preview}).
     secret: process.env.JWT_SECRET || 'dev-secret-replace-me',
     expiresIn: process.env.JWT_EXPIRES_IN || '8h',
   },

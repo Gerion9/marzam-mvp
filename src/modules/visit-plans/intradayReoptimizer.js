@@ -342,7 +342,7 @@ async function reoptimize({
       lng: coords.lng,
       farmacia_nombre: name,
       __lock: 'released',
-      __forceReassign: !!urgentStop.preferred_user_id ? false : true,
+      __forceReassign: !urgentStop.preferred_user_id,
     };
     releasedStops.push(urgentInserted);
   }

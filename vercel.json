@@ -10,6 +10,12 @@
       "use": "@vercel/static"
     }
   ],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300
+    }
+  },
+  "regions": ["iad1"],
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/index.js" },
     { "src": "/manager", "dest": "/api/index.js" },
@@ -63,6 +69,10 @@
     {
       "path": "/api/admin/cron/reconcile-presence",
       "schedule": "30 8 * * *"
+    },
+    {
+      "path": "/api/admin/cron/purge-rate-limit",
+      "schedule": "45 9 * * *"
     }
   ]
 }

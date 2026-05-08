@@ -29,6 +29,74 @@ const syncHierarchy = require('./jobs/syncHierarchy');
 const syncClientsEcatepec = require('./jobs/syncClientsEcatepec');
 const syncDailySales = require('./jobs/syncDailySales');
 
+// [P3] Per-job timeout to keep the whole worker under the Vercel 15-min cap.
+// 4 minutes per job × 6 jobs = 24min worst case in series, but with checkpoint
+// short-circuit a healthy run is well under 5min total. Override with env.
+const PER_JOB_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(process.env.BQ_SYNC_PER_JOB_TIMEOUT_MS) || 4 * 60 * 1000,
+);
+const CHECKPOINT_TTL_MS = Math.max(
+  60_000,
+  Number(process.env.BQ_SYNC_CHECKPOINT_TTL_SECONDS)
+    ? Number(process.env.BQ_SYNC_CHECKPOINT_TTL_SECONDS) * 1000
+    : 6 * 60 * 60 * 1000,
+);
+
+async function readCheckpoint(jobKey) {
+  try {
+    const exists = await db.raw("SELECT to_regclass('bq_sync_checkpoints') AS t");
+    if (!exists.rows?.[0]?.t) return null;
+    const row = await db('bq_sync_checkpoints').where({ job_key: jobKey }).first();
+    return row || null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCheckpoint(jobKey, status, payload) {
+  try {
+    const exists = await db.raw("SELECT to_regclass('bq_sync_checkpoints') AS t");
+    if (!exists.rows?.[0]?.t) return;
+    const isSuccess = status === 'ok';
+    await db.raw(
+      `INSERT INTO bq_sync_checkpoints (job_key, last_run_at, last_success_at, last_status, last_payload)
+       VALUES (?, NOW(), ${isSuccess ? 'NOW()' : 'NULL'}, ?, ?::jsonb)
+       ON CONFLICT (job_key) DO UPDATE
+         SET last_run_at = NOW(),
+             ${isSuccess ? 'last_success_at = NOW(),' : ''}
+             last_status = EXCLUDED.last_status,
+             last_payload = EXCLUDED.last_payload`,
+      [jobKey, status, JSON.stringify(payload || {})],
+    );
+  } catch {
+    // best-effort
+  }
+}
+
+async function recordWarning(jobKey, code, message) {
+  try {
+    const exists = await db.raw("SELECT to_regclass('bq_sync_warnings') AS t");
+    if (!exists.rows?.[0]?.t) return;
+    await db('bq_sync_warnings').insert({
+      job_key: jobKey,
+      code,
+      message,
+      occurred_at: db.fn.now(),
+    });
+  } catch { /* best-effort */ }
+}
+
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout: ' + label + ' exceeded ' + ms + 'ms')), ms);
+    promise.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (err) => { clearTimeout(t); reject(err); },
+    );
+  });
+}
+
 const JOB_RUNNERS = [
   syncCuadroBasico,
   syncProspectScored,
@@ -83,15 +151,45 @@ async function runAll({ limitPerJob = null, force = false } = {}) {
 
   const results = [];
   for (const job of JOB_RUNNERS) {
+    const jobKey = job.JOB_NAME;
+    // [P3] Skip jobs whose last successful checkpoint is fresher than the
+    // TTL — unless the caller explicitly forces a re-run. This is the main
+    // defense against running the orchestrator into the Vercel 15-min cap.
+    if (!force) {
+      const cp = await readCheckpoint(jobKey);
+      const successAge = cp?.last_success_at
+        ? Date.now() - new Date(cp.last_success_at).getTime()
+        : Infinity;
+      if (Number.isFinite(successAge) && successAge < CHECKPOINT_TTL_MS) {
+        results.push({
+          name: jobKey,
+          skipped: 'fresh_checkpoint',
+          last_success_age_ms: successAge,
+        });
+        continue;
+      }
+    }
+
     try {
-      const r = await job.run({ limit: limitPerJob });
+      const r = await withTimeout(
+        job.run({ limit: limitPerJob }),
+        PER_JOB_TIMEOUT_MS,
+        jobKey,
+      );
       results.push(r);
+      await writeCheckpoint(jobKey, 'ok', r);
       // eslint-disable-next-line no-console
       console.log(`[bq-sync] ${r.name} ok in ${r.duration_ms}ms`, r);
     } catch (err) {
-      results.push({ name: job.JOB_NAME, error: err.message });
+      const isTimeout = /^timeout:/.test(err.message);
+      const status = isTimeout ? 'timeout' : 'error';
+      results.push({ name: jobKey, error: err.message, status });
+      await writeCheckpoint(jobKey, status, { message: err.message });
+      if (isTimeout) {
+        await recordWarning(jobKey, 'PER_JOB_TIMEOUT', err.message);
+      }
       // eslint-disable-next-line no-console
-      console.warn(`[bq-sync] ${job.JOB_NAME} failed: ${err.message}`);
+      console.warn(`[bq-sync] ${jobKey} ${status}: ${err.message}`);
     }
   }
 

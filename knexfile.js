@@ -54,11 +54,17 @@ module.exports = {
     client: 'pg',
     connection: buildConnection({ pooled: true }),
     searchPath: APP_SEARCH_PATH,
+    // Vercel runs many serverless instances — pool is per-instance. Keeping max=1
+    // creates head-of-line blocking on bursts (manager dashboard + tracking pings
+    // simultaneously). max=5 with longer acquire/idle timeouts is the documented
+    // sweet spot for pgbouncer transaction-pooling under serverless. See
+    // CLAUDE.md "Production state and current constraints".
     pool: {
       min: Number(process.env.DB_POOL_MIN) || 0,
-      max: Number(process.env.DB_POOL_MAX) || 1,
-      acquireTimeoutMillis: 3000,
-      idleTimeoutMillis: 1000,
+      max: Number(process.env.DB_POOL_MAX) || 5,
+      acquireTimeoutMillis: Number(process.env.DB_POOL_ACQUIRE_TIMEOUT_MS) || 8000,
+      idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_TIMEOUT_MS) || 30000,
+      createTimeoutMillis: Number(process.env.DB_POOL_CREATE_TIMEOUT_MS) || 8000,
     },
     migrations: migrationsCfg,
     seeds: { directory: './seeds' },

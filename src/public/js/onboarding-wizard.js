@@ -363,7 +363,7 @@
     return wrap;
   }
 
-  function renderDatos(state, refresh) {
+  function renderDatos(state, refresh, revalidate) {
     const wrap = el(`
       <div>
         <h2 class="onb-step-title">Datos básicos</h2>
@@ -411,7 +411,12 @@
       </div>
     `);
     wrap.querySelectorAll('input,textarea').forEach((inp) => {
-      inp.addEventListener('input', () => { state[inp.name] = inp.value; });
+      inp.addEventListener('input', () => {
+        state[inp.name] = inp.value;
+        // revalidate() — updates Siguiente button without re-rendering body,
+        // so caret/focus stay put while typing.
+        if (revalidate) revalidate();
+      });
     });
     return wrap;
   }
@@ -835,8 +840,22 @@
     }
 
     btnClose.addEventListener('click', () => {
-      askConfirm(root, '¿Cerrar el asistente?', 'El borrador queda guardado y puedes retomarlo después desde "Mis altas".', () => close());
+      askConfirm(root, '¿Cerrar el asistente?', 'El borrador queda guardado y puedes retomarlo más tarde.', () => close());
     });
+
+    // revalidate() updates btnNext / blockReason WITHOUT touching body.innerHTML —
+    // safe to call from input listeners (preserves caret/focus while typing).
+    // refresh() does the full re-render and is for click events that change
+    // step structure.
+    function revalidate() {
+      const steps = buildSteps(state);
+      if (state.stepIndex >= steps.length) state.stepIndex = steps.length - 1;
+      const current = steps[state.stepIndex];
+      btnBack.disabled = state.stepIndex === 0;
+      const isLast = current.id === 'review';
+      btnNext.textContent = isLast ? 'Enviar alta' : 'Siguiente';
+      btnNext.disabled = !canAdvance(state, current.id);
+    }
 
     function refresh() {
       const steps = buildSteps(state);
@@ -857,7 +876,7 @@
         case 'no_exists_confirm':  view = renderNoExistsConfirm(state, refresh); break;
         case 'persona':            view = renderPersona(state, refresh); break;
         case 'pago':                view = renderPago(state, refresh); break;
-        case 'datos':              view = renderDatos(state, refresh); break;
+        case 'datos':              view = renderDatos(state, refresh, revalidate); break;
         case 'docs': {
           const items = state.persona_tipo === 'moral' ? state.spec.docs_moral : state.spec.docs_fisica;
           view = renderDocList(state, refresh, items, {

@@ -23,9 +23,14 @@ function getFrom() {
   return (process.env.MARZAM_MAIL_FROM || 'no-reply@marzam.mx').trim();
 }
 
+function shortOnboardingId(id) {
+  if (!id) return 'NUEVA';
+  return `ONB-${String(id).replace(/-/g, '').slice(0, 6).toUpperCase()}`;
+}
+
 function buildSubject(o) {
-  const nombre = o.nombre_comercial || o.razon_social || 'Farmacia nueva';
-  return `[Alta nueva] ${nombre} — ${o.persona_tipo || 'persona'} — ${o.forma_pago || ''}`;
+  const ref = o.dataplor_id || shortOnboardingId(o.id);
+  return `Nueva Farmacia - Blackprint x Marzam - ${ref}`;
 }
 
 function buildBody(o, docs = []) {

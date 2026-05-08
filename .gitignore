@@ -7,3 +7,5 @@ inicial/
 .cursor/
 docs/
 scripts/
+tests/
+.playwright-mcp/

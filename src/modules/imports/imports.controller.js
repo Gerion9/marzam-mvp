@@ -1,5 +1,6 @@
 const importsService = require('./imports.service');
 const { secretsEqual } = require('../../utils/secretCompare');
+const { recordCronRun } = require('../../utils/cronRunRecorder');
 
 async function uploadUrl(req, res, next) {
   try {
@@ -57,17 +58,18 @@ async function list(req, res, next) {
  * Worker entrypoint — invoked by Vercel cron.
  *
  * Auth: requires a shared secret in the `x-cron-secret` header (matches
- * MARZAM_CRON_SECRET env var). If unset, falls back to authenticated requests
+ * CRON_SECRET env var). If unset, falls back to authenticated requests
  * from a director_sucursal so we have a manual escape hatch.
  */
 async function workerTick(req, res, next) {
+  const startedAt = Date.now();
   try {
     // Accept either:
     //   - Vercel cron pattern: Authorization: Bearer ${CRON_SECRET}
     //   - x-cron-secret header (manual / external schedulers)
     //   - ?secret= query param (manual smoke test)
     //   - An authenticated director_sucursal session
-    const secret = process.env.CRON_SECRET || process.env.MARZAM_CRON_SECRET;
+    const secret = process.env.CRON_SECRET;
     const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
     const presented = bearer || req.headers['x-cron-secret'] || req.query.secret;
     const authedDirector = req.user && (req.user.role === 'director_sucursal' || req.user.role === 'national_admin');
@@ -81,8 +83,18 @@ async function workerTick(req, res, next) {
     }
 
     const result = await importsService.runWorkerTick();
+    // [O1] Record cron run so /api/admin/scheduler/health surfaces this job's
+    // status. Non-blocking — if cron_runs is missing the recorder swallows.
+    await recordCronRun('imports-worker', 'ok', {
+      ...(result && typeof result === 'object' ? result : { result }),
+      duration_ms: Date.now() - startedAt,
+    });
     res.json(result);
   } catch (err) {
+    await recordCronRun('imports-worker', 'error', {
+      message: err && err.message ? err.message : String(err),
+      duration_ms: Date.now() - startedAt,
+    });
     next(err);
   }
 }

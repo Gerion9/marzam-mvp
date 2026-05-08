@@ -83,7 +83,14 @@ body {
 .form-field { display: flex; flex-direction: column; }
 .form-label { font-size: 0.75rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.025em; margin-bottom: 0.25rem; }
 .form-input {
-  width: 100%; background-color: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; outline: none; transition: all 0.2s;
+  width: 100%; background-color: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; padding: 0.5rem 0.75rem;
+  /* font-size: 16px on mobile prevents iOS Safari from auto-zooming on focus.
+     Desktop scales down for tighter density. */
+  font-size: 16px;
+  outline: none; transition: all 0.2s;
+}
+@media (min-width: 768px) {
+  .form-input { font-size: 0.875rem; }
 }
 .form-input:focus { border-color: #1b365d; box-shadow: 0 0 0 2px rgba(27, 54, 93, 0.2); }
 .form-select { appearance: none; cursor: pointer; background-size: 16px; background-position: right 8px center; background-repeat: no-repeat; }
@@ -662,4 +669,19 @@ body {
 @supports (padding: env(safe-area-inset-bottom)) {
   #panel { padding-bottom: env(safe-area-inset-bottom); }
   #sidenav { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* ─── iOS auto-zoom prevention ────────────────────────────────────
+   On iOS Safari, input/textarea/select with computed font-size below 16px
+   triggers an auto-zoom on focus that is jarring and hard to recover from.
+   We force >=16px on mobile only — desktop keeps the tighter sizing the
+   designs ask for. Excludes inputs that already self-size (.onb-input,
+   .onb-textarea in the wizard).
+   ============================================================== */
+@media (max-width: 767px) {
+  input:not(.onb-input):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  textarea:not(.onb-textarea),
+  select {
+    font-size: 16px;
+  }
 }
