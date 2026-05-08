@@ -9,3 +9,9 @@ docs/
 scripts/
 tests/
 .playwright-mcp/
+
+# QA staging artefactos locales (credenciales, secretos, output transitorio)
+*.local.md
+*.local.txt
+qa-credentials.local.md
+qa-env-vars.local.txt
