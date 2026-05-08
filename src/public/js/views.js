@@ -257,7 +257,9 @@
         </button>
       </div>
       <div id="stops-list">
-        ${stops.map((s, i) => stopCardHtml(s, i)).join('')}
+        ${stops.length === 0
+          ? `<div class="text-center py-8 text-xs text-slate-400">No hay un plan vigente para hoy.<br/>Genera o publica un plan desde "Plan Editor" para ver las farmacias asignadas.</div>`
+          : stops.map((s, i) => stopCardHtml(s, i)).join('')}
       </div>
     `;
 
@@ -347,7 +349,13 @@
     const marzamCap = cap - prospectSlots;
 
     const out = [];
-    for (let i = 0; i < marzamCap; i++) {
+    // Outside demo mode, never fabricate placeholder pharmacies — if the data
+    // pool is empty, return an empty list so the view renders the real "no
+    // hay plan vigente" empty state instead of cards titled "Farmacia del
+    // Ahorro · #1" with synthetic addresses.
+    const allowSyntheticNames = APP.isDemo === true;
+    const realStopCount = allowSyntheticNames ? marzamCap : Math.min(marzamCap, pool.length);
+    for (let i = 0; i < realStopCount; i++) {
       const real = pool[i];
       let stop;
       if (real) {

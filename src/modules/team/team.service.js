@@ -180,9 +180,50 @@ async function getDescendantsEnriched({ userId: _userId, actor }) {
     descendants = await buildFallbackCascade(actor).then((c) => c.descendants);
   } catch (err) {
     console.warn(`[team.descendants] readonly cascade failed: ${err.message}`);
+    descendants = [];
+  }
+  // Fallback to the local users.manager_id chain when the readonly source has
+  // nothing (QA staging, custom seeded users, or any environment where the
+  // real Marzam HR DB is not reachable). Without this branch /api/team/cascade
+  // returns 0 descendants for QA accounts even though the manager_id chain is
+  // populated correctly.
+  if (!descendants.length) {
+    try {
+      const { getDescendants } = require('../../services/teamScope');
+      const rows = await getDescendants(actor.id);
+      if (rows.length) {
+        return rows.map((r) => ({
+          id: r.id,
+          full_name: r.full_name,
+          role: r.role,
+          employee_code: r.employee_code,
+          branch_id: r.branch_id,
+          synthetic_id: false,
+          email: null,
+          is_active: r.is_active !== false,
+          manager_id: r.manager_id,
+          manager_employee_code: null,
+          manager_name: null,
+          manager_role: null,
+          branch_code: null,
+          branch_name: null,
+          zona_poblaciones: null,
+          rango: null,
+          domicilio_particular: null,
+          home_lat: null,
+          home_lng: null,
+          daily_minutes_cap: 480,
+          service_minutes_per_stop: 45,
+          has_home: false,
+          has_address: false,
+          metrics: { planned: 0, done: 0, compliance_pct: null },
+        }));
+      }
+    } catch (err) {
+      console.warn(`[team.descendants] users.manager_id cascade failed: ${err.message}`);
+    }
     return [];
   }
-  if (!descendants.length) return [];
 
   // 2. Enrich with `users` table data when present. Defensive against:
   //    - `users` table missing (bootstrap window)
