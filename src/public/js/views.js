@@ -197,22 +197,32 @@
     const session = APP.activeSession;
     const stops = buildSyntheticStops(dayTarget, visitedToday);
 
+    // Without demo seeds the "today/month/compliance" tiles all read 0,
+    // which the QA report flagged as "estadísticas siempre en 0". Show a
+    // neutral em-dash + the target so the user understands the metric has
+    // no data yet (rather than thinking they have 0% compliance forever).
+    const hasReal = APP.isDemo || (seed.today > 0 || seed.month > 0 || (seed.trend && seed.trend.length));
+    const todayValue = hasReal ? `${visitedToday}/${dayTarget}` : `—/${dayTarget}`;
+    const monthValue = hasReal ? `${monthDone}/${monthTarget}` : `—/${monthTarget}`;
+    const compValue = hasReal ? fmtPct(seed.month) : '—';
+
     body.innerHTML = `
       <!-- KPIs hero -->
       <div class="grid grid-cols-3 gap-2 mb-4">
-        <div class="kpi-mini">
-          <div class="kpi-mini__value">${visitedToday}/${dayTarget}</div>
+        <div class="kpi-mini" ${hasReal ? '' : 'title="Aún no hay actividad registrada en este período"'}>
+          <div class="kpi-mini__value">${todayValue}</div>
           <div class="kpi-mini__label">HOY</div>
         </div>
-        <div class="kpi-mini">
-          <div class="kpi-mini__value">${monthDone}/${monthTarget}</div>
+        <div class="kpi-mini" ${hasReal ? '' : 'title="Aún no hay actividad registrada en este período"'}>
+          <div class="kpi-mini__value">${monthValue}</div>
           <div class="kpi-mini__label">MES</div>
         </div>
-        <div class="kpi-mini">
-          <div class="kpi-mini__value">${fmtPct(seed.month)}</div>
+        <div class="kpi-mini" ${hasReal ? '' : 'title="Aún no hay actividad registrada en este período"'}>
+          <div class="kpi-mini__value">${compValue}</div>
           <div class="kpi-mini__label">CUMPLIM.</div>
         </div>
       </div>
+      ${hasReal ? '' : '<p class="text-[10px] text-slate-400 -mt-2 mb-3 italic">Las estadísticas se actualizan al registrar visitas y al cierre de cada plan.</p>'}
 
       <!-- Active session card or CTA -->
       ${session ? `
@@ -689,8 +699,49 @@
     const live = filtered.filter((u) => u.presence?.status === 'live').length;
     const idle = filtered.filter((u) => u.presence?.status === 'idle').length;
 
+    // Resolve drill-stack ids → users. In demo mode we read the in-memory
+    // store; in real mode we use cascade.descendants (the cascade returned
+    // by the backend always includes the requested target's subtree, and
+    // the descendants of any prior level are still in the previous cascade
+    // we cached or, in practice, the breadcrumb is short enough that one
+    // root-cascade GET fills it). Fallback to a /users/{id} GET when the
+    // id isn't in any of those.
+    //
+    // Without this, the breadcrumb rendered raw UUIDs like
+    //   Director (yo) › 8f2e1a4c-… › 3c7b…
+    // because the demo-store lookup returned null in production.
     const stack = APP.drillStack;
-    const drillTarget = stack.length ? (APP.isDemo && DEMO_H.STORE.users.find((x) => x.id === stack[stack.length - 1])) : null;
+    const stackUsers = new Map();
+    if (stack.length) {
+      const knownDescendants = cascade.descendants || cascade.direct_reports || [];
+      for (const id of stack) {
+        if (APP.isDemo) {
+          const u = DEMO_H.STORE.users.find((x) => x.id === id);
+          if (u) { stackUsers.set(id, u); continue; }
+        }
+        const found = knownDescendants.find((x) => String(x.id) === String(id));
+        if (found) { stackUsers.set(id, found); continue; }
+      }
+      // Resolve any still-missing ids via /users/{id}. We fire these in
+      // parallel and re-render once they all settle to avoid a flicker per
+      // hop. Best-effort: a 404/403 leaves the raw id in the breadcrumb
+      // rather than blocking the view.
+      const missing = stack.filter((id) => !stackUsers.has(id));
+      if (missing.length) {
+        Promise.all(missing.map((id) => API.get(`/users/${id}`).then(
+          (u) => ({ id, user: u }),
+          () => ({ id, user: null }),
+        ))).then((results) => {
+          let added = 0;
+          for (const { id, user } of results) {
+            if (user) { stackUsers.set(id, user); added += 1; }
+          }
+          if (added) renderMyTeam(body);
+        });
+      }
+    }
+    const drillTargetId = stack.length ? stack[stack.length - 1] : null;
+    const drillTarget = drillTargetId ? stackUsers.get(drillTargetId) : null;
     const breadcrumbHtml = stack.length ? `
       <div class="bg-white border border-slate-200 rounded-2xl p-3 mb-3 flex items-center gap-2">
         <button id="bc-back" class="bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 flex items-center gap-1 transition" title="Subir un nivel">
@@ -699,18 +750,19 @@
         </button>
         <div class="flex-1 min-w-0">
           <div class="drilldown-bc">
-            <a id="bc-root">${ROLE_LABEL[APP.role]} (yo)</a>
+            <a id="bc-root">${escapeHtml(APP.user?.full_name || ROLE_LABEL[APP.role] || 'Yo')} (yo)</a>
             ${stack.map((id, i) => {
-              const u = APP.isDemo ? DEMO_H.STORE.users.find((x) => x.id === id) : null;
+              const u = stackUsers.get(id);
               const last = i === stack.length - 1;
               const code = u && u.employee_code ? ` · ${u.employee_code}` : '';
+              const label = u ? escapeHtml(u.full_name) : 'Cargando…';
               return `
                 <span>›</span>
-                ${last ? `<span class="font-bold text-slate-800">${u ? escapeHtml(u.full_name) : id}${code}</span>` : `<a data-bc-pop="${id}">${u ? escapeHtml(u.full_name) : id}${code}</a>`}
+                ${last ? `<span class="font-bold text-slate-800">${label}${code}</span>` : `<a data-bc-pop="${id}">${label}${code}</a>`}
               `;
             }).join('')}
           </div>
-          ${drillTarget ? `<div class="text-[10px] text-slate-400 mt-0.5">Viendo el equipo de <b>${escapeHtml(drillTarget.full_name)}</b> (${drillTarget.employee_code || ''})</div>` : ''}
+          ${drillTarget ? `<div class="text-[10px] text-slate-400 mt-0.5">Viendo el equipo de <b>${escapeHtml(drillTarget.full_name)}</b>${drillTarget.employee_code ? ` (${escapeHtml(drillTarget.employee_code)})` : ''}</div>` : ''}
         </div>
       </div>
     ` : '';
@@ -2122,9 +2174,16 @@
 
     const stepperHtml = STEPS.map((s, i) => {
       const isActive = activeStep.id === s.id;
-      const isPast = activeStep.n > s.n;
-      const stateCls = isActive ? 'plan-step--active' : (isPast ? 'plan-step--past' : '');
-      const numContent = isPast ? '✓' : s.n;
+      // QA fix: the stepper used to mark every step BEFORE the active one as
+      // "past" with a green ✓, which let a user click step 4 ("Cerrar") and
+      // see steps 1–3 as "completed" without filling any form. The visual
+      // past/done state is now removed — pasos previos no se marcan como
+      // hechos solo por haber navegado más adelante. Si en el futuro se
+      // requiere marcar progreso real, debe basarse en datos del plan
+      // (¿hay defaults configurados? ¿hay un plan publicado?), no en la
+      // posición de navegación.
+      const stateCls = isActive ? 'plan-step--active' : '';
+      const numContent = s.n;
       return `
         <button class="plan-step ${stateCls} group" data-step="${s.id}" title="${escapeHtml(s.tip)}">
           <span class="plan-step__num">${numContent}</span>

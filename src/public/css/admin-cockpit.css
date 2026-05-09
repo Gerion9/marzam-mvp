@@ -449,6 +449,13 @@ html, body {
   padding: 10px 12px;
   min-width: 180px;
   max-width: 240px;
+  /* QA fix: when every legend block was activated the body overflowed past
+     the viewport, hiding the bottom blocks with no way to reach them. Cap
+     the legend at the viewport height (minus the top offset) and let the
+     body scroll inside while the header stays pinned. */
+  max-height: calc(100vh - 28px);
+  display: flex;
+  flex-direction: column;
   font-size: 11px;
   color: var(--ink-2);
   pointer-events: auto;
@@ -492,6 +499,12 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Scrollable inner container — pairs with the max-height + flex column
+     on .big-map-legend so the title row stays put while rows scroll. */
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 4px;
 }
 
 .legend-block {
