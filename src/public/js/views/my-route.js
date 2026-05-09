@@ -137,8 +137,11 @@
   }
 
   function deepLinkWaze(stop) {
-    if (stop.lat == null || stop.lng == null) return null;
-    return `https://waze.com/ul?ll=${stop.lat},${stop.lng}&navigate=yes`;
+    // We unified the in-app navigation to Google Maps to remove the
+    // "Navegar" (Waze) vs map-pin (Google) inconsistency QA flagged. Both
+    // entry points now route through deepLinkMaps. Kept the Waze helper
+    // around in case a future preference toggle reintroduces the option.
+    return deepLinkMaps(stop);
   }
 
   /**
@@ -402,7 +405,13 @@
       },
       get total() { return this.stops.length; },
       get done() { return this.stops.filter((s) => s.status === 'done').length; },
-      get progressPct() { return this.total ? (this.done / this.total) * 100 : 0; },
+      // "Resolved" includes any stop the rep has acted on — completed, skipped,
+      // or deviated. The progress bar reflects how much of the day's route is
+      // closed out (not just visited), so omitting a stop advances it.
+      get resolved() {
+        return this.stops.filter((s) => ['done', 'skipped', 'deviated'].includes(s.status)).length;
+      },
+      get progressPct() { return this.total ? (this.resolved / this.total) * 100 : 0; },
       get totalMinutes() {
         return this.stops.reduce((s, a) => s + (a.expected_travel_minutes || 0) + (a.expected_service_minutes || 0), 0);
       },
@@ -423,6 +432,35 @@
           this._offlineHandler = () => { this.isOffline = true; };
           window.addEventListener('online', this._onlineHandler);
           window.addEventListener('offline', this._offlineHandler);
+        }
+        // QA fix: when the rep submits a visit (or marks it skipped) from
+        // the visit-client modal, the stop in this list used to stay
+        // "Pendiente" until the page was reloaded. Listen for the custom
+        // event the modal emits and patch the local stop status so the
+        // chip + progress bar update immediately. Stops are matched by
+        // pharmacy_id (the modal opens with the canonical pharmacy uuid).
+        if (!this._visitSubmittedHandler) {
+          this._visitSubmittedHandler = (ev) => {
+            const detail = ev.detail || {};
+            const pid = String(detail.pharmacyId || '');
+            const status = detail.status || 'done';
+            if (!pid) return;
+            const idx = this.stops.findIndex((s) => {
+              const candidate = s.geo_pharmacy_id || s.pharmacy_id || s.id;
+              return String(candidate) === pid;
+            });
+            if (idx === -1) return;
+            this.stops[idx] = { ...this.stops[idx], status };
+            // Advance "next" past the resolved stop so the sticky card
+            // points at the actual upcoming target.
+            this.nextIdx = Math.max(
+              0,
+              this.stops.findIndex((s) => s.status !== 'done' && s.status !== 'skipped' && s.status !== 'deviated'),
+            );
+            if (this.nextIdx < 0) this.nextIdx = 0;
+            this._refreshMap();
+          };
+          window.addEventListener('marzam:visit-submitted', this._visitSubmittedHandler);
         }
         this._refreshPendingCount();
         try {

@@ -41,8 +41,14 @@ function buildPublicUrl(bucketName, objectPath) {
 
 async function uploadOnboardingDoc({ onboardingId, docType, originalName, buffer, contentType }) {
   if (!config.gcs.bucketName) {
-    const err = new Error('MARZAM_EVIDENCE_GCS_BUCKET no está configurado');
-    err.status = 500;
+    // Service-level config gap, not a runtime error — surface as 503 with a
+    // user-comprehensible message so the wizard can show "el almacenamiento
+    // no está disponible, avisa al admin" instead of a generic 500. The
+    // bucket env var (MARZAM_EVIDENCE_GCS_BUCKET) must be set on the
+    // deployment for photo uploads to work.
+    const err = new Error('Almacenamiento de fotos no configurado en el servidor. Avisa al administrador (env MARZAM_EVIDENCE_GCS_BUCKET).');
+    err.status = 503;
+    err.code = 'storage_not_configured';
     throw err;
   }
   const bucketName = config.gcs.bucketName;

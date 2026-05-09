@@ -492,7 +492,12 @@
     } catch (err) {
       console.error('upload failed', err);
       delete state.uploaded[docType];
-      window.MarzamToast?.show('Error subiendo la foto', 'error');
+      // Surface the specific backend error when present (e.g. "Almacenamiento
+      // no configurado", "Tipo de archivo no soportado", "Demasiado grande"),
+      // because the QA report flagged "marca error en el entorno" — generic
+      // toasts make these blockers invisible to the rep.
+      const msg = err?.error || err?.message || 'No se pudo subir la foto. Reintenta o pídele a tu admin que revise el almacenamiento.';
+      window.MarzamToast?.show(msg, 'error');
     }
     refresh();
   }
@@ -749,7 +754,14 @@
       case 'no_exists_confirm':  return true;
       case 'persona':            return !!state.persona_tipo;
       case 'pago':               return !!state.forma_pago;
-      case 'datos':              return state.razon_social || state.nombre_comercial;
+      case 'datos': {
+        // Both fields are user-typed strings; trim and require at least 2 real
+        // characters (not "  "). Without trim, a single space made the button
+        // active and the alta got submitted with empty pharmacy data.
+        const rs = (state.razon_social || '').trim();
+        const nc = (state.nombre_comercial || '').trim();
+        return rs.length >= 2 || nc.length >= 2;
+      }
       case 'docs': {
         const docs = state.persona_tipo === 'moral' ? state.spec.docs_moral : state.spec.docs_fisica;
         return docs.every((d) => state.uploaded[d.type]);
@@ -769,7 +781,7 @@
       case 'intro': return 'Elige un candidato cercano o marca "No está en la lista"';
       case 'persona': return 'Elige persona física o moral';
       case 'pago': return 'Elige forma de pago';
-      case 'datos': return 'Captura al menos razón social o nombre comercial';
+      case 'datos': return 'Captura razón social o nombre comercial (mínimo 2 caracteres, sin contar espacios)';
       case 'docs': return 'Sube todos los documentos requeridos';
       case 'facade': return state.not_in_directory
         ? 'Necesitamos las 3 fotos (izquierda, frente, derecha)'

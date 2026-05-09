@@ -295,6 +295,15 @@
           }
         }
         window.MarzamToast?.show('Visita registrada ✓', 'success');
+        // Notify Mi ruta to update the stop status immediately. For Marzam-
+        // client visits the outcome is captured in `state.visited`/`order_placed`
+        // — we treat any visited stop as 'done', non-visited as 'skipped'.
+        window.dispatchEvent(new CustomEvent('marzam:visit-submitted', {
+          detail: {
+            pharmacyId: pharmacy.id,
+            status: state.visited ? 'done' : 'skipped',
+          },
+        }));
         close();
       } catch (err) {
         console.error(err);
@@ -470,6 +479,16 @@
         } else {
           window.MarzamToast?.show('Visita registrada ✓', 'success');
         }
+        // Notify the rep's "Mi ruta" view so it can refresh stop status
+        // without a manual reload — the legacy behaviour was that the
+        // status chip stayed "Pendiente" until the next page refresh.
+        // Outcome maps: positive → 'done', negative (closed/invalid/...)
+        // → 'skipped'. Keep the local mapping aligned with my-route.js.
+        const isPositive = POSITIVE_OUTCOMES.has(state.outcome);
+        const newStatus = isPositive ? 'done' : 'skipped';
+        window.dispatchEvent(new CustomEvent('marzam:visit-submitted', {
+          detail: { pharmacyId: pharmacy.id, outcome: state.outcome, status: newStatus },
+        }));
         close();
       } catch (err) {
         console.error(err);

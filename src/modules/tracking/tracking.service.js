@@ -131,18 +131,45 @@ async function recordPing({ rep_id, rep_name, assignment_id, verification_id, la
     };
   }
 
-  const [ping] = await db('rep_tracking_points')
-    .insert({
+  // Defensive: while the auth directory provider is `virtual`, rep_id may
+  // resolve to a UUID that doesn't have a matching row in `users`. The FK on
+  // rep_tracking_points.rep_id then throws (Postgres code 23503 / "foreign
+  // key violation"), which would 500 every ping in the field. Until
+  // AUTH_DIRECTORY_PROVIDER flips to `database` (see docs/qa-production-
+  // readiness.md), swallow FK errors with a structured warn so the rep keeps
+  // working and ops can see the count in logs.
+  let ping;
+  try {
+    [ping] = await db('rep_tracking_points')
+      .insert({
+        rep_id,
+        rep_name_snapshot: repNameSnapshot,
+        verification_id: verification_id || null,
+        assignment_id: assignment_id || null,
+        lat,
+        lng,
+        accuracy_meters: accuracy_meters || null,
+        point: db.raw(`ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography`, [lng, lat]),
+      })
+      .returning('*');
+  } catch (insertErr) {
+    const isFk = insertErr && (
+      insertErr.code === '23503'
+      || /foreign key|violates/i.test(String(insertErr.message || ''))
+    );
+    if (!isFk) throw insertErr;
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[tracking] ping FK violation skipped: rep_id=${rep_id} (${insertErr.message})`);
+    }
+    return {
       rep_id,
-      rep_name_snapshot: repNameSnapshot,
-      verification_id: verification_id || null,
-      assignment_id: assignment_id || null,
       lat,
       lng,
       accuracy_meters: accuracy_meters || null,
-      point: db.raw(`ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography`, [lng, lat]),
-    })
-    .returning('*');
+      recorded_at: new Date().toISOString(),
+      skipped: 'fk_violation',
+    };
+  }
   await pingActiveSession(rep_id);
   // First-ping bootstrapping: degraded fallback only.
   //

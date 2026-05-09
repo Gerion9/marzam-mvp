@@ -19,7 +19,12 @@ const API = (() => {
     const opts = { method, headers: headers() };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${BASE}${path}`, opts);
-    if (res.status === 401 && !_suppressAuthRedirect) {
+    // The login endpoint must surface its 401 to the caller (the form needs to
+    // render "Credenciales inválidas"). Auto-redirecting to '/' would clear
+    // localStorage and reload the page before the form's catch can run, so the
+    // user sees no error.
+    const isLoginPath = path === '/auth/login' || path.startsWith('/auth/login?');
+    if (res.status === 401 && !_suppressAuthRedirect && !isLoginPath) {
       // In demo mode the in-memory router intercepts most calls but a few
       // endpoints fall through to the real backend (e.g. /poblaciones).
       // Don't redirect for those — the demo app keeps rendering with empty

@@ -93,18 +93,78 @@
     return `hace ${Math.round(sec / 86400)}d`;
   }
 
-  function exportButton(label, filename, getRows) {
+  // Map of backend column keys → user-facing Spanish labels for CSV exports.
+  // The platform UI is in Spanish, so the downloaded file should be too.
+  // Keys not in the map fall through with a best-effort title-case render
+  // (e.g. `assignment_id` → `Assignment id`) — add an entry here when you
+  // see an English column slip into a CSV.
+  const CSV_HEADER_LABELS_ES = {
+    // people / activity matrix
+    user_id: 'ID de usuario',
+    full_name: 'Nombre completo',
+    email: 'Correo',
+    role: 'Rol',
+    visits: 'Visitas',
+    compliance_pct: 'Cumplimiento (%)',
+    conversion_pct: 'Conversión (%)',
+    n: 'Cantidad',
+    count: 'Cantidad',
+    hour: 'Hora',
+    dow: 'Día',
+    day: 'Día',
+    day_of_week: 'Día de la semana',
+    // coverage / untouched
+    farmacia_nombre: 'Farmacia',
+    cpadre: 'C-padre',
+    pareto: 'Pareto',
+    delegacion_municipio: 'Municipio',
+    last_completed: 'Última visita',
+    name: 'Nombre',
+    total: 'Padrón',
+    visited: 'Visitadas',
+    pct: 'Cobertura (%)',
+    // anomalies
+    severity: 'Severidad',
+    rep_id: 'ID del rep',
+    rep_name: 'Rep',
+    pharmacy_id: 'ID de farmacia',
+    pharmacy_name: 'Farmacia',
+    distance_to_pharmacy_m: 'Distancia (m)',
+    accuracy_meters: 'Precisión GPS (m)',
+    recorded_at: 'Registrado',
+    created_at: 'Creado',
+    updated_at: 'Actualizado',
+    started_at: 'Inicio',
+    ended_at: 'Fin',
+    status: 'Estado',
+    notes: 'Notas',
+    outcome: 'Resultado',
+  };
+
+  function csvHeaderLabel(key) {
+    if (CSV_HEADER_LABELS_ES[key]) return CSV_HEADER_LABELS_ES[key];
+    // Best-effort title-case: "lat_min" → "Lat min".
+    return String(key)
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function exportButton(label, filename, getRows, columnLabels = null) {
     const btn = document.createElement('button');
     btn.className = 'btn-export';
     btn.textContent = label || 'Exportar CSV';
     btn.addEventListener('click', () => {
       const rows = getRows();
       if (!rows || !rows.length) return;
-      const headers = Object.keys(rows[0]);
+      const keys = Object.keys(rows[0]);
+      const headers = keys.map((k) => csvCell(
+        columnLabels && columnLabels[k] ? columnLabels[k] : csvHeaderLabel(k),
+      ));
       const csv = [headers.join(',')]
-        .concat(rows.map((r) => headers.map((h) => csvCell(r[h])).join(',')))
+        .concat(rows.map((r) => keys.map((h) => csvCell(r[h])).join(',')))
         .join('\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      // BOM helps Excel render UTF-8 (acentos, ñ) correctly on Windows.
+      const blob = new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -824,6 +884,285 @@
       source: it.source, severity: it.severity, title: it.title, subject: it.subject || '', at: it.at || '',
     }))));
   };
+
+  // ── USERS — admin-only CRUD for the platform user directory ────
+  // Built in response to the QA report's open question: "¿Cómo se asignan
+  // roles a un usuario nuevo?". The endpoints already exist
+  // (GET / POST / PATCH / DELETE on /api/users) — this view just exposes
+  // them visually so admins don't need to script against the API.
+  //
+  // Roles dropdown intentionally lists only the canonical 5 roles plus
+  // 'admin'; legacy aliases (national_admin, etc.) are accepted by the
+  // backend but not surfaced here to avoid creating new accounts in the
+  // soon-to-be-deprecated naming scheme.
+  const USER_ROLES_FOR_CREATE = [
+    { value: 'admin',              label: 'Admin (acceso global)' },
+    { value: 'director_sucursal',  label: 'Director de Sucursal' },
+    { value: 'gerente_ventas',     label: 'Gerente de Ventas' },
+    { value: 'supervisor',         label: 'Supervisor' },
+    { value: 'representante',      label: 'Representante' },
+  ];
+
+  const ROLE_LABEL_ES = {
+    admin: 'Admin',
+    director_sucursal: 'Director',
+    gerente_ventas: 'Gerente',
+    supervisor: 'Supervisor',
+    representante: 'Representante',
+    national_admin: 'Admin (legacy)',
+    regional_manager: 'Gerente (legacy)',
+    area_coordinator: 'Supervisor (legacy)',
+    field_rep: 'Rep (legacy)',
+    manager: 'Director (legacy)',
+  };
+
+  VIEWS.users = async function renderUsers() {
+    const users = await API.get('/users').catch((err) => {
+      // Some non-admin roles can hit /users as well (mgr/sup) but field_rep
+      // gets 403 — we surface the message rather than crashing.
+      throw err;
+    });
+    const list = Array.isArray(users) ? users : [];
+    const total = list.length;
+    const active = list.filter((u) => u.is_active !== false).length;
+    const byRole = list.reduce((acc, u) => {
+      const k = String(u.role || 'unknown').toLowerCase();
+      acc[k] = (acc[k] || 0) + 1;
+      return acc;
+    }, {});
+
+    body.innerHTML = `
+      <div class="drawer-grid-3" style="margin-bottom:24px">
+        <div class="stat-mini">
+          <div class="stat-mini-label">Total usuarios</div>
+          <div class="stat-mini-value numeral">${formatNum(total)}</div>
+          <div class="stat-mini-foot">${formatNum(active)} activos</div>
+        </div>
+        <div class="stat-mini">
+          <div class="stat-mini-label">Por rol</div>
+          <div class="stat-mini-value numeral" style="font-size:14px">${USER_ROLES_FOR_CREATE.map((r) => `${ROLE_LABEL_ES[r.value]}: ${byRole[r.value] || 0}`).slice(0, 3).join(' · ')}</div>
+          <div class="stat-mini-foot">${USER_ROLES_FOR_CREATE.map((r) => `${ROLE_LABEL_ES[r.value]}: ${byRole[r.value] || 0}`).slice(3).join(' · ') || ''}</div>
+        </div>
+        <div class="stat-mini" style="display:flex;flex-direction:column;justify-content:space-between">
+          <div>
+            <div class="stat-mini-label">Crear nuevo</div>
+            <div class="stat-mini-foot">Email + rol + contraseña inicial</div>
+          </div>
+          <button id="users-new-btn" class="btn-export" style="background:#0f766e;color:#fff;border-color:#0f766e;align-self:flex-start;margin-top:8px">+ Nuevo usuario</button>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="cockpit-section-sub">Directorio de usuarios</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="users-search" placeholder="Buscar por nombre, email o clave…" style="font-size:11px;padding:5px 8px;border:1px solid var(--border, #e2e8f0);border-radius:4px;width:220px"/>
+          <select id="users-role-filter" style="font-size:11px;padding:5px 8px;border:1px solid var(--border, #e2e8f0);border-radius:4px">
+            <option value="">Todos los roles</option>
+            ${USER_ROLES_FOR_CREATE.map((r) => `<option value="${r.value}">${ROLE_LABEL_ES[r.value]}</option>`).join('')}
+          </select>
+          <div id="users-export-wrap"></div>
+        </div>
+      </div>
+
+      <div id="users-table-wrap"></div>
+    `;
+
+    const renderTable = (rows) => {
+      const wrap = document.getElementById('users-table-wrap');
+      if (!rows.length) {
+        wrap.innerHTML = '<div class="empty"><div class="empty-sub">No se encontraron usuarios con esos filtros.</div></div>';
+        return;
+      }
+      wrap.innerHTML = `<table class="table">
+        <thead><tr>
+          <th>Nombre</th><th>Email</th><th>Rol</th><th>Clave</th><th>Estado</th><th>Última sesión</th><th></th>
+        </tr></thead>
+        <tbody>${rows.map((u) => `<tr>
+          <td class="table-strong">${escapeHtml(u.full_name || '—')}</td>
+          <td class="muted">${escapeHtml(u.email || '—')}</td>
+          <td><span class="badge">${escapeHtml(ROLE_LABEL_ES[u.role] || u.role || '—')}</span></td>
+          <td class="muted">${escapeHtml(u.employee_code || '—')}</td>
+          <td>${u.is_active === false
+            ? '<span class="badge badge-neg">Inactivo</span>'
+            : '<span class="badge badge-pos">Activo</span>'}</td>
+          <td class="muted">${u.last_login_at ? timeAgo(u.last_login_at) : 'nunca'}</td>
+          <td style="text-align:right">
+            <button class="btn-export" data-user-action="reset" data-user-id="${escapeHtml(u.id)}" title="Resetear contraseña">↻</button>
+            ${u.is_active === false
+              ? '<span class="muted" style="font-size:10px">desactivado</span>'
+              : `<button class="btn-export" data-user-action="deactivate" data-user-id="${escapeHtml(u.id)}" data-user-name="${escapeHtml(u.full_name || u.email)}" title="Desactivar usuario" style="color:#b91c1c">✕</button>`}
+          </td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+      // Wire row actions.
+      wrap.querySelectorAll('[data-user-action]').forEach((btn) => {
+        btn.addEventListener('click', () => onUserAction(btn));
+      });
+    };
+
+    let filterRole = '';
+    let filterText = '';
+    const applyFilters = () => {
+      const t = filterText.trim().toLowerCase();
+      const filtered = list.filter((u) => {
+        if (filterRole && u.role !== filterRole) return false;
+        if (!t) return true;
+        return [u.full_name, u.email, u.employee_code, u.role]
+          .filter(Boolean).some((v) => String(v).toLowerCase().includes(t));
+      });
+      renderTable(filtered);
+    };
+    applyFilters();
+
+    document.getElementById('users-search').addEventListener('input', (e) => {
+      filterText = e.target.value;
+      applyFilters();
+    });
+    document.getElementById('users-role-filter').addEventListener('change', (e) => {
+      filterRole = e.target.value;
+      applyFilters();
+    });
+    document.getElementById('users-new-btn').addEventListener('click', () => openCreateUserModal());
+    const expWrap = document.getElementById('users-export-wrap');
+    if (expWrap && list.length) {
+      expWrap.appendChild(exportButton('CSV', 'usuarios.csv', () => list.map((u) => ({
+        full_name: u.full_name,
+        email: u.email,
+        role: ROLE_LABEL_ES[u.role] || u.role,
+        employee_code: u.employee_code || '',
+        is_active: u.is_active === false ? 'No' : 'Sí',
+        last_login_at: u.last_login_at || '',
+      }))));
+    }
+  };
+
+  async function onUserAction(btn) {
+    const action = btn.dataset.userAction;
+    const id = btn.dataset.userId;
+    if (action === 'reset') {
+      if (!confirm('¿Generar una contraseña temporal para este usuario? Tendrá que cambiarla en su próximo inicio de sesión.')) return;
+      try {
+        const r = await API.post(`/users/${id}/reset-password`, {});
+        // Show the temp password — the API returns it once, we display it
+        // in a prompt-like dialog because there's no email-delivery wired
+        // on the QA env yet.
+        if (r && r.temporary_password) {
+          window.prompt('Contraseña temporal generada (copia y entrégala al usuario):', r.temporary_password);
+        } else {
+          alert('Contraseña reseteada.');
+        }
+      } catch (err) {
+        alert('No se pudo resetear: ' + (err?.error || err?.message || 'error'));
+      }
+    } else if (action === 'deactivate') {
+      const name = btn.dataset.userName || 'este usuario';
+      if (!confirm(`¿Desactivar a ${name}? No podrá iniciar sesión hasta que se reactive manualmente desde la base de datos.`)) return;
+      try {
+        await API.delete(`/users/${id}`);
+        // Reload the view so the row flips to "Inactivo".
+        switchTo('users');
+      } catch (err) {
+        alert('No se pudo desactivar: ' + (err?.error || err?.message || 'error'));
+      }
+    }
+  }
+
+  function openCreateUserModal() {
+    // Self-contained modal — no MarzamModal here because admin.html doesn't
+    // load views.js. Built with the same visual language as other admin
+    // dialogs (stat-mini cards, btn-export). Validation happens client-side
+    // first; the server re-validates per /auth/register's validate() schema
+    // (12-char password minimum, email format, role oneOf).
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:24px;';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:12px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;font-family:Inter,sans-serif">
+        <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-weight:700;font-size:14px;color:#0f172a">Nuevo usuario</div>
+            <div style="font-size:11px;color:#64748b">Se crea con la contraseña que proporciones; el usuario deberá cambiarla en su primer login.</div>
+          </div>
+          <button id="cu-close" style="background:none;border:none;font-size:18px;color:#94a3b8;cursor:pointer">×</button>
+        </div>
+        <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;font-size:12px">
+          <label style="display:flex;flex-direction:column;gap:4px">
+            <span style="font-weight:600;color:#334155">Nombre completo *</span>
+            <input id="cu-fullname" type="text" maxlength="200" placeholder="Ej. María Hernández García" style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px">
+            <span style="font-weight:600;color:#334155">Correo *</span>
+            <input id="cu-email" type="email" maxlength="200" placeholder="usuario@marzam.mx" style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px">
+            <span style="font-weight:600;color:#334155">Rol *</span>
+            <select id="cu-role" style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;background:#fff">
+              ${USER_ROLES_FOR_CREATE.map((r) => `<option value="${r.value}">${escapeHtml(r.label)}</option>`).join('')}
+            </select>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px">
+            <span style="font-weight:600;color:#334155">Contraseña inicial *</span>
+            <input id="cu-password" type="text" minlength="12" maxlength="200" placeholder="Mínimo 12 caracteres" style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;font-family:JetBrains Mono,monospace" />
+            <span style="font-size:10px;color:#64748b">El usuario podrá (y deberá) cambiarla en su primer inicio de sesión.</span>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px">
+            <span style="font-weight:600;color:#334155">Teléfono <span style="font-weight:400;color:#94a3b8">(opcional)</span></span>
+            <input id="cu-phone" type="tel" maxlength="32" placeholder="55 1234 5678" style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px" />
+          </label>
+          <div id="cu-error" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:8px 10px;border-radius:6px;font-size:11px"></div>
+        </div>
+        <div style="padding:14px 20px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;justify-content:flex-end;gap:8px">
+          <button id="cu-cancel" class="btn-export">Cancelar</button>
+          <button id="cu-save" class="btn-export" style="background:#0f766e;color:#fff;border-color:#0f766e">Crear usuario</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('#cu-close').addEventListener('click', close);
+    overlay.querySelector('#cu-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    const errEl = overlay.querySelector('#cu-error');
+    const saveBtn = overlay.querySelector('#cu-save');
+    saveBtn.addEventListener('click', async () => {
+      errEl.style.display = 'none';
+      const fullname = overlay.querySelector('#cu-fullname').value.trim();
+      const email = overlay.querySelector('#cu-email').value.trim();
+      const role = overlay.querySelector('#cu-role').value;
+      const password = overlay.querySelector('#cu-password').value;
+      const phone = overlay.querySelector('#cu-phone').value.trim() || null;
+      // Client-side guards mirror the server's validate() schema. Surface
+      // the most-likely failure first so the user fixes one thing at a
+      // time instead of seeing a wall of validation errors.
+      if (fullname.length < 2) {
+        errEl.textContent = 'Captura el nombre completo (mínimo 2 caracteres).';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        errEl.textContent = 'El correo electrónico no es válido.';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (password.length < 12) {
+        errEl.textContent = 'La contraseña debe tener al menos 12 caracteres.';
+        errEl.style.display = 'block';
+        return;
+      }
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Creando…';
+      try {
+        await API.post('/users', { email, password, full_name: fullname, role, phone });
+        close();
+        switchTo('users'); // Reload list to show the new user.
+      } catch (err) {
+        errEl.textContent = err?.error || err?.message || 'No se pudo crear el usuario. Intenta de nuevo.';
+        errEl.style.display = 'block';
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Crear usuario';
+      }
+    });
+  }
 
   // ── exposed API ─────────────────────────────────────────────────
   window.AdminDrawer = { init, switchTo };

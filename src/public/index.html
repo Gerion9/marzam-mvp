@@ -201,7 +201,20 @@
         localStorage.removeItem('marzam_demo');
         location.href = landingFor(user);
       } catch (err) {
-        errEl.textContent = err.error || 'Error al iniciar sesión.';
+        // Map common HTTP statuses to user-facing messages. Falls back to the
+        // server-provided `error` field, then a generic catch-all. We don't
+        // distinguish "user not found" vs "wrong password" on purpose — that
+        // disclosure is a security anti-pattern.
+        let msg = err && err.error;
+        if (!msg) {
+          if (err && err.status === 401) msg = 'Credenciales inválidas. Verifica tu correo y contraseña.';
+          else if (err && err.status === 423) msg = 'Cuenta bloqueada. Contacta a soporte.';
+          else if (err && err.status === 429) msg = 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.';
+          else if (err && err.status >= 500) msg = 'Error del servidor. Intenta de nuevo en unos segundos.';
+          else if (err instanceof TypeError) msg = 'Sin conexión. Revisa tu red e inténtalo de nuevo.';
+          else msg = 'Error al iniciar sesión.';
+        }
+        errEl.textContent = msg;
         errEl.classList.remove('hidden');
         btn.disabled = false;
         btn.textContent = 'Iniciar sesión';

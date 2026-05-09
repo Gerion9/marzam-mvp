@@ -94,6 +94,19 @@
   window.APP = APP;
 
   // ──────────────────────────────────────────────────────────
+  // bfcache guard — when the user hits "back" after logging out, browsers
+  // restore this page from the back-forward cache without re-running scripts,
+  // so the UI stays interactive even though localStorage has been cleared.
+  // pageshow fires on bfcache restores (event.persisted=true) AND on normal
+  // loads. We re-check auth and bounce to /login if the token is gone.
+  // ──────────────────────────────────────────────────────────
+  window.addEventListener('pageshow', () => {
+    if (!localStorage.getItem('token') || !API.user()) {
+      location.replace('/');
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────
   // Bootstrap
   // ──────────────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', async () => {
@@ -156,6 +169,8 @@
     setupUserMenu();
     setupCollapsePanel();
     setupMobilePanelDrag();
+    setupGlobalSearch();
+    setupImpersonationBanner();
     initMap();
     await loadActiveSession();
     selectTab('routes');
@@ -299,6 +314,124 @@
       menu.classList.toggle('hidden');
     });
     document.addEventListener('click', () => menu.classList.add('hidden'));
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Global search wiring. The topbar input was a no-op until now: we route
+  // the typed term into whichever view exposes a compatible search field.
+  // - Mi equipo (#team-search): forward the value + dispatch input event.
+  // - Otherwise: fall back to opening the team tab so the search is useful.
+  // The topbar hint stays generic ("Buscar farmacias, personas...") — when
+  // tabs grow their own search semantics, extend the dispatch table below.
+  // ──────────────────────────────────────────────────────────
+  function setupGlobalSearch() {
+    const input = document.getElementById('search-input');
+    if (!input) return;
+    const dispatch = (term) => {
+      const teamSearch = document.getElementById('team-search');
+      if (teamSearch) {
+        teamSearch.value = term;
+        teamSearch.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
+      // No view-level search target available — give the user a hint so
+      // they don't think the box is broken on this tab.
+      if (term && term.length > 1) {
+        window.MarzamToast?.show('Cambia a "Mi equipo" para buscar personas, o usa el filtro propio de cada vista.', 'info');
+      }
+    };
+    let debounceTimer = null;
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => dispatch(input.value.trim()), 200);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        clearTimeout(debounceTimer);
+        // Enter takes the user to the team tab where the search is most
+        // immediately useful (and dispatches the term once they land).
+        if (input.value.trim() && APP.activeTab !== 'team' && APP.role !== ROLES.REPRESENTANTE) {
+          selectTab('team');
+          // Wait for the view to mount, then forward the term.
+          setTimeout(() => dispatch(input.value.trim()), 150);
+        } else {
+          dispatch(input.value.trim());
+        }
+      } else if (e.key === 'Escape') {
+        input.value = '';
+        clearTimeout(debounceTimer);
+        dispatch('');
+        input.blur();
+      }
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Impersonation banner — dedicated, full-width, always visible while
+  // impersonating. Replaces the old reuse of #demo-banner (a small chip in
+  // the top-right corner) which was easy to miss and made it look like the
+  // director was logged in as the other user. The banner stays pinned to
+  // the top of the viewport with a clear "Volver a tu sesión" CTA so the
+  // impersonator never gets stuck.
+  // ──────────────────────────────────────────────────────────
+  function setupImpersonationBanner() {
+    if (!APP.user || !APP.user.impersonated_by) return;
+    if (document.getElementById('impersonation-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'impersonation-banner';
+    banner.setAttribute('role', 'status');
+    banner.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:200',
+      'background:linear-gradient(90deg,#7c3aed,#3b82f6)',
+      'color:#fff', 'padding:8px 16px',
+      'display:flex', 'align-items:center', 'gap:12px',
+      'box-shadow:0 2px 6px rgba(0,0,0,0.15)',
+      'font-size:12px', 'font-weight:600',
+    ].join(';');
+    const targetName = APP.user.full_name || APP.user.email || 'usuario';
+    const targetRole = ROLE_LABEL[normalizeRole(APP.user.role)] || APP.user.role;
+    banner.innerHTML = `
+      <span aria-hidden="true">🎭</span>
+      <span>Estás viendo la cuenta de <b>${targetName}</b> (${targetRole}). Las acciones se atribuirán a este usuario.</span>
+      <button id="impersonation-banner-stop"
+        style="margin-left:auto;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);color:#fff;font-weight:700;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;">
+        ↩ Volver a tu sesión
+      </button>
+    `;
+    document.body.appendChild(banner);
+    // Push the rest of the app down so the banner doesn't cover the topbar.
+    document.body.style.paddingTop = `${banner.offsetHeight}px`;
+
+    document.getElementById('impersonation-banner-stop').addEventListener('click', async () => {
+      const btn = document.getElementById('impersonation-banner-stop');
+      btn.disabled = true;
+      btn.textContent = 'Volviendo...';
+      try {
+        const r = await API.post('/auth/impersonate/stop', {});
+        if (r && r.user) {
+          localStorage.setItem('user', JSON.stringify(r.user));
+          if (r.token) localStorage.setItem('token', r.token);
+          localStorage.removeItem('marzam_original_user');
+          location.replace('/app');
+          return;
+        }
+        throw new Error('respuesta sin user');
+      } catch (err) {
+        // Server failed — recover from the saved original user if we have it,
+        // otherwise force a logout so the manager isn't stranded.
+        const orig = JSON.parse(localStorage.getItem('marzam_original_user') || 'null');
+        if (orig) {
+          localStorage.setItem('user', JSON.stringify(orig));
+          localStorage.removeItem('marzam_original_user');
+          location.replace('/app');
+        } else {
+          localStorage.clear();
+          location.replace('/');
+        }
+      }
+    });
   }
 
   /**
@@ -634,6 +767,24 @@
 
   async function startVisitSession() {
     try {
+      // Guard: refuse to start Modo Visita if the rep has no plan for today.
+      // Without this, the session lifecycle starts (timer, pings) but every
+      // ETA/route call returns empty, which the QA reporters flagged as
+      // confusing UX. Skip the guard for demo accounts (the demo router
+      // synthesizes assignments on the fly) and for non-rep roles whose
+      // /visit-plans/assignments endpoint is for their team, not themselves.
+      if (!APP.isDemo && APP.role === ROLES.REPRESENTANTE) {
+        const today = new Date().toISOString().slice(0, 10);
+        let count = 0;
+        try {
+          const list = await API.get(`/visit-plans/assignments?from=${today}&to=${today}`);
+          count = Array.isArray(list) ? list.length : 0;
+        } catch { /* fall through — backend may be unreachable, prefer to allow */ }
+        if (count === 0) {
+          window.MarzamToast?.show('No tienes ruta asignada para hoy. Pide a tu supervisor que publique tu plan.', 'warning');
+          return;
+        }
+      }
       const userInDemo = APP.isDemo ? DEMO_H.STORE.users.find((u) => u.id === APP.user.id) : null;
       const dayTarget = userInDemo ? (DEMO_H.STORE.day_targets[userInDemo.role] || 5) : 5;
       const session = await API.post('/visit-sessions/start', { pharmacies_planned: dayTarget });
@@ -740,7 +891,11 @@
       `;
       root.appendChild(wrap);
       const close = () => wrap.remove();
-      wrap.querySelector('.modal-close').addEventListener('click', close);
+      // Multiple close affordances: the X in the header, plus any button in
+      // the footer that opts in via class="modal-close" (e.g. "Listo",
+      // "Cancelar"). querySelector(singular) used to bind only the first one,
+      // which made footer "Listo" buttons no-op until backdrop click.
+      wrap.querySelectorAll('.modal-close').forEach((el) => el.addEventListener('click', close));
       wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
       return { close, root: wrap };
     },
