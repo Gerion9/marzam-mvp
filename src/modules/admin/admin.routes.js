@@ -144,10 +144,20 @@ router.post('/cron/purge-route-cache', adminOrCron, withCronLock('purge-route-ca
 async function cronPurgeTracking(req, res, next) {
   try {
     const days = Number(process.env.TRACKING_RETENTION_DAYS) || 30;
+    // Respect retain_until (mig 064): pings tied to a visit_report or a closed
+    // session may have an explicit longer retention. Only delete rows whose
+    // retain_until has passed, or rows without retain_until older than the
+    // default window.
     const result = await db('rep_tracking_points')
-      .whereRaw(`recorded_at < NOW() - INTERVAL '${days} days'`)
+      .where(function applyRetentionFilter() {
+        this.where('retain_until', '<', db.fn.now())
+          .orWhere(function unsetRetainUntilFilter() {
+            this.whereNull('retain_until')
+              .andWhereRaw(`recorded_at < NOW() - INTERVAL '${days} days'`);
+          });
+      })
       .del();
-    const summary = { deleted: result, retention_days: days };
+    const summary = { deleted: result, retention_days: days, respects_retain_until: true };
     await recordCronRun('purge-tracking', 'ok', summary);
     res.json(summary);
   } catch (err) {

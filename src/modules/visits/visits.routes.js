@@ -36,6 +36,9 @@ router.post(
 
 router.get('/pharmacy/:pharmacyId', authenticate, controller.listByPharmacy);
 
+// List visits for a rep on an optional date — used by manager-live estela view.
+router.get('/', authenticate, controller.listVisits);
+
 router.post(
   '/:visitId/photos',
   authenticate,

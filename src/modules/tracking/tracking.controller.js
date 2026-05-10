@@ -79,6 +79,27 @@ async function getBreadcrumbs(req, res, next) {
   }
 }
 
+/**
+ * Whole-day breadcrumb trail for the live-ops "estela" view. Same auth as the
+ * existing breadcrumb endpoint; takes a local YYYY-MM-DD and returns the
+ * trail with optional server-side downsample (default threshold 1000 pings).
+ */
+async function getBreadcrumbsForDay(req, res, next) {
+  try {
+    const pings = await trackingService.getBreadcrumbsForDay(
+      req.params.repId,
+      req.params.isoDate,
+      { simplifyThreshold: req.query.max_points ? Number(req.query.max_points) : undefined },
+    );
+    // Hint clients that re-clicking the same rep within a minute is cacheable
+    // but the response must not be shared across users (private).
+    res.set('Cache-Control', 'private, max-age=60');
+    res.json(pings);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getLatestPositions(_req, res, next) {
   try {
     const positions = await trackingService.getLatestPositions();
@@ -88,4 +109,12 @@ async function getLatestPositions(_req, res, next) {
   }
 }
 
-module.exports = { recordPing, recordPingBatch, checkin, getCheckins, getBreadcrumbs, getLatestPositions };
+module.exports = {
+  recordPing,
+  recordPingBatch,
+  checkin,
+  getCheckins,
+  getBreadcrumbs,
+  getBreadcrumbsForDay,
+  getLatestPositions,
+};

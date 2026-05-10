@@ -29,6 +29,11 @@
   const SRC_TRAIL = 'live-trail';
   // Phase 3: subtle "where the team should be" plan layer beneath live pings.
   const SRC_PLAN = 'live-plan-stops';
+  // Estela GPS — full-day breadcrumb trail of the rep clicked in the side panel.
+  // Visually distinct from SRC_TRAIL (which is the rolling 30-min in-memory
+  // tail). Loaded on demand from /api/tracking/breadcrumbs/:repId/day/:iso.
+  const SRC_HISTORICAL_TRAIL = 'live-historical-trail';
+  const SRC_HISTORICAL_VISITS = 'live-historical-visits';
 
   // ── styling helpers ────────────────────────────────────────────
   const ROLE_COLORS = {
@@ -54,7 +59,7 @@
   function clearLayers() {
     const map = APP.map;
     if (!map) return;
-    [SRC_USERS, SRC_TRAIL, SRC_PLAN].forEach((srcId) => {
+    [SRC_USERS, SRC_TRAIL, SRC_PLAN, SRC_HISTORICAL_TRAIL, SRC_HISTORICAL_VISITS].forEach((srcId) => {
       ['line', 'circle', 'label'].forEach((kind) => {
         const id = `${srcId}-${kind}`;
         if (map.getLayer(id)) map.removeLayer(id);
@@ -562,6 +567,10 @@
       planStopsCount: 0,
       _planStops: [],
 
+      // Estela GPS — full-day historical trail for the rep currently focused.
+      // Distinct from `_store.trail` (in-memory rolling 30-min tail from SSE).
+      historicalTrail: { userId: null, date: null, points: [], visits: [], loading: false, error: null },
+
       // Internal store
       _store: makeStore(),
 
@@ -713,6 +722,11 @@
         if (positioned.length === 1) {
           const u = positioned[0];
           APP.map?.flyTo({ center: [u.lng, u.lat], zoom: 14, duration: 700 });
+          // Lazy-load today's full breadcrumb trail when focusing a single rep.
+          // Other roles (supervisor/gerente/director) don't have meaningful trails
+          // because they don't follow a planned route.
+          if (node.user.role === 'representante') this.loadHistoricalTrail(String(node.user.id));
+          else this.clearHistoricalTrail();
           return;
         }
         const lats = positioned.map((u) => u.lat);
@@ -722,6 +736,125 @@
           [Math.max(...lngs), Math.max(...lats)],
         ];
         APP.map?.fitBounds(bounds, { padding: 80, duration: 700, maxZoom: 14 });
+        // Multi-rep focus → clear single-rep estela so it doesn't leak across views.
+        this.clearHistoricalTrail();
+      },
+
+      // ── Estela GPS (historical trail) ────────────────────────
+      _todayIso() {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      },
+
+      async loadHistoricalTrail(userId, isoDate) {
+        const date = isoDate || this._todayIso();
+        // Cache check: don't re-fetch if we already loaded for the same user+date.
+        if (
+          this.historicalTrail.userId === userId
+          && this.historicalTrail.date === date
+          && !this.historicalTrail.loading
+          && !this.historicalTrail.error
+          && this.historicalTrail.points.length > 0
+        ) {
+          this._renderHistoricalTrail();
+          return;
+        }
+        this.historicalTrail = { userId, date, points: [], visits: [], loading: true, error: null };
+        try {
+          const [points, visits] = await Promise.all([
+            API.get(`/tracking/breadcrumbs/${encodeURIComponent(userId)}/day/${encodeURIComponent(date)}`).catch((e) => { throw e; }),
+            API.get(`/visits?rep_id=${encodeURIComponent(userId)}&date=${encodeURIComponent(date)}`).catch(() => []),
+          ]);
+          this.historicalTrail.points = Array.isArray(points) ? points : [];
+          this.historicalTrail.visits = Array.isArray(visits) ? visits : [];
+          this.historicalTrail.loading = false;
+          this._renderHistoricalTrail();
+        } catch (err) {
+          this.historicalTrail.loading = false;
+          this.historicalTrail.error = err?.message || 'No se pudo cargar la estela';
+          this._renderHistoricalTrail(); // clears any prior render
+        }
+      },
+
+      _renderHistoricalTrail() {
+        const map = APP.map;
+        if (!map) return;
+        const ht = this.historicalTrail;
+
+        // Trail line.
+        if (ht && ht.points && ht.points.length > 1) {
+          const lineGeo = {
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              properties: { user_id: ht.userId, date: ht.date },
+              geometry: {
+                type: 'LineString',
+                coordinates: ht.points.map((p) => [Number(p.lng), Number(p.lat)]),
+              },
+            }],
+          };
+          upsertSource(map, SRC_HISTORICAL_TRAIL, lineGeo);
+          if (!map.getLayer(`${SRC_HISTORICAL_TRAIL}-line`)) {
+            map.addLayer({
+              id: `${SRC_HISTORICAL_TRAIL}-line`,
+              type: 'line',
+              source: SRC_HISTORICAL_TRAIL,
+              paint: {
+                'line-color': '#1d4ed8', // azul oscuro distinto del verde del live trail
+                'line-width': 3,
+                'line-opacity': 0.75,
+                'line-dasharray': [1, 0],
+              },
+            });
+          }
+        } else if (map.getLayer(`${SRC_HISTORICAL_TRAIL}-line`)) {
+          // Clear when no points.
+          upsertSource(map, SRC_HISTORICAL_TRAIL, { type: 'FeatureCollection', features: [] });
+        }
+
+        // Visit markers.
+        const visitFeatures = (ht.visits || [])
+          .filter((v) => Number.isFinite(Number(v.checkin_lat)) && Number.isFinite(Number(v.checkin_lng)))
+          .map((v) => ({
+            type: 'Feature',
+            properties: {
+              visit_id: v.id,
+              outcome: v.outcome || 'visited',
+              pharmacy_name: v.pharmacy_name || v.farmacia_nombre || '',
+              recorded_at: v.created_at || v.checkin_time || '',
+            },
+            geometry: { type: 'Point', coordinates: [Number(v.checkin_lng), Number(v.checkin_lat)] },
+          }));
+        upsertSource(map, SRC_HISTORICAL_VISITS, { type: 'FeatureCollection', features: visitFeatures });
+        if (!map.getLayer(`${SRC_HISTORICAL_VISITS}-circle`)) {
+          map.addLayer({
+            id: `${SRC_HISTORICAL_VISITS}-circle`,
+            type: 'circle',
+            source: SRC_HISTORICAL_VISITS,
+            paint: {
+              'circle-radius': 6,
+              'circle-color': '#dc2626',  // rojo: punto de visita confirmada
+              'circle-stroke-color': '#ffffff',
+              'circle-stroke-width': 2,
+            },
+          });
+        }
+      },
+
+      clearHistoricalTrail() {
+        const map = APP.map;
+        if (map) {
+          ['line', 'circle'].forEach((kind) => {
+            const id = `${SRC_HISTORICAL_TRAIL}-${kind}`;
+            if (map.getLayer(id)) map.removeLayer(id);
+            const idV = `${SRC_HISTORICAL_VISITS}-${kind}`;
+            if (map.getLayer(idV)) map.removeLayer(idV);
+          });
+          if (map.getSource(SRC_HISTORICAL_TRAIL)) map.removeSource(SRC_HISTORICAL_TRAIL);
+          if (map.getSource(SRC_HISTORICAL_VISITS)) map.removeSource(SRC_HISTORICAL_VISITS);
+        }
+        this.historicalTrail = { userId: null, date: null, points: [], visits: [], loading: false, error: null };
       },
 
       // ── Event feed ───────────────────────────────────────────

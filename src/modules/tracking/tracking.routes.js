@@ -60,6 +60,15 @@ router.get(
   controller.getBreadcrumbs,
 );
 
+// Whole-day breadcrumb trail in local TZ — used by manager-live's "estela"
+// click target. Same authorization as the open-window breadcrumb endpoint.
+router.get(
+  '/breadcrumbs/:repId/day/:isoDate',
+  authenticate,
+  authorize({ roles: ['national_admin', 'regional_manager', 'area_coordinator'] }),
+  controller.getBreadcrumbsForDay,
+);
+
 router.get(
   '/positions',
   authenticate,
