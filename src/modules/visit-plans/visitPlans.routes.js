@@ -29,6 +29,11 @@ router.post('/:id/users/:userId/resequence', authenticate, authorize({ roles: MA
 router.post('/:id/reoptimize-day', authenticate, authorize({ roles: MANAGER_ROLES }), controller.reoptimizeDay);
 router.get('/:id/reoptimizations', authenticate, controller.listReoptimizations);
 
+// Global replan with lineage: produces a new visit_plans row with parent_plan_id
+// set, version incremented, and replan_reason recorded. Archives the parent in
+// the same transaction. See replanWithHistory.js + migration 086.
+router.post('/:id/replan', authenticate, authorize({ roles: MANAGER_ROLES }), controller.replan);
+
 // Post-mortem: plan-vs-real metrics + per-rep replay for the time scrubber.
 router.get('/:id/post-mortem', authenticate, controller.postMortem);
 router.get('/:id/post-mortem.csv', authenticate, controller.postMortemCsv);

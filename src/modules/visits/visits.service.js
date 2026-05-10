@@ -140,36 +140,65 @@ async function submit(data) {
   }
 
   return db.transaction(async (trx) => {
-    const [visit] = await trx('visit_reports')
-      .insert({
-        assignment_stop_id: data.assignment_stop_id,
-        pharmacy_id: data.pharmacy_id,
-        rep_id: data.rep_id,
-        outcome: data.outcome,
-        notes: data.notes || null,
-        order_potential: data.order_potential || null,
-        contact_person: data.contact_person || null,
-        contact_phone: data.contact_phone || null,
-        contact_name: data.contact_name || null,
-        contact_email: data.contact_email || null,
-        competitor_products: data.competitor_products || null,
-        stock_observations: data.stock_observations || null,
-        wholesalers: data.wholesalers || null,
-        visit_observations: data.visit_observations || null,
-        competition_info: data.competition_info || null,
-        competition_prices: data.competition_prices || null,
-        competition_offers: data.competition_offers || null,
-        follow_up_date: data.follow_up_date || null,
-        follow_up_reason: data.follow_up_reason || null,
-        flag_reason: data.flag_reason || null,
-        checkin_lat: data.checkin_lat || null,
-        checkin_lng: data.checkin_lng || null,
-        order_placed: !!data.order_placed,
-        no_order_reason: data.order_placed ? null : (data.no_order_reason || null),
-        order_amount: data.order_amount != null && data.order_amount !== '' ? Number(data.order_amount) : null,
-        idempotency_key: idempotencyKey,
-      })
-      .returning('*');
+    // Resolve client_state_at_visit + marzam_client_id from the pharmacy now,
+    // so the bonus engine can distinguish "new vs existing" without a JOIN at
+    // report time. Defensive against the columns not being deployed yet
+    // (mig 088): probe and only set when present.
+    let marzamClientId = data.marzam_client_id || null;
+    let clientStateAtVisit = data.client_state_at_visit || null;
+    let visitPlanAssignmentId = data.visit_plan_assignment_id || null;
+
+    const hasMcCol = await trx.schema.hasColumn('visit_reports', 'marzam_client_id').catch(() => false);
+    const hasStateCol = await trx.schema.hasColumn('visit_reports', 'client_state_at_visit').catch(() => false);
+    const hasVpaCol = await trx.schema.hasColumn('visit_reports', 'visit_plan_assignment_id').catch(() => false);
+
+    if (hasMcCol && !marzamClientId && data.pharmacy_id) {
+      const mc = await trx('marzam_clients').where({ pharmacy_id: data.pharmacy_id }).first('id');
+      if (mc) marzamClientId = mc.id;
+    }
+    if (hasStateCol && !clientStateAtVisit) {
+      clientStateAtVisit = marzamClientId ? 'existing' : 'new';
+    }
+    if (hasVpaCol && !visitPlanAssignmentId && data.assignment_stop_id) {
+      // assignment_stop_id may reference the legacy territory_assignments OR
+      // visit_plan_assignments. Try the new table first.
+      const vpa = await trx('visit_plan_assignments').where({ id: data.assignment_stop_id }).first('id');
+      if (vpa) visitPlanAssignmentId = vpa.id;
+    }
+
+    const visitRow = {
+      assignment_stop_id: data.assignment_stop_id,
+      pharmacy_id: data.pharmacy_id,
+      rep_id: data.rep_id,
+      outcome: data.outcome,
+      notes: data.notes || null,
+      order_potential: data.order_potential || null,
+      contact_person: data.contact_person || null,
+      contact_phone: data.contact_phone || null,
+      contact_name: data.contact_name || null,
+      contact_email: data.contact_email || null,
+      competitor_products: data.competitor_products || null,
+      stock_observations: data.stock_observations || null,
+      wholesalers: data.wholesalers || null,
+      visit_observations: data.visit_observations || null,
+      competition_info: data.competition_info || null,
+      competition_prices: data.competition_prices || null,
+      competition_offers: data.competition_offers || null,
+      follow_up_date: data.follow_up_date || null,
+      follow_up_reason: data.follow_up_reason || null,
+      flag_reason: data.flag_reason || null,
+      checkin_lat: data.checkin_lat || null,
+      checkin_lng: data.checkin_lng || null,
+      order_placed: !!data.order_placed,
+      no_order_reason: data.order_placed ? null : (data.no_order_reason || null),
+      order_amount: data.order_amount != null && data.order_amount !== '' ? Number(data.order_amount) : null,
+      idempotency_key: idempotencyKey,
+    };
+    if (hasMcCol && marzamClientId) visitRow.marzam_client_id = marzamClientId;
+    if (hasStateCol && clientStateAtVisit) visitRow.client_state_at_visit = clientStateAtVisit;
+    if (hasVpaCol && visitPlanAssignmentId) visitRow.visit_plan_assignment_id = visitPlanAssignmentId;
+
+    const [visit] = await trx('visit_reports').insert(visitRow).returning('*');
 
     if (Array.isArray(data.products) && data.products.length) {
       const rows = data.products

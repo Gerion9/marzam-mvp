@@ -374,6 +374,41 @@ async function reoptimizeDay(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/**
+ * Replan a published plan, producing a new lineage version with cadence-aware
+ * exclusions. Used by:
+ *   - mid-flight reorganizations driven from the manager dashboard.
+ *   - the "Re-optimizar resto del mes" CTA on a plan_conflict_alert.
+ */
+async function replan(req, res, next) {
+  try {
+    const replanWithHistory = require('./replanWithHistory');
+    const {
+      replan_reason: replanReason,
+      plan_type: planType,
+      custom_start: customStart,
+      custom_end: customEnd,
+      pareto_filter: paretoFilter,
+      alert_id: alertId,
+      cadence_window_days: cadenceWindowDays,
+    } = req.body || {};
+    if (!replanReason) return res.status(400).json({ error: 'replan_reason is required' });
+    if (!planType) return res.status(400).json({ error: 'plan_type is required' });
+    const result = await replanWithHistory.generate({
+      parentPlanId: req.params.id,
+      replanReason,
+      triggeredByUserId: req.user.id,
+      planType,
+      customStart,
+      customEnd,
+      paretoFilter,
+      alertId: alertId || null,
+      cadenceWindowDays: cadenceWindowDays || 60,
+    });
+    res.status(201).json(result);
+  } catch (err) { next(err); }
+}
+
 async function listReoptimizations(req, res, next) {
   try {
     const result = await service.listReoptimizations(req.params.id, {
@@ -461,4 +496,5 @@ module.exports = {
   postMortemCsv,
   reoptimizeDay,
   listReoptimizations,
+  replan,
 };

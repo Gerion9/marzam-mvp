@@ -48,6 +48,7 @@ const multiStartSolver = require('../../utils/multiStart');
 const { QUADRANT_TO_PARETO } = require('../../utils/visitCadence');
 const { clusterByHome } = require('../../utils/kmeans');
 const { localDayHHMMToUTC } = require('../../utils/timezone');
+const branchPlanSettings = require('../../services/branchPlanSettings');
 const log = require('../../utils/logger');
 
 const PARETO_CLASSES = ['A', 'B', 'C'];
@@ -131,17 +132,21 @@ const BALANCE_MAX_SWAPS_PER_ITER = 2;
 const SOFT_WINDOW_PENALTY_SEC_PER_MIN = 20;
 const SOFT_WINDOW_DEFAULT_ASSUMED_DAMPING = 0.3;
 
-function isWeekday(date) {
-  const d = date.getUTCDay();
-  return d !== 0 && d !== 6;
+// Legacy default: lunes-viernes. New code paths should pass workingDays from
+// branchPlanSettings. The compat shim keeps existing callers working until they
+// thread branchSettings down (see Phase 2: visitPlans.service.publish + create).
+const LEGACY_WORKING_DAYS = [1, 2, 3, 4, 5];
+
+function isWeekday(date, workingDays = LEGACY_WORKING_DAYS) {
+  return workingDays.includes(date.getUTCDay());
 }
 
-function eachWorkingDay(start, end) {
+function eachWorkingDay(start, end, workingDays = LEGACY_WORKING_DAYS) {
   const days = [];
   const cursor = new Date(start);
   const stop = new Date(end);
   while (cursor <= stop) {
-    if (isWeekday(cursor)) days.push(new Date(cursor));
+    if (isWeekday(cursor, workingDays)) days.push(new Date(cursor));
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return days;
@@ -1340,7 +1345,17 @@ async function buildPlan(args, trx, mode) {
     log.warn({ event: 'plan.coeffs.mixed_sources', sources: [...coeffSources] });
   }
 
-  const days = eachWorkingDay(new Date(`${periodStart}T00:00:00Z`), new Date(`${periodEnd}T00:00:00Z`));
+  // Resolve working days from the branch's plan_settings (mig 085). When
+  // branchId is null, we keep legacy Mon-Fri behavior to preserve existing
+  // contracts; new flows (replanWithHistory, visitPlans.service.publish) pass
+  // branchId so Dom-Vie (or per-branch override) takes effect.
+  const _bs = branchId ? await branchPlanSettings.get(branchId) : null;
+  const workingDays = _bs?.working_days || LEGACY_WORKING_DAYS;
+  const days = eachWorkingDay(
+    new Date(`${periodStart}T00:00:00Z`),
+    new Date(`${periodEnd}T00:00:00Z`),
+    workingDays,
+  );
   if (!days.length) {
     const err = new Error('No working days in window');
     err.status = 400; throw err;
@@ -1653,6 +1668,8 @@ module.exports = {
   generate,
   previewGenerate,
   estimateCost,
+  buildPlan,
+  DB_ASSIGNMENT_COLS,
   PARETO_CLASSES,
   PROSPECTO_PARETO_CLASSES,
   ROLE_PRIMARY_PARETO,

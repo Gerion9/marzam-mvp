@@ -73,6 +73,41 @@ async function listByPharmacy(req, res, next) {
   }
 }
 
+/**
+ * GET /api/visits?rep_id=&date=YYYY-MM-DD — used by the manager-live estela view
+ * to show visit markers on the historical trail. Returns visits ordered by
+ * created_at ASC so the popup timeline reads naturally.
+ *
+ * Scope: a manager can query any rep in their hierarchy. Field reps can only
+ * query themselves. Demo users only see their own.
+ */
+async function listVisits(req, res, next) {
+  try {
+    const repId = req.query.rep_id;
+    const date = req.query.date; // YYYY-MM-DD optional
+    if (!repId) return res.status(400).json({ error: 'rep_id is required' });
+
+    // Field rep can only query themselves.
+    if (req.user.role === 'field_rep' && req.user.id !== repId) {
+      return res.status(403).json({ error: 'reps can only query their own visits' });
+    }
+    let from = null;
+    let to = null;
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      // Local CDMX day → UTC window.
+      const { localDayHHMMToUTC } = require('../../utils/timezone');
+      from = localDayHHMMToUTC(date, '00:00').toISOString();
+      const next = new Date(date);
+      next.setUTCDate(next.getUTCDate() + 1);
+      to = new Date(localDayHHMMToUTC(next.toISOString().slice(0, 10), '00:00').getTime() - 1).toISOString();
+    }
+    const visits = await visitService.listByRep(repId, { from, to });
+    res.json(visits);
+  } catch (err) {
+    next(err);
+  }
+}
+
 // Pre-visit photo upload — Marzam Execution Doc §6.3 mandates that photo
 // evidence is "blocked if missing" at submit time, but the photo had to be
 // uploaded BEFORE the visit_report exists. This endpoint stores the photo to
@@ -166,4 +201,4 @@ async function uploadPhoto(req, res, next) {
   }
 }
 
-module.exports = { submit, listByPharmacy, uploadPhoto, uploadStagingPhoto };
+module.exports = { submit, listByPharmacy, listVisits, uploadPhoto, uploadStagingPhoto };

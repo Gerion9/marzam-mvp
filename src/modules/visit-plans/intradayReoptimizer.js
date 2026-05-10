@@ -254,6 +254,24 @@ async function reoptimize({
 }) {
   const startedAt = Date.now();
 
+  // Step 0: lock the plan row itself so a concurrent replanWithHistory cannot
+  // archive it mid-flight. If the plan was archived between request arrival
+  // and lock acquisition, abort with 409 — caller should retry against the
+  // new plan_id.
+  const planRow = await trx('visit_plans')
+    .where({ id: planId })
+    .forUpdate()
+    .first();
+  if (!planRow) return { ok: false, error: 'plan_not_found' };
+  if (planRow.status !== 'published' || planRow.archived_at) {
+    return {
+      ok: false,
+      error: 'plan_no_longer_published',
+      plan_status: planRow.status,
+      superseded_by_plan_id: planRow.superseded_by_plan_id || null,
+    };
+  }
+
   // Step 1: load day and classify locks.
   const rows = await loadDay(trx, planId, date);
   if (!rows.length) {

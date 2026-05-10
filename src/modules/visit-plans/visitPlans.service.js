@@ -551,6 +551,21 @@ async function publish(id, userId) {
       updated_at: trx.fn.now(),
     }).returning('*');
 
+    // Detect partial-period conflicts with other still-published plans for the
+    // same scope (e.g. publishing a weekly while a monthly is active). Records
+    // alerts AND auto-rescheduled the colliding monthly assignments inside the
+    // weekly's window to preserve the "1 plan vigente por rep+día" invariant.
+    let conflictResult = { alerts: [], rescheduled_count: 0 };
+    try {
+      const conflictDetector = require('./conflictDetector');
+      conflictResult = await conflictDetector.detectAndRecordConflicts(trx, updated);
+    } catch (cdErr) {
+      // Don't break publish if conflict detection fails — log & move on.
+      // We surface the failure in the response so the manager knows the
+      // alerts table wasn't updated.
+      conflictResult.error = cdErr.message;
+    }
+
     // Per-rep SSE notification: list distinct visitors + their stop counts so
     // the rep's UI can show "Te asignaron N paradas para HOY" and refresh.
     const audience = await trx('visit_plan_assignments')
@@ -561,7 +576,7 @@ async function publish(id, userId) {
       .max({ last_day: 'scheduled_date' })
       .groupBy('visitor_user_id');
 
-    return { updated, audience };
+    return { updated, audience, conflicts: conflictResult };
   });
 
   // Emit AFTER the transaction commits so subscribers see a row that actually
@@ -595,7 +610,28 @@ async function publish(id, userId) {
     }
   }
 
-  return result.updated;
+  // Emit plan_superseded for any plan auto-archived by partial conflict so
+  // the rep frontend invalidates its cached plan_id mappings.
+  if (result.conflicts?.alerts?.length) {
+    for (const alert of result.conflicts.alerts) {
+      try {
+        await liveBus.publish({
+          type: 'plan_superseded',
+          audienceUserId: null, // broadcast — TODO filter to affected reps when team scoping lands
+          payload: {
+            new_plan_id: id,
+            conflicting_plan_id: alert.conflicting_plan_id,
+            conflict_type: alert.conflict_type,
+            affected_period_start: alert.affected_period_start,
+            affected_period_end: alert.affected_period_end,
+          },
+        });
+      } catch (_) { /* best-effort */ }
+    }
+  }
+
+  // Attach conflict summary so the UI can show "N alerts created" toast.
+  return Object.assign({}, result.updated, { _conflicts: result.conflicts });
 }
 
 async function archive(id, userId) {
