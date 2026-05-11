@@ -173,7 +173,108 @@ async function updateUserSkills(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/**
+ * GET /api/users/me/preferences
+ *
+ * Devuelve el bag jsonb de preferencias del user autenticado. Si no existe
+ * fila en user_preferences, retorna { preferences: {}, updated_at: null } —
+ * el cliente trata eso como "primera vez" y muestra el welcome modal del tour.
+ */
+async function getMyPreferences(req, res, next) {
+  try {
+    const row = await db('user_preferences')
+      .where({ user_id: req.user.id })
+      .select('preferences', 'updated_at')
+      .first();
+    if (!row) return res.json({ preferences: {}, updated_at: null });
+    res.json({ preferences: row.preferences || {}, updated_at: row.updated_at });
+  } catch (err) { next(err); }
+}
+
+// Whitelist de keys aceptadas dentro de preferences.tutorial. Defensa contra
+// payloads que intenten meter datos arbitrarios en el jsonb del user (el bag
+// es por-user, así que no es un vector de privilege escalation, pero sí evita
+// que el cliente meta basura).
+const TUTORIAL_KEYS = new Set([
+  'seen', 'seenAt', 'dismissedForever',
+  'completedTours', 'lastTourId', 'lastStepIdx',
+]);
+
+function sanitizeTutorialPatch(input) {
+  if (!input || typeof input !== 'object') return null;
+  const out = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (!TUTORIAL_KEYS.has(k)) continue;
+    if (k === 'completedTours') {
+      if (!Array.isArray(v)) continue;
+      out[k] = v.filter((s) => typeof s === 'string' && s.length > 0 && s.length < 80).slice(0, 64);
+    } else if (k === 'lastStepIdx') {
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 200) continue;
+      out[k] = Math.floor(v);
+    } else if (k === 'lastTourId' || k === 'seenAt') {
+      if (typeof v !== 'string' || v.length > 80) continue;
+      out[k] = v;
+    } else if (k === 'seen' || k === 'dismissedForever') {
+      if (typeof v !== 'boolean') continue;
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * PATCH /api/users/me/preferences
+ *
+ * Body: { tutorial: {...} } — keys whitelisted dentro de preferences.tutorial.
+ * Hace UPSERT con jsonb deep-merge superficial: el cliente envía solo las
+ * claves cambiadas y se mergean dentro del bag existente vía `||`. Por ahora
+ * solo aceptamos `tutorial`; cuando se añada otra preferencia (ej. theme),
+ * extender la lista.
+ */
+async function updateMyPreferences(req, res, next) {
+  try {
+    const tutorialPatch = sanitizeTutorialPatch(req.body && req.body.tutorial);
+    if (!tutorialPatch || Object.keys(tutorialPatch).length === 0) {
+      return res.status(400).json({ error: 'No valid preference keys in payload' });
+    }
+
+    // UPSERT con merge superficial del jsonb. La columna preferences se sustituye
+    // por preferences || excluded.preferences, lo que mergea en el primer nivel
+    // (preferences.tutorial completo se sustituye, no merge profundo). Esto es
+    // intencional: el cliente envía el sub-objeto tutorial completo (no patches
+    // de nivel 2) tras hacer merge en cliente.
+    const existing = await db('user_preferences')
+      .where({ user_id: req.user.id })
+      .select('preferences')
+      .first();
+    const merged = {
+      ...(existing && existing.preferences ? existing.preferences : {}),
+      tutorial: {
+        ...((existing && existing.preferences && existing.preferences.tutorial) || {}),
+        ...tutorialPatch,
+      },
+    };
+
+    const [row] = await db('user_preferences')
+      .insert({
+        user_id: req.user.id,
+        preferences: JSON.stringify(merged),
+      })
+      .onConflict('user_id')
+      .merge({
+        preferences: JSON.stringify(merged),
+      })
+      .returning(['preferences', 'updated_at']);
+
+    res.json({ preferences: row.preferences, updated_at: row.updated_at });
+  } catch (err) { next(err); }
+}
+
 module.exports = {
   list, create, update, deactivate, resetPassword, updateHome,
   getSkillsCatalog, getMySkills, updateMySkills, updateUserSkills,
+  getMyPreferences, updateMyPreferences,
 };
+
+// Exposed for unit testing the sanitizer in isolation.
+module.exports.sanitizeTutorialPatch = sanitizeTutorialPatch;
