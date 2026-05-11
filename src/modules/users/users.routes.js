@@ -102,4 +102,16 @@ router.put(
   controller.updateUserSkills,
 );
 
+// ── User preferences (mig 097) ────────────────────────────────────────────
+// Bag jsonb por-user para preferencias de UI. Primer consumidor: estado del
+// sistema de tutorial guiado (preferences.tutorial). No requiere auditLog —
+// son preferencias personales de UI, no eventos auditables.
+router.get('/me/preferences', authenticate, controller.getMyPreferences);
+router.patch(
+  '/me/preferences',
+  authenticate,
+  validate({ tutorial: { type: 'object' } }),
+  controller.updateMyPreferences,
+);
+
 module.exports = router;
