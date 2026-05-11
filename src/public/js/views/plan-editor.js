@@ -371,7 +371,7 @@
                   :title="planQuota ? ('Restantes: ' + planQuota.remaining + ' · Resetea ' + (planQuota.reset_at||'').slice(11,16) + ' UTC') : ''"
                   x-text="quotaChipText()"></span>
             <span class="mz-status-chip" :class="'mz-status-chip--' + budgetChipColor()"
-                  :title="budgetStatus ? ('Routes API · restante $' + Number(budgetStatus.remaining_usd||0).toFixed(2)) : ''"
+                  :title="budgetStatus ? 'Presupuesto Routes API · ' + budgetChipColor() : ''"
                   x-text="budgetChipText()"></span>
             <span class="mz-status-chip mz-status-chip--slate"
                   :title="costEstimate ? ('Elementos billables: ' + (costEstimate.matrix_elements||0)) : ''"
@@ -421,7 +421,38 @@
             </div>
             <div class="text-[11px] text-slate-500 mt-0.5" x-text="selectionLabel"></div>
 
-            <div class="mt-2 max-h-72 overflow-y-auto pr-1 space-y-1.5">
+            <!-- Mobile: trigger button to open full-screen bottom-sheet -->
+            <button type="button" class="md:hidden mt-2 w-full px-4 py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+                    @click="pickerOpen = true" x-show="!loadingTeam">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              Seleccionar equipo (<span x-text="scopeUserIds.length"></span>)
+            </button>
+
+            <!-- Bottom-sheet overlay backdrop (móvil cuando abierto) -->
+            <div x-show="isMobile && pickerOpen" class="fixed inset-0 z-40 bg-slate-900/40" @click="pickerOpen = false" style="display:none"></div>
+
+            <!-- Tree container:
+                   - desktop: inline scrollable list (estado original)
+                   - mobile cerrado: oculto (trigger button mostrado arriba)
+                   - mobile abierto: full-screen bottom-sheet con header/footer fijos -->
+            <div :class="{
+                   'fixed inset-x-0 bottom-0 top-12 z-50 bg-white rounded-t-2xl flex flex-col': isMobile && pickerOpen,
+                   'hidden': isMobile && !pickerOpen,
+                   'mt-2': !isMobile
+                 }">
+              <!-- Mobile sheet header -->
+              <div x-show="isMobile && pickerOpen" class="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white sticky top-0" style="display:none">
+                <div>
+                  <div class="text-sm font-bold text-slate-800">Seleccionar equipo</div>
+                  <div class="text-[11px] text-slate-500" x-text="scopeUserIds.length + ' rep(s) seleccionado(s)'"></div>
+                </div>
+                <button @click="pickerOpen = false" class="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-lg">✕ Cerrar</button>
+              </div>
+
+              <div :class="{
+                     'flex-1 overflow-y-auto p-4 space-y-1.5': isMobile && pickerOpen,
+                     'max-h-72 overflow-y-auto pr-1 space-y-1.5': !(isMobile && pickerOpen)
+                   }">
               <template x-if="loadingTeam">
                 <div class="space-y-1.5">
                   <div class="mz-skel h-12"></div>
@@ -515,7 +546,8 @@
                         <div class="flex items-center gap-2 px-2 py-1 bg-amber-50">
                           <span class="w-3"></span>
                           <span class="w-3"></span>
-                          <span class="mz-chip" style="background:#fef3c7;color:#92400e">Reportan directo al gerente</span>
+                          <span class="mz-chip" style="background:#fef3c7;color:#92400e"
+                            x-text="actorIsGerente ? 'Sin supervisor (reportan a ti)' : 'Reportan directo al gerente'"></span>
                           <span class="ml-auto text-[10px] text-slate-500" x-text="g.directReps.length + ' reps'"></span>
                         </div>
                         <template x-for="r in g.directReps" :key="r.id">
@@ -609,6 +641,14 @@
               <template x-if="!loadingTeam && visibleHierarchy.gerentes.length === 0 && visibleHierarchy.ungrouped_supervisors.length === 0 && visibleHierarchy.orphan_reps.length === 0">
                 <div class="text-center text-xs text-slate-400 py-4">No hay miembros en tu equipo.</div>
               </template>
+              </div>
+
+              <!-- Mobile sheet footer: confirm button -->
+              <div x-show="isMobile && pickerOpen" class="border-t border-slate-200 bg-white px-4 py-3 sticky bottom-0" style="display:none">
+                <button @click="pickerOpen = false" class="w-full px-4 py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-sm font-bold">
+                  Listo (<span x-text="scopeUserIds.length"></span> seleccionados)
+                </button>
+              </div>
             </div>
           </div>
 
@@ -989,6 +1029,18 @@
       expandedGerentes: {},
       expandedSupervisors: {},
       search: '',
+      // Mobile bottom-sheet picker — el árbol jerárquico no cabe en 375 px
+      // como inline tree; en móvil se abre full-screen vía botón.
+      pickerOpen: false,
+      isMobile: (typeof window !== 'undefined' && window.matchMedia)
+        ? window.matchMedia('(max-width: 767px)').matches
+        : false,
+      actorIsGerente: (() => {
+        try {
+          const role = (window.APP?.user?.role || '').toLowerCase();
+          return role === 'gerente_ventas' || role === 'regional_manager' || role === 'gerencia' || role === 'gerente';
+        } catch { return false; }
+      })(),
       // Inherits the zone selected in Capacidad (or topbar pill) so jumping
       // tabs preserves context. Empty string = sin filtro.
       // '__all__' is a sentinel meaning "no filter" in the analytics layer — normalize to ''.
@@ -1072,14 +1124,16 @@
           if (pob?.options) for (const o of pob.options) if (o?.value && o.value !== '__all__') raw.push(o.value);
           this.availableZones = window.MarzamEF?.dedup ? window.MarzamEF.dedup(raw) : [...new Set(raw.filter(Boolean))].sort();
           // Auto-expand if few groups so the user immediately sees the tree.
+          // En móvil mantenemos gerentes expandidos pero supervisores colapsados:
+          // el árbol es demasiado denso para 375 px y el usuario decide qué abrir.
           const supTotal = this.hierarchy.gerentes.reduce((s, g) => s + g.supervisors.length, 0)
             + this.hierarchy.ungrouped_supervisors.length;
           if (supTotal <= 4) {
             this.hierarchy.gerentes.forEach((g) => {
               this.expandedGerentes[g.id] = true;
-              g.supervisors.forEach((s) => { this.expandedSupervisors[s.id] = true; });
+              g.supervisors.forEach((s) => { this.expandedSupervisors[s.id] = !this.isMobile; });
             });
-            this.hierarchy.ungrouped_supervisors.forEach((s) => { this.expandedSupervisors[s.id] = true; });
+            this.hierarchy.ungrouped_supervisors.forEach((s) => { this.expandedSupervisors[s.id] = !this.isMobile; });
           }
 
           // Auto-selección defensiva: si llegamos al editor sin scope precargado
@@ -1689,19 +1743,33 @@
         return 'emerald';
       },
       budgetChipText() {
+        // Mostramos solo semáforo (sin USD) porque el costo de Routes API es
+        // información financiera de BlackPrint (no del cliente Marzam). El
+        // endpoint /api/admin/routes-budget además filtra el payload por rol:
+        // managers Marzam reciben { severity, ... } sin spent_usd/budget_usd.
         const b = this.budgetStatus;
         if (!b) return 'Budget: —';
-        const spent = Number(b.spent_usd || 0).toFixed(2);
-        const total = Number(b.budget_usd || 50).toFixed(2);
-        const pct = b.budget_usd ? Math.round((b.spent_usd / b.budget_usd) * 100) : 0;
-        return `Budget: $${spent}/$${total} (${pct}%)`;
+        const color = this.budgetChipColor();
+        if (color === 'rose')    return 'Budget: crítico';
+        if (color === 'amber')   return 'Budget: atención';
+        if (color === 'emerald') return 'Budget: OK';
+        return 'Budget: —';
       },
       budgetChipColor() {
         const b = this.budgetStatus;
-        if (!b || !b.budget_usd) return 'slate';
+        if (!b) return 'slate';
+        // Managers Marzam reciben { severity, daily_limit, used_today } sin USD.
+        if (b.severity) {
+          if (b.severity === 'critical') return 'rose';
+          if (b.severity === 'warning')  return 'amber';
+          if (b.severity === 'ok')       return 'emerald';
+          return 'slate';
+        }
+        // BP admin (o legacy callers): payload completo con USD.
+        if (!b.budget_usd) return 'slate';
         const pct = b.spent_usd / b.budget_usd;
         if (pct >= 0.95) return 'rose';
-        if (pct >= 0.8) return 'amber';
+        if (pct >= 0.8)  return 'amber';
         return 'emerald';
       },
       costChipText() {
