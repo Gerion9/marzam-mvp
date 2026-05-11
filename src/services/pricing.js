@@ -151,6 +151,36 @@ function routesProNaiveCost(monthlyVolume) {
   return naiveCost(monthlyVolume, PRO_TIERS);
 }
 
+/**
+ * Devuelve un bloque enriquecido para el dashboard:
+ *
+ *   {
+ *     est_cost_real_usd:    piecewise (free + tier degradation)
+ *     est_cost_naive_usd:   linear (lo que el budget gate pesimista contaría)
+ *     est_savings_vs_naive: max(0, naive - real)
+ *     free_tier_remaining:  elements left in the free band (Infinity if no free)
+ *     tier:                 'essentials' | 'pro' (eco del input)
+ *   }
+ *
+ * Pure function — no DB / no I/O. Usado por blackprint.service.costSummary y
+ * por tests de shape.
+ */
+function enrich(monthlyVolume, opts = {}) {
+  const tier = opts.tier === 'pro' ? 'pro' : 'essentials';
+  const tiers = tier === 'pro' ? PRO_TIERS : ESSENTIALS_TIERS;
+  const real = piecewiseCost(monthlyVolume, tiers);
+  const naive = naiveCost(monthlyVolume, tiers);
+  const savings = round4(Math.max(0, naive - real));
+  const free = freeTierRemaining(monthlyVolume, tiers);
+  return {
+    est_cost_real_usd: real,
+    est_cost_naive_usd: naive,
+    est_savings_vs_naive: savings,
+    free_tier_remaining: Number.isFinite(free) ? free : null,
+    tier,
+  };
+}
+
 module.exports = {
   ESSENTIALS_TIERS,
   PRO_TIERS,
@@ -165,4 +195,5 @@ module.exports = {
   geocodingNaiveCost,
   routesEssentialsNaiveCost,
   routesProNaiveCost,
+  enrich,
 };

@@ -55,6 +55,64 @@
       </div>`;
   }
 
+  /**
+   * Comparativa Real vs Naive con badge de ahorro. `real`/`naive` ya vienen en
+   * USD; `savings` se renderiza como pill verde si > $0.
+   */
+  function statTileCompare(label, real, naive, savings) {
+    const realFmt = fmtUsd(real);
+    const naiveFmt = fmtUsd(naive);
+    const savePct = naive > 0 ? (savings / naive) : 0;
+    const savePill = savings > 0
+      ? `<span class="bp-savings-pill">−${fmtUsd(savings)} (${(savePct * 100).toFixed(0)}%)</span>`
+      : '';
+    return `
+      <div class="stat-mini">
+        <div class="stat-mini-label">${escape(label)}</div>
+        <div class="stat-mini-value">${realFmt} ${savePill}</div>
+        <div class="stat-mini-sub">naive: ${naiveFmt}</div>
+      </div>`;
+  }
+
+  /**
+   * Barra de progreso del free tier. `used` y `limit` en elementos.
+   *   verde   → < 80% usado
+   *   ámbar   → 80–100%
+   *   gris    → 100%+ (free tier agotado, ya está pagando)
+   */
+  function freeTierBar(label, used, limit) {
+    const pct = Math.max(0, Math.min(1, limit > 0 ? used / limit : 0));
+    const exhausted = used >= limit;
+    const color = exhausted ? '#94a3b8' : (pct >= 0.8 ? '#f59e0b' : '#10b981');
+    const widthPct = exhausted ? 100 : Math.round(pct * 100);
+    return `
+      <div class="bp-free-tier">
+        <div class="bp-free-tier-head">
+          <span class="bp-free-tier-label">${escape(label)}</span>
+          <span class="bp-free-tier-num">${fmtInt(Math.min(used, limit))} / ${fmtInt(limit)}</span>
+        </div>
+        <div class="bp-free-tier-bar"><div class="bp-free-tier-fill" style="width:${widthPct}%;background:${color}"></div></div>
+        ${exhausted
+    ? `<div class="bp-free-tier-sub" style="color:#64748b">Free tier agotado · facturando ${fmtInt(Math.max(0, used - limit))} elements adicionales</div>`
+    : `<div class="bp-free-tier-sub" style="color:${color}">${fmtInt(limit - used)} elements gratis restantes</div>`}
+      </div>`;
+  }
+
+  function subscriptionWidget(sug) {
+    if (!sug) return '';
+    return `
+      <div class="bp-subscription-suggest">
+        <div class="bp-subscription-suggest-title">💡 Sugerencia: negociar suscripción</div>
+        <div class="bp-subscription-suggest-body">
+          <p>Llevas <strong>${fmtUsd(sug.current_mtd_naive_usd)}</strong> de gasto pesimista MTD
+          (umbral: ${fmtUsd(sug.threshold_usd)}).</p>
+          <p>A tarifas reales con free tier y degradación: <strong>${fmtUsd(sug.estimated_real_mtd_usd)}</strong>
+          (ya estás ahorrando <strong>${fmtUsd(sug.potential_savings_usd)}</strong>).</p>
+          <p style="color:#64748b;margin-top:6px;font-size:12px">${escape(sug.break_even_hint)}</p>
+        </div>
+      </div>`;
+  }
+
   function emptyState(title, sub) {
     return `<div class="empty"><div class="empty-title">${escape(title)}</div>${sub ? `<div class="empty-sub">${escape(sub)}</div>` : ''}</div>`;
   }
@@ -68,33 +126,57 @@
     }
     const r = data.routes_api || {};
     const g = data.geocoding_api || {};
+    const opt = data.route_optimization_api || {};
+    const totalNaive = Number(data.total_mtd_usd || 0);
+    const totalReal = Number(data.total_mtd_real_usd || 0);
+    const totalSavings = Number(data.total_mtd_savings_usd || 0);
+
     drawerBody().innerHTML = `
       <div style="padding:18px 22px">
+        ${subscriptionWidget(data.subscription_suggestion)}
+
         <div class="drawer-grid-3" style="margin-bottom:18px">
-          ${statTile('Total HOY (USD)', fmtUsd(data.total_today_usd), 'Routes + Geocoding')}
-          ${statTile('Total MTD (USD)', fmtUsd(data.total_mtd_usd), 'Mes en curso')}
+          ${statTile('Total HOY (USD)', fmtUsd(data.total_today_usd), 'Naive · Routes + Geocoding + Opt')}
+          ${statTileCompare('Total MTD', totalReal, totalNaive, totalSavings)}
           ${statTile('Routes API · cache hit', r.cache_stats ? fmtPct(r.cache_stats.cache_hit_rate) : '—', r.cache_stats ? `${fmtInt(r.cache_stats.api_calls)} llamadas` : '')}
+        </div>
+
+        <h3 style="margin:18px 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Free tier · estado mensual</h3>
+        <div class="drawer-grid-3" style="margin-bottom:18px">
+          ${r.mtd_billable_elements != null ? freeTierBar('Routes API', r.mtd_billable_elements, r.free_tier_limit || 10000) : ''}
+          ${g.mtd_calls != null ? freeTierBar('Geocoding API', g.mtd_calls, g.free_tier_limit || 10000) : ''}
         </div>
 
         <h3 style="margin:18px 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Google Routes API</h3>
         <div class="drawer-grid-3">
           ${statTile('USD hoy', fmtUsd(r.today_usd))}
-          ${statTile('USD MTD', fmtUsd(r.mtd_usd))}
+          ${statTileCompare('USD MTD', r.mtd_real_usd, r.mtd_naive_usd ?? r.mtd_usd, r.mtd_savings_usd || 0)}
           ${statTile('USD YTD', fmtUsd(r.ytd_usd))}
-          ${statTile('Llamadas matrix hoy', fmtInt(r.today_matrix_calls))}
-          ${statTile('Llamadas matrix MTD', fmtInt(r.mtd_matrix_calls))}
+          ${statTile('Matrix elements MTD', fmtInt(r.mtd_matrix_elements ?? r.mtd_matrix_calls))}
+          ${statTile('Route calls MTD', fmtInt(r.mtd_route_calls))}
           ${statTile('Rechazadas hoy (budget)', fmtInt(r.today_rejected_calls))}
         </div>
 
         <h3 style="margin:24px 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Google Geocoding API</h3>
         <div class="drawer-grid-3">
           ${statTile('USD hoy', fmtUsd(g.today_usd))}
-          ${statTile('USD MTD', fmtUsd(g.mtd_usd))}
+          ${statTileCompare('USD MTD', g.mtd_real_usd, g.mtd_naive_usd ?? g.mtd_usd, g.mtd_savings_usd || 0)}
           ${statTile('USD YTD', fmtUsd(g.ytd_usd))}
           ${statTile('Llamadas hoy', fmtInt(g.today_calls))}
           ${statTile('Cache hits MTD', fmtInt(g.mtd_cache_hits))}
           ${statTile('Cache hit rate MTD', fmtPct(g.mtd_cache_hit_rate))}
         </div>
+
+        ${data.route_optimization_api ? `
+        <h3 style="margin:24px 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Route Optimization API <span style="font-size:10px;background:#fde68a;color:#92400e;padding:2px 6px;border-radius:4px;margin-left:6px">feature-flagged</span></h3>
+        <div class="drawer-grid-3">
+          ${statTile('USD hoy', fmtUsd(opt.today_usd))}
+          ${statTile('USD MTD', fmtUsd(opt.mtd_usd))}
+          ${statTile('USD YTD', fmtUsd(opt.ytd_usd))}
+          ${statTile('Optimizaciones MTD', fmtInt(opt.mtd_calls))}
+          ${statTile('Shipments MTD', fmtInt(opt.mtd_shipments), `${(opt.usd_per_shipment || 0).toFixed(4)} USD c/u`)}
+          ${statTile('Fallidas MTD', fmtInt(opt.mtd_failed || 0))}
+        </div>` : ''}
 
         <h3 style="margin:24px 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Routes · breakdown MTD</h3>
         <div style="overflow:auto"><table class="data-table"><thead><tr>
@@ -109,6 +191,13 @@
             <td>${fmtInt(row.rejected)}</td>
           </tr>`).join('')}
         </tbody></table></div>
+
+        <p style="margin-top:14px;font-size:11px;color:#64748b">
+          Real vs Naive: el código pesimista del budget gate cobra al tier base sin free.
+          Los números "Real" reflejan el costo aplicando free tier (10k/mes Essentials,
+          5k/mes Pro) + degradación de bandas. La diferencia es cuánto te <em>habrías</em>
+          cobrado de más si no existiera la curva — útil para reportes financieros.
+        </p>
       </div>`;
   });
 

@@ -13,6 +13,7 @@ const {
   naiveCost,
   geocodingNaiveCost,
   routesEssentialsNaiveCost,
+  enrich,
 } = require('../../src/services/pricing');
 
 // Helper: float-tolerant equality at 4 decimals.
@@ -141,4 +142,44 @@ test('geocodingNaiveCost / routesEssentialsNaiveCost match naiveCost(ESSENTIALS)
     eq(geocodingNaiveCost(v), naiveCost(v, ESSENTIALS_TIERS));
     eq(routesEssentialsNaiveCost(v), naiveCost(v, ESSENTIALS_TIERS));
   }
+});
+
+test('enrich: returns the expected block shape (essentials default)', () => {
+  const b = enrich(50000);
+  assert.equal(b.tier, 'essentials');
+  // 50k: 10k free + 40k @ $5/1k = $200
+  eq(b.est_cost_real_usd, 200);
+  // naive: 50k * $5/1k = $250
+  eq(b.est_cost_naive_usd, 250);
+  eq(b.est_savings_vs_naive, 50);
+  assert.equal(b.free_tier_remaining, 0);
+});
+
+test('enrich: pro tier honored', () => {
+  const b = enrich(50000, { tier: 'pro' });
+  assert.equal(b.tier, 'pro');
+  // 5k free + 45k @ $10/1k = $450
+  eq(b.est_cost_real_usd, 450);
+  // naive: 50k * $10/1k = $500
+  eq(b.est_cost_naive_usd, 500);
+  eq(b.est_savings_vs_naive, 50);
+  assert.equal(b.free_tier_remaining, 0);
+});
+
+test('enrich: free-tier headroom surfaces remaining elements, savings ≥ 0', () => {
+  const b = enrich(2500);
+  assert.equal(b.free_tier_remaining, 7500);
+  eq(b.est_cost_real_usd, 0);
+  // naive treats 2500 elements at base rate, so savings = naive cost.
+  eq(b.est_cost_naive_usd, 12.5);
+  eq(b.est_savings_vs_naive, 12.5);
+  assert.ok(b.est_savings_vs_naive >= 0);
+});
+
+test('enrich: volume 0 → zeroed savings and full free-tier headroom', () => {
+  const b = enrich(0);
+  eq(b.est_cost_real_usd, 0);
+  eq(b.est_cost_naive_usd, 0);
+  eq(b.est_savings_vs_naive, 0);
+  assert.equal(b.free_tier_remaining, 10000);
 });
