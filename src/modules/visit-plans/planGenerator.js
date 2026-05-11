@@ -45,11 +45,20 @@ const routesMatrix = require('../../services/routesMatrix');
 const securityPolygons = require('../../services/securityPolygons');
 const { orderStopsFromDepot, twoOptImprove } = require('../../utils/routeOrdering');
 const multiStartSolver = require('../../utils/multiStart');
+const routeOptimization = require('../../services/routeOptimization');
 const { QUADRANT_TO_PARETO } = require('../../utils/visitCadence');
 const { clusterByHome } = require('../../utils/kmeans');
 const { localDayHHMMToUTC } = require('../../utils/timezone');
 const branchPlanSettings = require('../../services/branchPlanSettings');
 const log = require('../../utils/logger');
+
+// Soft-constraint penalty para Pareto. Más alto = el solver es menos
+// propenso a dejar el stop sin asignar. Calibrado para que A nunca se quede
+// (1000) y D pueda quedarse si hay conflicto fuerte (50).
+const PARETO_PENALTY = { A: 1000, B: 500, C: 200, D: 50 };
+function paretoPenalty(p) {
+  return PARETO_PENALTY[p] || 100;
+}
 
 const PARETO_CLASSES = ['A', 'B', 'C'];
 const PROSPECTO_PARETO_CLASSES = ['A', 'B', 'C', 'D'];
@@ -518,6 +527,86 @@ function softWindowPenaltySeconds(stop, arrivalDate, dayIso) {
  * distancesMatrix is optional: when null (e.g. matrix call returned only durations
  * because field mask omitted distance), β is ignored.
  */
+/**
+ * Hook hacia Google Route Optimization API. Activo SOLO cuando
+ * PLAN_USE_OPTIMIZATION_API=true. Retorna un array de stops ordenados (con
+ * __seqIdx preservado) o `null` si:
+ *
+ *   - hay menos de 2 stops (TSP trivial — el multiStart maneja bien y evita
+ *     la latencia de la llamada externa).
+ *   - el optimizer falla / timeout / lanza (el caller hace fallback).
+ *   - el resultado no contiene una ruta válida.
+ *
+ * El optimizer recibe nuestra matriz de duraciones pre-calculada (cache local
+ * + Routes API una vez) para que NO consuma Routes API por dentro y nos
+ * cobre doble. Distance matrix se computa con Haversine × correction porque
+ * el optimizer la requiere y solo tenemos duraciones reales.
+ *
+ * `_optimizer` permite inyectar un stub en tests sin tocar el require cache.
+ */
+async function tryOptimizationApi({
+  user, stops, home, durationsMatrix, dayIso, paretoOverrides,
+  routeStartHHMM, _optimizer = routeOptimization,
+}) {
+  if (!Array.isArray(stops) || stops.length < 2) return null;
+  if (!home || home.lat == null || home.lng == null) return null;
+  if (!Array.isArray(durationsMatrix) || durationsMatrix.length === 0) return null;
+
+  const points = [home, ...stops.map((s) => ({ lat: Number(s.lat), lng: Number(s.lng) }))];
+  const n = points.length;
+
+  // Haversine fallback para distance matrix — el optimizer la requiere y
+  // nuestra matriz raw solo carga duraciones (PR6+ podría sumar distancias).
+  const HAVERSINE_CORRECTION = 1.4;
+  const haversineKm = routesMatrix._haversineKm;
+  const distanceMatrix = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => {
+    if (i === j) return 0;
+    return Math.round(haversineKm(points[i], points[j]) * HAVERSINE_CORRECTION * 1000);
+  }));
+
+  const vehicles = [{
+    id: user.id,
+    startLocation: home,
+    routeDurationLimitMin: user.daily_minutes_cap || 480,
+    routeDistanceLimitKm: user.daily_km_cap || 200,
+  }];
+
+  const shipments = stops.map((s, i) => ({
+    id: s.id || `stop-${i}`,
+    deliveryLocation: { lat: Number(s.lat), lng: Number(s.lng) },
+    durationMinutes: resolveServiceMinutes(user, s, paretoOverrides),
+    penaltyCost: paretoPenalty(s.pareto),
+    requiredCapabilities: Array.isArray(s.required_skills) ? s.required_skills : undefined,
+  }));
+
+  const opts = {
+    timeoutSeconds: Number(process.env.GOOGLE_OPT_TIMEOUT) || undefined,
+  };
+
+  const result = await _optimizer.optimizeTours({
+    vehicles, shipments,
+    durationMatrix: durationsMatrix,
+    distanceMatrix,
+    options: opts,
+    // Forward para diagnóstico en logs estructurados del optimizer.
+    _meta: { day_iso: dayIso, route_start_hhmm: routeStartHHMM, user_id: user.id },
+  });
+
+  const route = result?.routes?.[0];
+  if (!route || !Array.isArray(route.visits)) return null;
+
+  // Cada visit referencia el shipmentIndex original — recuperamos el stop con
+  // su __seqIdx intacto (lo necesita el resto de sequenceAndMaterialize para
+  // indexar polylineMatrix más abajo).
+  const ordered = [];
+  for (const visit of route.visits) {
+    if (typeof visit.shipmentIndex !== 'number') continue;
+    const s = stops[visit.shipmentIndex];
+    if (s) ordered.push(s);
+  }
+  return ordered.length ? ordered : null;
+}
+
 function buildCostFn(durationsMatrix, distancesMatrix, coeffs) {
   const alpha = Number(coeffs?.alpha_duration ?? 1.0);
   const beta = Number(coeffs?.beta_distance ?? 0.0);
@@ -964,15 +1053,48 @@ async function sequenceAndMaterialize({
           // distancesMatrix is null in this PR — matrix call only fetches durations.
           // PR6 (ROUTES_INLINE_POLYLINE) populates a parallel distance matrix.
           const costFn = buildCostFn(durationsMatrix, null, userCoeffs);
-          const solverResult = multiStartSolver.solve({
-            depot: depotMarker,
-            stops: stopsWithCoords,
-            costFn,
-            repId: userId,
-            dayIso,
-            deadline: Date.now() + SOLVER_DEADLINE_MS,
-            strategy: SOLVER_STRATEGY,
-          });
+
+          // Feature flag PLAN_USE_OPTIMIZATION_API: si activo, intentamos
+          // Google Route Optimization API antes del multiStartSolver clásico.
+          // Si falla, log y caemos al solver actual sin cambios de comportamiento.
+          let optimizerOrdered = null;
+          if (process.env.PLAN_USE_OPTIMIZATION_API === 'true') {
+            try {
+              optimizerOrdered = await tryOptimizationApi({
+                user: u, stops: stopsWithCoords, home,
+                durationsMatrix, dayIso,
+                paretoOverrides,
+                routeStartHHMM,
+              });
+              if (optimizerOrdered) {
+                totals.opt_api_runs = (totals.opt_api_runs || 0) + 1;
+              }
+            } catch (err) {
+              log.warn({
+                event: 'plan.opt_api.failed',
+                user_id: userId, day: dayIso, n: stopsWithCoords.length,
+                err: err.message,
+              });
+              optimizerOrdered = null;
+            }
+          }
+
+          let solverResult;
+          if (optimizerOrdered) {
+            // Sintetizamos un solverResult con el shape que el resto del flujo
+            // espera, marcando el "mode" para telemetría.
+            solverResult = { ordered: optimizerOrdered, mode: 'optimization_api' };
+          } else {
+            solverResult = multiStartSolver.solve({
+              depot: depotMarker,
+              stops: stopsWithCoords,
+              costFn,
+              repId: userId,
+              dayIso,
+              deadline: Date.now() + SOLVER_DEADLINE_MS,
+              strategy: SOLVER_STRATEGY,
+            });
+          }
           ordered = solverResult.ordered.map((s) => stopsWithCoords.find((x) => x.__seqIdx === s.__seqIdx)).filter(Boolean);
 
           // Audit Fix #6 — soft-window-aware post-pass.
@@ -1673,4 +1795,7 @@ module.exports = {
   PARETO_CLASSES,
   PROSPECTO_PARETO_CLASSES,
   ROLE_PRIMARY_PARETO,
+  // exported for tests + downstream tooling.
+  tryOptimizationApi,
+  paretoPenalty,
 };

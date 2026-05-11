@@ -739,6 +739,67 @@ async function purgeExpired() {
   return { deleted_expired: result, deleted_backstop: backstop };
 }
 
+/**
+ * Convierte una matriz raw del response de Google (array de
+ * { originIndex, destinationIndex, durationSeconds, distanceMeters? }) en dos
+ * matrices 2D NxN listas para inyectar en Google Route Optimization API.
+ *
+ * Si la matriz raw no incluye `distanceMeters` (la versión current solo pide
+ * duration), aplicamos fallback Haversine × HAVERSINE_CORRECTION para llenar
+ * la distance matrix — Optimization API exige ambas, y es preferible una
+ * aproximación a fallar la llamada.
+ *
+ * Inputs:
+ *   - points: array [depot, stop1, stop2, ...] de { lat, lng }.
+ *   - rawMatrix: array opcional ya devuelto por computeMatrixCached. Si null,
+ *     hace fetch en this call usando los mismos defaults.
+ *
+ * Output: { durationMatrix: number[][], distanceMatrix: number[][] }
+ */
+async function extractMatrixForOptimization(points, opts = {}) {
+  if (!Array.isArray(points) || points.length < 2) {
+    throw new Error('extractMatrixForOptimization: need at least 2 points');
+  }
+  const n = points.length;
+  let raw = opts.rawMatrix;
+  if (!raw) {
+    raw = await computeMatrixCached(points, points, {
+      preference: opts.preference || 'TRAFFIC_UNAWARE',
+      departureTime: opts.departureTime,
+    });
+  }
+  const durationMatrix = Array.from({ length: n }, () => new Array(n).fill(null));
+  const distanceMatrix = Array.from({ length: n }, () => new Array(n).fill(null));
+  for (const r of raw) {
+    durationMatrix[r.originIndex][r.destinationIndex] = r.durationSeconds;
+    if (r.distanceMeters != null) {
+      distanceMatrix[r.originIndex][r.destinationIndex] = r.distanceMeters;
+    }
+  }
+  // Backfill diagonals + missing cells with Haversine. Optimization API throws
+  // if any cell is null, so a cell-by-cell fallback is safer than a one-shot
+  // recompute on the whole matrix.
+  for (let i = 0; i < n; i += 1) {
+    for (let j = 0; j < n; j += 1) {
+      if (i === j) {
+        if (durationMatrix[i][j] == null) durationMatrix[i][j] = 0;
+        if (distanceMatrix[i][j] == null) distanceMatrix[i][j] = 0;
+      } else {
+        if (durationMatrix[i][j] == null) {
+          // Fallback duration: km / 22 km/h × 3600
+          const km = haversineKm(points[i], points[j]) * HAVERSINE_CORRECTION;
+          durationMatrix[i][j] = Math.round((km / FALLBACK_KMH) * 3600);
+        }
+        if (distanceMatrix[i][j] == null) {
+          const km = haversineKm(points[i], points[j]) * HAVERSINE_CORRECTION;
+          distanceMatrix[i][j] = Math.round(km * 1000);
+        }
+      }
+    }
+  }
+  return { durationMatrix, distanceMatrix };
+}
+
 module.exports = {
   computeMatrix,
   computeMatrixCached,
@@ -750,6 +811,7 @@ module.exports = {
   getDailyBudgetStatus,
   getMatrixBreakdown,
   getStats,
+  extractMatrixForOptimization,
   RoutesBudgetExceededError,
   // exported for tests
   _hourBucket: hourBucket,
