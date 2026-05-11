@@ -502,18 +502,29 @@ async function resequenceUserDay(trx, planId, visitorUserId, scheduledDate) {
   }
 
   // Use the matrix duration only — no computeRoute per arc.
+  // Cambio 4 — when PLAN_OPEN_ROUTE_BUDGET ON, the first stop arrives EXACTLY
+  // at routeStartHHMM. Reps without home naturally also get open-route timing
+  // when PLAN_HOMELESS_OPEN_ROUTE is ON.
+  const ENABLE_OPEN_ROUTE_BUDGET = process.env.PLAN_OPEN_ROUTE_BUDGET === 'true';
+  const ENABLE_HOMELESS_OPEN_ROUTE = process.env.PLAN_HOMELESS_OPEN_ROUTE === 'true';
+  const openRouteSeq = ENABLE_OPEN_ROUTE_BUDGET || (ENABLE_HOMELESS_OPEN_ROUTE && !home);
+
   let cursor = localDayHHMMToUTC(scheduledDate, '08:00');
   let prevSeqIdx = 0;
   let routeOrder = 1;
   for (let idx = 0; idx < ordered.length; idx += 1) {
     const s = ordered[idx];
+    const isFirstStop = (idx === 0);
     let travelSeconds = 0;
     if (durationsMatrix && s.__seqIdx != null) {
       const ms = durationsMatrix[prevSeqIdx][s.__seqIdx];
       if (Number.isFinite(ms)) travelSeconds = ms;
     }
     const travelMinutes = Math.round(travelSeconds / 60);
-    cursor = new Date(cursor.getTime() + travelSeconds * 1000);
+    const skipFirstLeg = openRouteSeq && isFirstStop;
+    if (!skipFirstLeg) {
+      cursor = new Date(cursor.getTime() + travelSeconds * 1000);
+    }
     const arrival = new Date(cursor);
     cursor = new Date(cursor.getTime() + serviceMinutes * 60 * 1000);
 
@@ -977,6 +988,156 @@ async function estimateCost(args) {
 }
 
 /**
+ * Cambio 1 — National estimate without spending Google Routes API.
+ *
+ * Runs the greedy assignment + Haversine-based time/km estimates, groups by
+ * Entidad Federativa (= `marzam_clients.poblacion`, the user-facing label that
+ * already drives the plan-editor's "Entidad federativa" filter), and returns a
+ * per-EF breakdown plus a recommendation on which EF to start with.
+ *
+ * Cache-first behavior: if `route_matrix_cache` has hits for relevant geohash7
+ * pairs, those are used (more accurate); otherwise Haversine×1.4 fallback.
+ * Never calls Google Routes API — `no_google_calls: true` in the response.
+ *
+ * Manager-Marzam friendly: USD redacted in controller (only blackprint_admin
+ * sees est_cost_usd; everyone else sees matrix_elements + recommendation).
+ */
+async function previewNationalEstimate({
+  ownerUserId, scopeUserIds, periodStart, periodEnd, paretoFilter, actorIsGlobal = false,
+}) {
+  const planGenerator = require('./planGenerator');
+  // Run the SAME assignment phase as estimateCost (no Google, just greedy + Haversine).
+  const costResult = await planGenerator.estimateCost({
+    ownerUserId,
+    scopeUserIds,
+    granularity: 'weekly',
+    periodStart,
+    periodEnd,
+    paretoFilter,
+    actorIsGlobal,
+  });
+  const plan = costResult.plan || {};
+  // Pull the assignmentRows that were used to count matrix elements. We need
+  // them joined with marzam_clients.poblacion / pharmacies.municipality so we
+  // can group by EF.
+  // The plan draft from estimateCost doesn't include assignmentRows directly;
+  // we re-run a lightweight query joining the unassigned/assigned info.
+  // Simpler path: re-call buildPlan with mode='preview' to get assignmentRows.
+  const buildArgs = {
+    ownerUserId,
+    scopeUserIds,
+    granularity: 'weekly',
+    periodStart,
+    periodEnd,
+    paretoFilter,
+    actorIsGlobal,
+  };
+  const { planDraft, assignmentRows } = await planGenerator.buildPlan(buildArgs, db, 'preview');
+
+  // Hydrate each row with its EF (poblacion) via a single batch query.
+  const clientIds = [...new Set(assignmentRows.map((r) => r.marzam_client_id).filter(Boolean))];
+  const pharmacyIds = [...new Set(assignmentRows.map((r) => r.pharmacy_id).filter(Boolean))];
+  const clientEFMap = new Map();
+  if (clientIds.length) {
+    const rows = await db('marzam_clients').whereIn('id', clientIds).select('id', 'poblacion');
+    for (const r of rows) clientEFMap.set(r.id, r.poblacion || 'Sin clasificar');
+  }
+  const pharmacyEFMap = new Map();
+  if (pharmacyIds.length) {
+    const rows = await db('pharmacies').whereIn('id', pharmacyIds).select('id', 'state', 'municipality');
+    for (const r of rows) {
+      // For prospects, prefer state; fall back to municipality.
+      pharmacyEFMap.set(r.id, r.state || r.municipality || 'Sin clasificar');
+    }
+  }
+
+  // Aggregate stops + minutes + km per EF, plus distinct reps that captured candidates there.
+  const byEF = new Map();
+  const HAVERSINE = (a, b) => {
+    const R = 6371;
+    const toRad = (x) => (x * Math.PI) / 180;
+    const dLat = toRad(b.lat - a.lat);
+    const dLng = toRad(b.lng - a.lng);
+    const lat1 = toRad(a.lat); const lat2 = toRad(b.lat);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+
+  // Walk per (rep, day) so inter-stop Haversine is meaningful.
+  const groupKey = (r) => `${r.visitor_user_id}|${r.scheduled_date}`;
+  const byRepDay = new Map();
+  for (const r of assignmentRows) {
+    if (!byRepDay.has(groupKey(r))) byRepDay.set(groupKey(r), []);
+    byRepDay.get(groupKey(r)).push(r);
+  }
+  for (const [, stops] of byRepDay) {
+    stops.sort((a, b) => a.route_order - b.route_order);
+    let prev = null;
+    for (const s of stops) {
+      const ef = s.marzam_client_id
+        ? (clientEFMap.get(s.marzam_client_id) || 'Sin clasificar')
+        : (pharmacyEFMap.get(s.pharmacy_id) || 'Sin clasificar');
+      if (!byEF.has(ef)) byEF.set(ef, { stops: 0, est_minutes: 0, est_km: 0, reps: new Set() });
+      const bucket = byEF.get(ef);
+      bucket.stops += 1;
+      bucket.reps.add(s.visitor_user_id);
+      // Service time (default 45 min) — always counted.
+      bucket.est_minutes += s.expected_service_minutes || 45;
+      // Inter-stop travel (Haversine × 1.4 / 22 km/h).
+      if (prev && s.lat != null && s.lng != null && prev.lat != null && prev.lng != null) {
+        const km = HAVERSINE(prev, s) * 1.4;
+        bucket.est_km += km;
+        bucket.est_minutes += Math.round((km / 22) * 60);
+      }
+      prev = s;
+    }
+  }
+
+  // Build response.
+  const efOut = {};
+  let totalStops = 0;
+  let totalMinutes = 0;
+  let totalKm = 0;
+  const efRanking = [];
+  for (const [ef, bucket] of byEF) {
+    efOut[ef] = {
+      stops: bucket.stops,
+      est_minutes: bucket.est_minutes,
+      est_km: Math.round(bucket.est_km * 10) / 10,
+      reps_capable: bucket.reps.size,
+    };
+    totalStops += bucket.stops;
+    totalMinutes += bucket.est_minutes;
+    totalKm += bucket.est_km;
+    efRanking.push({ ef, stops: bucket.stops, reps: bucket.reps.size });
+  }
+  efRanking.sort((a, b) => b.stops - a.stops);
+  const topEF = efRanking[0];
+  const recommendation = topEF
+    ? `Sugerencia: genera el plan EF por EF. Empieza por "${topEF.ef}" (${topEF.stops} farmacias, ${topEF.reps} rep${topEF.reps === 1 ? '' : 's'} disponible${topEF.reps === 1 ? '' : 's'}).`
+    : 'No hay farmacias para asignar en el periodo seleccionado.';
+
+  // Unassignable: total candidates that didn't make it into the greedy phase.
+  const unassignedCount = (planDraft?.config?.unassigned || []).length;
+
+  return {
+    by_ef: efOut,
+    totals: {
+      stops: totalStops,
+      est_minutes: totalMinutes,
+      est_km: Math.round(totalKm * 10) / 10,
+      reps_in_scope: scopeUserIds.length,
+    },
+    recommendation,
+    unassignable_count: unassignedCount,
+    no_google_calls: true,
+    cost_estimate_usd: costResult.est_cost_usd, // redacted for non-bp-admin in controller
+    matrix_elements: costResult.matrix_elements,
+    period: { start: periodStart, end: periodEnd },
+  };
+}
+
+/**
  * Replay polyline + breadcrumbs for a single (rep, day) within a plan.
  * Drives the time scrubber in the Post-mortem view.
  */
@@ -1208,6 +1369,7 @@ module.exports = {
   reassignStop,
   resequenceUser,
   estimateCost,
+  previewNationalEstimate,
   listForUser,
   getById,
   publish,

@@ -398,14 +398,15 @@
                farmacias asignadas). Filtra reps que NO sirven a la EF. -->
           <div class="mt-3">
             <label class="text-xs font-bold text-slate-600 block mb-1">Entidad federativa</label>
-            <select x-model="zoneFilter" @change="window.MarzamPlanZone = zoneFilter || null"
+            <select x-model="zoneFilter" @change="window.MarzamPlanZone = zoneFilter || null; nationalEstimate = null; nationalEstimateError = null"
               class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 outline-none text-xs">
-              <option value="">Toda la sucursal</option>
+              <option value="">Toda la sucursal (solo simulación)</option>
               <template x-for="z in availableZones" :key="z">
                 <option :value="z" x-text="z"></option>
               </template>
             </select>
             <p class="text-[10px] text-slate-400 mt-1 italic" x-show="zoneFilter">Mostrando solo el equipo con cobertura en <b x-text="zoneFilter"></b>.</p>
+            <p class="text-[10px] text-amber-700 mt-1 italic" x-show="!zoneFilter">⚠ Marzam genera planes por EF. Sin EF seleccionada, solo puedes ver una estimación nacional sin gasto de API.</p>
           </div>
 
           <!-- Hierarchical picker -->
@@ -714,8 +715,10 @@
 
           <div class="mt-3 flex items-center gap-2">
             <button @click="generatePreview()" :disabled="loading || !canGenerate() || (planQuota && planQuota.exceeded)"
+              :title="missingZoneOnly() ? 'Selecciona una Entidad Federativa arriba para generar el plan. Para ver una simulación nacional, usa el botón Estimar.' : ''"
               class="flex-1 bg-gradient-to-r from-[#e5730a] to-orange-400 text-white text-xs font-bold py-2.5 rounded-xl shadow disabled:opacity-50 disabled:cursor-not-allowed">
-              <span x-show="!loading">Generar plan</span>
+              <span x-show="!loading && !missingZoneOnly()">Generar plan</span>
+              <span x-show="!loading && missingZoneOnly()">Selecciona una EF</span>
               <span x-show="loading" class="flex items-center justify-center gap-2">
                 <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
                 <span x-text="phase"></span>
@@ -725,6 +728,51 @@
           <p class="text-[10px] text-slate-400 mt-1.5 italic" x-show="planQuota && planQuota.exceeded">
             Alcanzaste tu límite diario de planes — espera al reset para generar otro.
           </p>
+
+          <!-- Cambio 1 — National estimate CTA when no EF selected. Free
+               (no Google Routes API calls), informational only, no persist. -->
+          <div x-show="missingZoneOnly()" class="mt-3 p-3 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
+            <p class="text-[11px] text-slate-600 mb-2">
+              Marzam genera planes por <b>Entidad Federativa</b> para mantener rutas óptimas y controlar el gasto de Google Maps API.
+              Si quieres ver una <b>simulación nacional</b> sin generar plan, usa el botón de abajo (sin costo).
+            </p>
+            <button @click="runNationalEstimate()" :disabled="nationalEstimateLoading"
+              class="w-full bg-slate-700 text-white text-xs font-bold py-2 rounded-lg shadow disabled:opacity-50">
+              <span x-show="!nationalEstimateLoading">📊 Estimar plan nacional (sin costo)</span>
+              <span x-show="nationalEstimateLoading">Calculando…</span>
+            </button>
+            <p class="text-[10px] text-red-600 mt-1.5" x-show="nationalEstimateError" x-text="nationalEstimateError"></p>
+            <div x-show="nationalEstimate" class="mt-3 text-[11px]">
+              <div class="bg-white border border-slate-200 rounded-lg p-2.5 mb-2">
+                <p class="font-semibold text-slate-700" x-text="nationalEstimate?.recommendation"></p>
+                <p class="text-[10px] text-slate-500 mt-1">
+                  Total estimado: <b x-text="nationalEstimate?.totals?.stops"></b> farmacias ·
+                  <b x-text="Math.round((nationalEstimate?.totals?.est_minutes || 0) / 60)"></b>h de jornada ·
+                  <b x-text="nationalEstimate?.totals?.est_km"></b> km · sin gasto de Google API ✓
+                </p>
+              </div>
+              <table class="w-full text-[10px] border-collapse">
+                <thead>
+                  <tr class="bg-slate-100">
+                    <th class="text-left px-1.5 py-1">Entidad Federativa</th>
+                    <th class="text-right px-1.5 py-1">Farmacias</th>
+                    <th class="text-right px-1.5 py-1">Horas</th>
+                    <th class="text-right px-1.5 py-1">Reps</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="(data, ef) in (nationalEstimate?.by_ef || {})" :key="ef">
+                    <tr class="border-t border-slate-200">
+                      <td class="px-1.5 py-1 truncate" x-text="ef"></td>
+                      <td class="px-1.5 py-1 text-right" x-text="data.stops"></td>
+                      <td class="px-1.5 py-1 text-right" x-text="Math.round(data.est_minutes / 60)"></td>
+                      <td class="px-1.5 py-1 text-right" x-text="data.reps_capable"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
 
         <!-- Quota exceeded modal — surfaces the 429 backend response with
@@ -1055,6 +1103,11 @@
       planQuota: null,           // { daily_limit, used_today, remaining, reset_at, exceeded }
       quotaModal: null,          // { daily_limit, used_today, reset_at } when 429 hit
       timeoutWarning: false,     // surfaced when the optimizer fell back to multiStart
+      // Cambio 1 — national estimate state. Populated when user clicks "Estimar
+      // plan nacional" while zoneFilter is empty.
+      nationalEstimate: null,
+      nationalEstimateLoading: false,
+      nationalEstimateError: null,
       // Advanced filters panel (Fase 7 — UX-only state; backend wiring lands
       // as it gets validated by the client).
       advFiltersOpen: false,
@@ -1275,8 +1328,48 @@
       clearAll() { this.scopeUserIds = []; },
 
       canGenerate() {
+        // Cambio 1 — block plan generation when no Entidad Federativa is selected.
+        // National-scope plans waste Google Routes API spend and produce suboptimal
+        // routes. Instead, the user must pick an EF; for nationwide overview they
+        // can use the "Estimar plan nacional" button (gratis, no Google calls).
+        // BlackPrint admin (window.APP?.user?.is_global) bypasses this — they may
+        // generate cross-EF plans for testing/sandbox.
+        const enforceEF = window.MarzamFeatures?.ENFORCE_EF_SCOPE !== false; // default ON
+        const isAdmin = !!window.APP?.user?.is_global;
+        const efOk = !enforceEF || isAdmin || (!!this.zoneFilter && this.zoneFilter !== '__all__');
         return Array.isArray(this.scopeUserIds) && this.scopeUserIds.length > 0
-          && this.periodStart && this.periodEnd && this.periodStart <= this.periodEnd;
+          && this.periodStart && this.periodEnd && this.periodStart <= this.periodEnd
+          && efOk;
+      },
+      // Cambio 1 — separate predicate so the UI can distinguish "no EF" from
+      // "no scope/period". Used to render the "Estimar plan nacional" CTA.
+      missingZoneOnly() {
+        const enforceEF = window.MarzamFeatures?.ENFORCE_EF_SCOPE !== false;
+        const isAdmin = !!window.APP?.user?.is_global;
+        if (!enforceEF || isAdmin) return false;
+        const hasScope = Array.isArray(this.scopeUserIds) && this.scopeUserIds.length > 0;
+        const hasPeriod = this.periodStart && this.periodEnd && this.periodStart <= this.periodEnd;
+        const noZone = !this.zoneFilter || this.zoneFilter === '__all__';
+        return hasScope && hasPeriod && noZone;
+      },
+      async runNationalEstimate() {
+        // Cambio 1 — POST /api/visit-plans/preview/national-estimate
+        // Cache-first + Haversine fallback. Zero Google Routes API spend.
+        this.nationalEstimateLoading = true;
+        this.nationalEstimateError = null;
+        try {
+          this.nationalEstimate = await API.post('/visit-plans/preview/national-estimate', {
+            scope_user_ids: this.scopeUserIds,
+            period_start: this.periodStart,
+            period_end: this.periodEnd,
+          });
+        } catch (err) {
+          const status = err?.status ? ` (${err.status})` : '';
+          const msg = err?.body?.error || err?.message || 'Error desconocido';
+          this.nationalEstimateError = `Estimación falló${status}: ${msg}`;
+        } finally {
+          this.nationalEstimateLoading = false;
+        }
       },
       hasTargets() {
         return _anyTargetInSnap(this.preview?.plan?.config?.targets_snapshot);
@@ -1368,6 +1461,8 @@
             period_start: this.periodStart,
             period_end: this.periodEnd,
             granularity: 'weekly',
+            // Cambio 1 — propagate selected EF so backend can filter candidates.
+            zone_filter: this.zoneFilter || null,
           });
           this.phase = 'Calculando rutas…';
           const assignments = (result.assignments || []).map((a, i) => ({
@@ -1713,6 +1808,7 @@
             period_start: this.periodStart,
             period_end: this.periodEnd,
             granularity: 'weekly',
+            zone_filter: this.zoneFilter || null,
           });
           this.costEstimate = r;
         } catch (err) {
@@ -1826,6 +1922,8 @@
             period_start: this.periodStart,
             period_end: this.periodEnd,
             name: `Plan ${this.periodStart} → ${this.periodEnd}`,
+            // Cambio 1 — required by backend guard when PLAN_ENFORCE_EF_SCOPE=true.
+            zone_filter: this.zoneFilter || null,
           });
           await API.patch(`/visit-plans/${created.plan.id}/publish`, {});
           window.MarzamToast?.show('Plan publicado · reps lo verán en su app', 'success');

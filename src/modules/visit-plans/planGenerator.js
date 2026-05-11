@@ -132,8 +132,21 @@ const ENABLE_TRAFFIC_AWARE_ON_PUBLISH = process.env.PLAN_TRAFFIC_AWARE === 'true
 // rep_min when their estimated end-of-day differs by > BALANCE_GAP_THRESHOLD_MIN).
 const ENABLE_BALANCE_STEP = process.env.PLAN_ENABLE_BALANCE === 'true';
 const BALANCE_GAP_THRESHOLD_MIN = Number(process.env.PLAN_BALANCE_GAP_MIN) || 90;
-const BALANCE_MAX_ITERATIONS = 3;
-const BALANCE_MAX_SWAPS_PER_ITER = 2;
+let BALANCE_MAX_ITERATIONS = 3;
+let BALANCE_MAX_SWAPS_PER_ITER = 2;
+
+// Cambio 4 — when ON, home→firstStop and lastStop→home are NOT counted in the
+// daily caps (jornada/manejo/km) and the day starts at routeStartHHMM at the
+// first farmacia (not at home). Border legs remain informational metrics.
+// Cambio 2 — when ON, reps without home_lat/lng receive routed assignments via
+// auto-referential centroid (cluster mean) and use open-TSP sequencing.
+// Cambio 3 — when ON, k-means tie-break uses (day load, employee_code) instead
+// of array order, and balance step runs more aggressively when CV>0.25.
+// Cambio 1 — when ON, POST /api/visit-plans rejects requests without zone_filter.
+const ENABLE_OPEN_ROUTE_BUDGET = process.env.PLAN_OPEN_ROUTE_BUDGET === 'true';
+const ENABLE_HOMELESS_OPEN_ROUTE = process.env.PLAN_HOMELESS_OPEN_ROUTE === 'true';
+const ENABLE_LOAD_AWARE_TIEBREAK = process.env.PLAN_LOAD_AWARE_TIEBREAK === 'true';
+const ENABLE_EF_SCOPE_GUARD = process.env.PLAN_ENFORCE_EF_SCOPE === 'true';
 
 // Penalty in equivalent-seconds for arriving outside a pharmacy's soft window.
 // Tuned so a 30-min slip costs as much as ~10 minutes of drive (i.e. solver will
@@ -644,14 +657,34 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
   // by user home. We do clustering globally so each rep gets a coherent
   // territory around their home; then we filter each cluster by Pareto inside
   // the per-day loop.
-  const clusterableUsers = scopeUsers.filter(
-    (u) => Number.isFinite(Number(u.home_lat)) && Number.isFinite(Number(u.home_lng)),
-  );
+  // Cambio 2 — when ENABLE_HOMELESS_OPEN_ROUTE, ALL scope users (with or without
+  // home) are included so homeless reps also get a cluster (auto-referential
+  // centroid via k-means++).
+  // Cambio 3 — when ENABLE_LOAD_AWARE_TIEBREAK, ties in distance (≤ epsKm)
+  // resolve by (current cluster load ASC, employee_code ASC) for balanced,
+  // deterministic outcomes when reps cohabit.
+  const clusterableUsers = ENABLE_HOMELESS_OPEN_ROUTE
+    ? scopeUsers
+    : scopeUsers.filter(
+      (u) => Number.isFinite(Number(u.home_lat)) && Number.isFinite(Number(u.home_lng)),
+    );
   const allCandidates = [
     ...Object.values(candidatesByPareto).flat().map((c) => ({ ...c, __kind: 'client' })),
     ...prospects.map((c) => ({ ...c, __kind: 'prospect' })),
   ];
-  const { byRep: clusterByRepId } = clusterByHome(clusterableUsers, allCandidates, { iterations: 4 });
+  const {
+    byRep: clusterByRepId,
+    centroidByRepId,
+    tiebreakStats,
+  } = clusterByHome(
+    clusterableUsers,
+    allCandidates,
+    {
+      iterations: 4,
+      enableHomeless: ENABLE_HOMELESS_OPEN_ROUTE,
+      loadAwareTiebreak: ENABLE_LOAD_AWARE_TIEBREAK,
+    },
+  );
 
   // Pre-index clusters by repId / Pareto / kind so the per-day loop is O(1).
   // Map<userId, { client: { A: [], B: [], C: [] }, prospect: { A, B, C, D } }>
@@ -667,11 +700,15 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
     const home = (u.home_lat != null && u.home_lng != null)
       ? { lat: Number(u.home_lat), lng: Number(u.home_lng) }
       : null;
-    // Sort each Pareto bucket by penalized Haversine distance to home so the
-    // pop order is stable and "closest first".
+    // Cambio 2 — for reps without home, use the cluster auto-referential
+    // centroid (from k-means++) as the anchor for sorting candidates by
+    // distance. This is the "virtual depot" for homeless reps.
+    const sortAnchor = home || (centroidByRepId && centroidByRepId.get(u.id)) || null;
+    // Sort each Pareto bucket by penalized Haversine distance to home (or
+    // centroid for homeless reps) so the pop order is stable and "closest first".
     for (const c of myCluster) {
       const lat = Number(c.lat); const lng = Number(c.lng);
-      const baseD = home ? haversineKm(home, { lat, lng }) : 0;
+      const baseD = sortAnchor ? haversineKm(sortAnchor, { lat, lng }) : 0;
       const penalty = c.__caution ? securityPolygons.CAUTION_PENALTY : 1;
       c.__distScore = baseD * penalty;
       const pareto = c.__kind === 'client'
@@ -724,17 +761,37 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
     const returnLeg = home ? estimateMinutes(candPoint, home) : 0;
     const returnKm = home ? haversineKm(candPoint, home) * RETURN_LEG_HAVERSINE_FACTOR : 0;
 
-    const optimisticTotal = used + fromPrev + service + returnLeg;
+    // Cambio 4 — when ON, exclude border legs from cap accounting:
+    //   - home→firstStop (fromPrev when prevPoint === null/home for first stop)
+    //   - lastStop→home (returnLeg)
+    // The rep "absorbs" commute time outside the workday.
+    // Cambio 2 — reps without home also get open-route semantics regardless of flag,
+    // since there's no home to count from/to.
+    const isFirstStopFromHome = !prevPoint || prevPoint === home;
+    const openRoute = ENABLE_OPEN_ROUTE_BUDGET || (ENABLE_HOMELESS_OPEN_ROUTE && !home);
+    const capFromPrev = (openRoute && isFirstStopFromHome) ? 0 : fromPrev;
+    const capFromPrevKm = (openRoute && isFirstStopFromHome) ? 0 : fromPrevKm;
+    const capReturnLeg = openRoute ? 0 : returnLeg;
+    const capReturnKm = openRoute ? 0 : returnKm;
+
+    const optimisticTotal = used + capFromPrev + service + capReturnLeg;
     if (optimisticTotal > cap) return { rejected: 'cap_exceeded' };
 
     if (ENABLE_CAP_VALIDATION) {
-      const optimisticTravel = usedTravel + fromPrev + returnLeg;
-      const optimisticKm = usedKm + fromPrevKm + returnKm;
+      const optimisticTravel = usedTravel + capFromPrev + capReturnLeg;
+      const optimisticKm = usedKm + capFromPrevKm + capReturnKm;
       if (optimisticTravel > travelCap) return { rejected: 'travel_cap_exceeded' };
       if (optimisticKm > kmCap) return { rejected: 'km_cap_exceeded' };
     }
 
-    return { fromPrev, fromPrevKm, service, returnLeg, returnKm };
+    // Return the cap-relevant values so the caller updates running totals consistently.
+    // Border-leg values (`fromPrev`, `returnLeg`, etc.) are still returned for info /
+    // downstream metrics, but `_cap*` are what the caller should add to dayBudgetUsed.
+    return {
+      fromPrev, fromPrevKm, service, returnLeg, returnKm,
+      _capFromPrev: capFromPrev,
+      _capFromPrevKm: capFromPrevKm,
+    };
   }
 
   for (const day of days) {
@@ -748,10 +805,17 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
       const home = (u.home_lat != null && u.home_lng != null)
         ? { lat: Number(u.home_lat), lng: Number(u.home_lng) }
         : null;
+      // Cambio 2 — for homeless reps, the virtual depot (centroid) is the anchor
+      // for cap accounting during the per-day loop. The cap itself excludes the
+      // first/last legs when open-route ON, so the depot is purely an ordering hint.
+      const centroidForU = centroidByRepId ? centroidByRepId.get(u.id) : null;
+      const virtualDepotU = (!home && ENABLE_HOMELESS_OPEN_ROUTE && centroidForU)
+        ? { lat: Number(centroidForU.lat), lng: Number(centroidForU.lng) }
+        : null;
       const userBuckets = indexed.get(u.id);
       // Track the previous accepted stop's coords so the cap accounting reflects
       // sequencing (approximately — we'll re-sequence with real driving in phase 2).
-      let prevPoint = home;
+      let prevPoint = home || virtualDepotU;
       // Returns:
       //   true  → candidate accepted
       //   string → rejection reason ('cap_exceeded'|'travel_cap_exceeded'|'km_cap_exceeded')
@@ -761,9 +825,12 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
         dayStops.push({ ...candidate, __type: kind });
         if (kind === 'client') usedClients.add(candidate.id); else usedProspects.add(candidate.id);
         const key = budgetKey(u.id, dayIso);
-        dayBudgetUsed.set(key, (dayBudgetUsed.get(key) || 0) + fit.fromPrev + fit.service);
-        dayTravelUsed.set(key, (dayTravelUsed.get(key) || 0) + fit.fromPrev);
-        dayKmUsed.set(key, (dayKmUsed.get(key) || 0) + fit.fromPrevKm);
+        // Use cap-relevant values (excludes border legs when open-route ON).
+        const incFromPrev = fit._capFromPrev != null ? fit._capFromPrev : fit.fromPrev;
+        const incFromPrevKm = fit._capFromPrevKm != null ? fit._capFromPrevKm : fit.fromPrevKm;
+        dayBudgetUsed.set(key, (dayBudgetUsed.get(key) || 0) + incFromPrev + fit.service);
+        dayTravelUsed.set(key, (dayTravelUsed.get(key) || 0) + incFromPrev);
+        dayKmUsed.set(key, (dayKmUsed.get(key) || 0) + incFromPrevKm);
         prevPoint = { lat: Number(candidate.lat), lng: Number(candidate.lng) };
         return true;
       };
@@ -828,7 +895,7 @@ function assignByGreedy({ scopeUsers, days, candidatesByPareto, prospects, targe
       assignments.get(u.id).set(dayIso, dayStops);
     }
   }
-  return { assignments, unassigned };
+  return { assignments, unassigned, centroidByRepId, tiebreakStats };
 }
 
 /**
@@ -840,16 +907,32 @@ function estimateDayMinutes(rep, stops, paretoOverrides) {
   if (!stops.length) return 0;
   const home = (rep.home_lat != null && rep.home_lng != null)
     ? { lat: Number(rep.home_lat), lng: Number(rep.home_lng) } : null;
-  if (!home) return 0;
+
+  // Cambio 2 — reps without home: estimate open-route (no border legs) since
+  // there's no fixed depot to count travel from.
+  // Cambio 4 — when ON, also skip border legs even for reps with home.
+  const openRoute = ENABLE_OPEN_ROUTE_BUDGET || (ENABLE_HOMELESS_OPEN_ROUTE && !home);
+  if (!home && !openRoute) return 0;
+
   let total = 0;
-  let prev = home;
-  for (const s of stops) {
+  let prev = home; // null for homeless+openRoute
+  for (let i = 0; i < stops.length; i += 1) {
+    const s = stops[i];
     const stopPoint = { lat: Number(s.lat), lng: Number(s.lng) };
-    total += estimateMinutes(prev, stopPoint);
+    if (prev) {
+      // Skip home→firstStop when open-route ON.
+      const isFirstFromHome = (i === 0) && (prev === home);
+      if (!(openRoute && isFirstFromHome)) {
+        total += estimateMinutes(prev, stopPoint);
+      }
+    }
     total += resolveServiceMinutes(rep, s, paretoOverrides);
     prev = stopPoint;
   }
-  total += estimateMinutes(prev, home); // return leg
+  // Return leg — skip when open-route ON.
+  if (home && prev && !openRoute) {
+    total += estimateMinutes(prev, home);
+  }
   return total;
 }
 
@@ -973,6 +1056,7 @@ function balanceByVarianceSwap({ assignmentMap, scopeUsers, paretoOverrides, day
 async function sequenceAndMaterialize({
   scopeUsers, assignments, planConfig, mode = 'persist',
   coeffsByUserId = null, breakRulesByUserId = null, paretoOverrides = null,
+  centroidByRepId = null, // Cambio 2 — virtual depot for homeless reps.
 }) {
   const rows = [];
   const totals = {
@@ -996,6 +1080,17 @@ async function sequenceAndMaterialize({
     const home = (u && u.home_lat != null && u.home_lng != null)
       ? { lat: Number(u.home_lat), lng: Number(u.home_lng) }
       : null;
+    // Cambio 2 — for homeless reps with PLAN_HOMELESS_OPEN_ROUTE, use the
+    // auto-referential cluster centroid as the virtual depot for matrix and
+    // sequencing. Cap accounting still treats this as "open route" (border
+    // legs from/to the depot aren't counted in caps).
+    const centroid = centroidByRepId ? centroidByRepId.get(userId) : null;
+    const virtualDepot = (!home && ENABLE_HOMELESS_OPEN_ROUTE && centroid && centroid.lat != null && centroid.lng != null)
+      ? { lat: Number(centroid.lat), lng: Number(centroid.lng) }
+      : null;
+    // Use home if available, else virtualDepot for sequencing (NN-from-depot+2-opt).
+    // ETA cursor never counts the depot→firstStop leg (Cambio 4).
+    const depot = home || virtualDepot;
     const serviceMinutes = u?.service_minutes_per_stop || DEFAULT_SERVICE_MINUTES;
     const byDay = assignments.get(userId);
 
@@ -1010,8 +1105,8 @@ async function sequenceAndMaterialize({
       // Holds polyline per (i,j) when fieldMask='with_polyline' returned them.
       let polylineMatrix = null;
 
-      if (home && stopsWithCoords.length >= 2) {
-        const points = [home, ...stopsWithCoords.map((s) => ({ lat: Number(s.lat), lng: Number(s.lng) }))];
+      if (depot && stopsWithCoords.length >= 2) {
+        const points = [depot, ...stopsWithCoords.map((s) => ({ lat: Number(s.lat), lng: Number(s.lng) }))];
         // PR6: when persisting AND ROUTES_INLINE_POLYLINE flag is on, we ask Google
         // for polylines inline. Avoids N×computeRoute calls per (rep,day).
         const wantsInlinePolyline = (mode === 'persist') && ENABLE_INLINE_POLYLINE;
@@ -1188,6 +1283,12 @@ async function sequenceAndMaterialize({
         }
       }
 
+      // Cambio 4 — when ON, the rep's day starts at `routeStartHHMM` at the FIRST
+      // farmacia (not at home). The home→firstStop travel time is informational
+      // only (not counted in cursor advance nor total_drive_minutes).
+      // Cambio 2 — reps without home naturally get the same treatment.
+      const openRouteSeq = ENABLE_OPEN_ROUTE_BUDGET || (ENABLE_HOMELESS_OPEN_ROUTE && !home);
+
       for (let i = 0; i < ordered.length; i += 1) {
         const s = ordered[i];
 
@@ -1201,6 +1302,7 @@ async function sequenceAndMaterialize({
         let travelSeconds = 0;
         let polyline = null;
         let crossesCaution = false;
+        const isFirstStop = (i === 0);
 
         if (durationsMatrix && s.__seqIdx != null) {
           const ms = durationsMatrix[prevSeqIdx][s.__seqIdx];
@@ -1250,7 +1352,12 @@ async function sequenceAndMaterialize({
           travelSeconds = Math.round((km / RETURN_LEG_KMH) * 3600);
         }
         const travelMinutes = Math.round(travelSeconds / 60);
-        cursor = new Date(cursor.getTime() + travelSeconds * 1000);
+        // Cambio 4 — when ON, the first stop arrives EXACTLY at routeStartHHMM.
+        // The home→firstStop travel time is the rep's commute, not part of jornada.
+        const skipFirstLeg = openRouteSeq && isFirstStop;
+        if (!skipFirstLeg) {
+          cursor = new Date(cursor.getTime() + travelSeconds * 1000);
+        }
         const arrival = new Date(cursor);
 
         // Soft window violation tracking. Metrics + per-row stamp here.
@@ -1295,7 +1402,13 @@ async function sequenceAndMaterialize({
         if (dayRows.length > 1) {
           dayRows[dayRows.length - 2].polyline_to_next = polyline;
         }
-        totals.total_drive_minutes += travelMinutes;
+        // Cambio 4 — exclude border legs from cap-relevant drive total when open-route ON.
+        // The first home→stop is the rep's commute (not counted) when openRouteSeq.
+        if (!(openRouteSeq && isFirstStop)) {
+          totals.total_drive_minutes += travelMinutes;
+        }
+        // Also expose drive minutes with borders for informational metrics.
+        totals.total_drive_minutes_with_borders = (totals.total_drive_minutes_with_borders || 0) + travelMinutes;
         totals.total_service_minutes += stopServiceMin;
         prevPoint = stopPoint;
         prevSeqIdx = s.__seqIdx ?? 0;
@@ -1313,6 +1426,9 @@ async function sequenceAndMaterialize({
       }
 
       // Append return leg duration (no row, just metric) — closes the day.
+      // Cambio 4 — when openRouteSeq ON, the return leg is informational only and
+      // NOT included in the cap-relevant total_drive_minutes (still tracked in
+      // last_leg_minutes_per_user and total_drive_minutes_with_borders).
       let lastLegMinutes = 0;
       if (home && prevPoint && prevPoint !== home) {
         let returnSeconds = 0;
@@ -1325,7 +1441,10 @@ async function sequenceAndMaterialize({
           returnSeconds = Math.round((km / RETURN_LEG_KMH) * 3600);
         }
         lastLegMinutes = Math.round(returnSeconds / 60);
-        totals.total_drive_minutes += lastLegMinutes;
+        if (!openRouteSeq) {
+          totals.total_drive_minutes += lastLegMinutes;
+        }
+        totals.total_drive_minutes_with_borders = (totals.total_drive_minutes_with_borders || 0) + lastLegMinutes;
       }
       totals.last_leg_minutes_per_user[userId] = (totals.last_leg_minutes_per_user[userId] || 0) + lastLegMinutes;
 
@@ -1531,7 +1650,12 @@ async function buildPlan(args, trx, mode) {
     droppedProspects = filteredProspects.dropped;
   }
 
-  const { assignments: assignmentMap, unassigned } = assignByGreedy({
+  const {
+    assignments: assignmentMap,
+    unassigned,
+    centroidByRepId,
+    tiebreakStats,
+  } = assignByGreedy({
     scopeUsers, days, candidatesByPareto, prospects, targets,
   });
 
@@ -1543,6 +1667,7 @@ async function buildPlan(args, trx, mode) {
   const { rows: assignmentRows, totals } = await sequenceAndMaterialize({
     scopeUsers, assignments: assignmentMap, planConfig: { route_start_hhmm: routeStartHHMM },
     mode, coeffsByUserId, breakRulesByUserId, paretoOverrides,
+    centroidByRepId,
   });
 
   // Diagnóstico de resolución de scope: el frontend manda IDs y el backend
@@ -1601,8 +1726,43 @@ async function buildPlan(args, trx, mode) {
     ? Math.round(solverRuns.reduce((s, r) => s + r.seeds_tried, 0) / solverRuns.length * 10) / 10
     : 0;
 
+  // Cambio 3 — compute stops/minutes per rep + coefficient of variation for
+  // balance observability. CV close to 0 = perfectly balanced; CV>0.25 = warn.
+  const stopsByRep = {};
+  const minutesByRepMap = new Map();
+  for (const u of scopeUsers) {
+    const dayMap = assignmentMap.get(u.id) || new Map();
+    let stops = 0;
+    let minutes = 0;
+    for (const [, dayStops] of dayMap.entries()) {
+      stops += dayStops.length;
+      minutes += estimateDayMinutes(u, dayStops, paretoOverrides);
+    }
+    stopsByRep[u.id] = stops;
+    minutesByRepMap.set(u.id, minutes);
+  }
+  function _stats(values) {
+    if (!values.length) return { min: 0, max: 0, mean: 0, stddev: 0, cv: 0 };
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const sum = values.reduce((a, b) => a + b, 0);
+    const mean = sum / values.length;
+    const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
+    const stddev = Math.sqrt(variance);
+    const cv = mean > 0 ? stddev / mean : 0;
+    return { min, max, mean: Math.round(mean * 10) / 10, stddev: Math.round(stddev * 10) / 10, cv: Math.round(cv * 1000) / 1000 };
+  }
+  const stopsStats = _stats(Object.values(stopsByRep));
+  const minutesStats = _stats([...minutesByRepMap.values()]);
+  const homelessRepsTotal = scopeUsers.filter((u) => u.home_lat == null || u.home_lng == null).length;
+  const homelessRepsWithAssignments = scopeUsers.filter((u) => {
+    if (u.home_lat != null && u.home_lng != null) return false;
+    return (stopsByRep[u.id] || 0) > 0;
+  }).length;
+
   const metrics = {
     total_drive_minutes: totals.total_drive_minutes,
+    total_drive_minutes_with_borders: totals.total_drive_minutes_with_borders || totals.total_drive_minutes,
     total_service_minutes: totals.total_service_minutes,
     caution_arcs: totals.caution_arcs,
     polyline_arcs: totals.polyline_arcs,
@@ -1631,6 +1791,16 @@ async function buildPlan(args, trx, mode) {
     balance: {
       ...balanceStats,
       gap_threshold_min: BALANCE_GAP_THRESHOLD_MIN,
+      // Cambio 3 — enriched observability for tiebreak + cohabitant balance.
+      coefficient_of_variation: minutesStats.cv,
+      stops_per_rep: stopsStats,
+      minutes_per_rep: minutesStats,
+      tiebreaks_applied: tiebreakStats ? tiebreakStats.tiebreaks_applied : 0,
+      tiebreak_reasons: tiebreakStats
+        ? { by_load: tiebreakStats.by_load, by_employee_code: tiebreakStats.by_employee_code }
+        : { by_load: 0, by_employee_code: 0 },
+      homeless_reps_total: homelessRepsTotal,
+      homeless_reps_with_assignments: homelessRepsWithAssignments,
     },
     flags: {
       cost_coeffs: ENABLE_COST_COEFFS,
@@ -1642,6 +1812,10 @@ async function buildPlan(args, trx, mode) {
       inline_polyline: ENABLE_INLINE_POLYLINE,
       traffic_aware_publish: ENABLE_TRAFFIC_AWARE_ON_PUBLISH,
       balance: ENABLE_BALANCE_STEP,
+      open_route_budget: ENABLE_OPEN_ROUTE_BUDGET,
+      homeless_open_route: ENABLE_HOMELESS_OPEN_ROUTE,
+      load_aware_tiebreak: ENABLE_LOAD_AWARE_TIEBREAK,
+      ef_scope_guard: ENABLE_EF_SCOPE_GUARD,
     },
   };
 
@@ -1798,4 +1972,14 @@ module.exports = {
   // exported for tests + downstream tooling.
   tryOptimizationApi,
   paretoPenalty,
+  estimateDayMinutes,
+  estimateMinutes,
+  haversineKm,
+  // Flags exposed for test verification.
+  _flags: {
+    get ENABLE_OPEN_ROUTE_BUDGET() { return ENABLE_OPEN_ROUTE_BUDGET; },
+    get ENABLE_HOMELESS_OPEN_ROUTE() { return ENABLE_HOMELESS_OPEN_ROUTE; },
+    get ENABLE_LOAD_AWARE_TIEBREAK() { return ENABLE_LOAD_AWARE_TIEBREAK; },
+    get ENABLE_EF_SCOPE_GUARD() { return ENABLE_EF_SCOPE_GUARD; },
+  },
 };

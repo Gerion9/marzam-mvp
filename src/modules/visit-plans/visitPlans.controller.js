@@ -85,6 +85,7 @@ async function create(req, res, next) {
       period_end: periodEnd,
       pareto_filter: paretoFilter,
       branch_id: branchId,
+      zone_filter: zoneFilter,
       name,
     } = req.body || {};
     if (!Array.isArray(scopeUserIds) || !scopeUserIds.length) {
@@ -92,6 +93,22 @@ async function create(req, res, next) {
     }
     if (!granularity || !periodStart || !periodEnd) {
       return res.status(400).json({ error: 'granularity, period_start, period_end required' });
+    }
+    // Cambio 1 — when PLAN_ENFORCE_EF_SCOPE=true, generating a plan requires
+    // selecting a specific Entidad Federativa (poblacion/municipio). Plans across
+    // multiple EFs are routed sub-optimally and waste Google Routes API spend.
+    // The frontend exposes a separate "Estimar nacional" path for simulations.
+    // Bypass: admins (is_global) and demo users may still generate cross-EF for
+    // testing / sandbox needs.
+    const ENFORCE_EF_SCOPE = process.env.PLAN_ENFORCE_EF_SCOPE === 'true';
+    if (ENFORCE_EF_SCOPE && !req.user?.is_global && req.user?.data_scope !== 'demo') {
+      const zf = typeof zoneFilter === 'string' ? zoneFilter.trim() : '';
+      if (!zf || zf === '__all__') {
+        return res.status(400).json({
+          error: 'zone_filter_required',
+          _hint: 'Selecciona una Entidad Federativa para generar el plan. Para ver una simulación nacional sin gasto de Google API, usa POST /api/visit-plans/preview/national-estimate.',
+        });
+      }
     }
 
     // Daily plan quota gate. Demo users y admins is_global bypass — el gate
@@ -540,6 +557,46 @@ async function myAssignments(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/**
+ * Cambio 1 — National estimate (cache-first + Haversine fallback).
+ *
+ * Returns a per-EF breakdown of what a national plan would look like:
+ *   { by_ef: { "Ecatepec": { stops, est_minutes, est_km, reps_capable }, ... },
+ *     totals: { stops, est_minutes, est_km },
+ *     recommendation: "...",
+ *     no_google_calls: true }
+ *
+ * NO persists, NO counts against plan quota. Uses route_matrix_cache when hits
+ * exist, falls back to Haversine×1.4 otherwise. Manager-Marzam friendly (USD redacted).
+ */
+async function nationalEstimate(req, res, next) {
+  try {
+    const {
+      scope_user_ids: scopeUserIds,
+      period_start: periodStart,
+      period_end: periodEnd,
+      pareto_filter: paretoFilter,
+    } = req.body || {};
+    if (!Array.isArray(scopeUserIds) || !scopeUserIds.length) {
+      return res.status(400).json({ error: 'scope_user_ids is required' });
+    }
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({ error: 'period_start, period_end required' });
+    }
+    const scopedIds = enforceDemoScope(req, scopeUserIds);
+    const canonicalIds = scopedIds.map((id) => accessDirectory.toCanonicalId(id));
+    const result = await service.previewNationalEstimate({
+      ownerUserId: req.user.id,
+      scopeUserIds: canonicalIds,
+      periodStart,
+      periodEnd,
+      paretoFilter,
+      actorIsGlobal: !!req.user.is_global,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}
+
 module.exports = {
   list,
   show,
@@ -562,4 +619,5 @@ module.exports = {
   listReoptimizations,
   replan,
   quota,
+  nationalEstimate,
 };
