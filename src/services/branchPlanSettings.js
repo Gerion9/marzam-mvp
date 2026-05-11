@@ -23,9 +23,17 @@ const DEFAULTS = Object.freeze({
   timezone: 'America/Mexico_City',
   expected_route_start: '08:00',
   expected_route_end: '17:00',
+  // Cuota diaria de planes generados por manager. 3 es la política V1 (cliente
+  // confirmó 2026-05-10). Se puede sobrescribir per-branch desde
+  //   PATCH /api/admin/branches/:branchId/plan-settings
+  // pasando { daily_plans_limit: N } y el cache se invalida en update().
+  daily_plans_limit: 3,
 });
 
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+// Tope superior defensivo para evitar configurarse en algo ridículo
+// (un manager pidiendo 10_000 planes/día probablemente es un bug).
+const MAX_DAILY_PLANS_LIMIT = 100;
 
 const TTL_MS = 60_000;
 const cache = new Map(); // branchId → { value, expiresAt }
@@ -49,6 +57,16 @@ function validate(raw) {
   }
   if (typeof raw.expected_route_end === 'string' && HHMM_RE.test(raw.expected_route_end)) {
     out.expected_route_end = raw.expected_route_end;
+  }
+  // Aceptamos number o numeric-string ("3"). Rechazamos null/undefined/no-numero
+  // — Number(null) === 0 (quirk JS) y queremos que null caiga al default, no
+  // que se interprete como "cuota = 0".
+  if (raw.daily_plans_limit != null) {
+    const parsed = Number(raw.daily_plans_limit);
+    if (Number.isFinite(parsed)) {
+      const n = Math.floor(parsed);
+      if (n >= 0 && n <= MAX_DAILY_PLANS_LIMIT) out.daily_plans_limit = n;
+    }
   }
   return out;
 }
@@ -95,6 +113,7 @@ function evict(branchId) {
 
 module.exports = {
   DEFAULTS,
+  MAX_DAILY_PLANS_LIMIT,
   get,
   update,
   evict,

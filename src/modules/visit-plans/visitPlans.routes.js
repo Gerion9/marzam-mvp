@@ -10,6 +10,10 @@ const MANAGER_ROLES = ['director_sucursal', 'gerente_ventas', 'supervisor'];
 
 router.get('/', authenticate, controller.list);
 router.get('/assignments', authenticate, controller.myAssignments);
+// Quota probe — usado por el plan-editor para renderizar "Planes hoy: 1/3".
+// Cualquier authenticated user puede preguntar por su propia cuota; un rep
+// recibirá `null limit / 0 used` (la quota solo aplica si llamara a POST /).
+router.get('/quota', authenticate, controller.quota);
 router.get('/:id', authenticate, controller.show);
 
 router.post('/preview', authenticate, authorize({ roles: MANAGER_ROLES }), controller.preview);
