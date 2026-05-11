@@ -820,7 +820,7 @@
             type: 'Feature',
             properties: {
               visit_id: v.id,
-              outcome: v.outcome || 'visited',
+              outcome: v.outcome || 'interested',
               pharmacy_name: v.pharmacy_name || v.farmacia_nombre || '',
               recorded_at: v.created_at || v.checkin_time || '',
             },

@@ -607,21 +607,20 @@
   function hydrateVisitHistory() {
     if (!STORE.pharmacies.length) return;
     const OUTCOMES = [
-      { code: 'visited',           weight: 50, label: 'Visitada' },
-      { code: 'contact_made',      weight: 15, label: 'Contacto realizado' },
-      { code: 'interested',        weight: 12, label: 'Interesado' },
-      { code: 'needs_follow_up',   weight: 8,  label: 'Requiere seguimiento' },
-      { code: 'not_interested',    weight: 5,  label: 'No interesado' },
-      { code: 'closed',            weight: 4,  label: 'Cerrado' },
-      { code: 'invalid',           weight: 3,  label: 'No existe / inválido' },
-      { code: 'chain_not_independent', weight: 2, label: 'Cadena' },
-      { code: 'duplicate',         weight: 1,  label: 'Duplicado' },
+      { code: 'interested',        weight: 50, label: 'Visitado · Cliente prospecto' },
+      { code: 'needs_follow_up',   weight: 18, label: 'Visitado · Requiere seguimiento' },
+      { code: 'not_interested',    weight: 12, label: 'Visitado · No le interesa' },
+      { code: 'closed',            weight: 8,  label: 'Local cerrado' },
+      { code: 'invalid',           weight: 4,  label: 'Registro inválido' },
+      { code: 'chain_not_independent', weight: 4, label: 'Cadena' },
+      { code: 'moved',             weight: 2,  label: 'Se mudó' },
+      { code: 'duplicate',         weight: 2,  label: 'Duplicada' },
     ];
     const totalWeight = OUTCOMES.reduce((s, o) => s + o.weight, 0);
     const pickOutcome = (seed) => {
       let r = (seed * 9301 + 49297) % totalWeight;
       for (const o of OUTCOMES) { if ((r -= o.weight) < 0) return o.code; }
-      return 'visited';
+      return 'interested';
     };
     const now = Date.now();
     const visits = [];

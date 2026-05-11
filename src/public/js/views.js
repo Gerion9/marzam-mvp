@@ -1523,7 +1523,6 @@
         invalid_pharmacies: 0,
       },
       outcome_breakdown: [
-        { outcome: 'visited', count: 0 },
         { outcome: 'interested', count: 0 },
         { outcome: 'not_interested', count: 0 },
         { outcome: 'needs_follow_up', count: 0 },
