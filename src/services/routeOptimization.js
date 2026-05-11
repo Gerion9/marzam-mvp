@@ -81,6 +81,16 @@ function durationToProto(seconds) {
   return `${s}s`;
 }
 
+// Lock key estable para serializar settlements concurrentes del día. Usado
+// adentro de recordOptimizationSpend para que `currentMonthlyVolume` no
+// arrastre una lectura stale cuando dos llamadas terminan al mismo tiempo.
+const SPEND_ADVISORY_LOCK_KEY = 0x720707; // 'r' 'o' 'o' (Route Opt Owner-ish) en ascii.
+
+function utcMonthStartISO() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
+
 /**
  * Construye el payload `optimizeTours` a partir de inputs domain-level.
  *
@@ -190,7 +200,7 @@ function buildPayload({
     })),
   };
 
-  return {
+  const payload = {
     parent: `projects/${getProjectId()}`,
     model: {
       vehicles: apiVehicles,
@@ -200,6 +210,16 @@ function buildPayload({
     searchMode: options.searchMode || 'CONSUME_ALL_AVAILABLE_TIME',
     timeout: durationToProto((options.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS)),
   };
+
+  // Google's validate-only mode: parses the request, returns validation
+  // errors if any, but does NOT execute the optimization heuristic. Critical:
+  // shipments are NOT billed in this mode. We forward `validateOnly: true`
+  // from the caller via options.solvingMode for CI/QA pipelines.
+  if (options.validateOnly === true || options.solvingMode === 'VALIDATE_ONLY') {
+    payload.solvingMode = 'VALIDATE_ONLY';
+  }
+
+  return payload;
 }
 
 function isRetryableStatus(status) {
@@ -227,6 +247,9 @@ async function callOptimizeTours(payload, {
     model: payload.model,
     searchMode: payload.searchMode,
     timeout: payload.timeout,
+    // solvingMode only present when caller set VALIDATE_ONLY — Google's
+    // default is DEFAULT_SOLVE. Omitting keeps the payload smaller.
+    ...(payload.solvingMode ? { solvingMode: payload.solvingMode } : {}),
   });
 
   let attempt = 0;
@@ -288,76 +311,145 @@ async function optimizeTours(args) {
   const payload = buildPayload(args);
   const shipmentCount = (args.shipments || []).length;
   const vehicleCount = (args.vehicles || []).length;
+  const kind = pricing.classifyOptimizationSku(vehicleCount);
+  const isValidateOnly = payload.solvingMode === 'VALIDATE_ONLY';
   const t0 = Date.now();
   try {
     const { parsed } = await callOptimizeTours(payload, args.options);
     const ms = Date.now() - t0;
+    // Google may flag shipments as infeasible — they are NOT billed by Google
+    // and they should not bump our spend counters either. Subtract them so
+    // total_shipments reflects what we actually paid for.
+    const skipped = Array.isArray(parsed?.skippedShipments) ? parsed.skippedShipments.length : 0;
+    const billableShipments = Math.max(0, shipmentCount - skipped);
     log.info({
       event: 'route_optimization.success',
-      ms, shipments: shipmentCount, vehicles: vehicleCount,
+      ms, shipments: shipmentCount, vehicles: vehicleCount, kind,
+      validate_only: isValidateOnly,
       routes: parsed?.routes?.length || 0,
-      skipped: parsed?.skippedShipments?.length || 0,
+      skipped,
+      billable_shipments: billableShipments,
     });
     recordOptimizationSpend({
-      shipments: shipmentCount,
+      shipments: billableShipments,
       vehicles: vehicleCount,
+      kind,
       success: true,
+      validateOnly: isValidateOnly,
     }).catch((e) => log.warn({ event: 'route_optimization.spend.failed', err: e.message }));
     return parsed;
   } catch (e) {
     const ms = Date.now() - t0;
     log.warn({
       event: 'route_optimization.failed',
-      ms, shipments: shipmentCount, vehicles: vehicleCount,
+      ms, shipments: shipmentCount, vehicles: vehicleCount, kind,
       err: e.message, status: e.status, code: e.code,
     });
+    // 5xx errors from Google are not billed; same for timeouts and
+    // pre-flight 4xx rejections. We still log the failure for counters but
+    // never sum cost on the failure path.
     recordOptimizationSpend({
       shipments: shipmentCount,
       vehicles: vehicleCount,
+      kind,
       success: false,
-      timeout: e.code === 'timeout',
+      validateOnly: isValidateOnly,
     }).catch((er) => log.warn({ event: 'route_optimization.spend.failed', err: er.message }));
     throw e;
   }
 }
 
 /**
- * UPSERT a `route_optimization_api_spend` para el día UTC actual.
+ * UPSERT al row del día UTC actual en `route_optimization_api_spend`.
  *
- *   - success=true → incrementa optimization_calls, total_shipments,
- *     total_vehicles y suma est_cost_usd usando pricing.routeOptimizationCost.
- *   - success=false → incrementa failed_calls. NO suma costo (Google no cobra
- *     por errores; los rechazos antes de invocar la API tampoco).
- *   - timeout=true (junto con success=false) → cuenta como failed pero
- *     incrementa también el counter genérico para distinguir en logs.
+ * Semántica por flag:
+ *   - validateOnly=true → solo bumpea validate_only_calls. Google NO factura
+ *     este modo, no tocamos cost ni los counters por-SKU.
+ *   - success=true → incrementa per-SKU shipments/calls según `kind`
+ *     ('single'|'fleet'), incrementa los agregados (optimization_calls,
+ *     total_*) y suma el costo INCREMENTAL piecewise computando contra el
+ *     volumen mensual ya consumido en ese SKU. La lectura+escritura corren
+ *     bajo un advisory lock para que dos settlements concurrentes vean el
+ *     mismo "before" y no doblecuenten la transición de tier.
+ *   - success=false → incrementa failed_calls. NO toca costo ni shipments
+ *     (Google no factura errores 5xx / timeouts / 4xx pre-flight).
+ *
+ * Los infeasible shipments del response ya fueron descartados arriba en
+ * optimizeTours, así que `shipments` aquí solo cuenta los facturables.
  */
 async function recordOptimizationSpend({
-  shipments = 0, vehicles = 0, success = true, timeout: _timeout = false,
+  shipments = 0, vehicles = 0, kind = 'single',
+  success = true, validateOnly = false,
 }) {
-  const cost = success ? pricing.routeOptimizationCost(shipments) : 0;
-  const sql = `
-    INSERT INTO route_optimization_api_spend
-      (day, optimization_calls, total_vehicles, total_shipments, est_cost_usd,
-       rejected_calls, failed_calls, first_call_at, last_call_at)
-    VALUES
-      (CURRENT_DATE, ?, ?, ?, ?, 0, ?, NOW(), NOW())
-    ON CONFLICT (day) DO UPDATE
-      SET optimization_calls = route_optimization_api_spend.optimization_calls + EXCLUDED.optimization_calls,
-          total_vehicles     = route_optimization_api_spend.total_vehicles     + EXCLUDED.total_vehicles,
-          total_shipments    = route_optimization_api_spend.total_shipments    + EXCLUDED.total_shipments,
-          est_cost_usd       = route_optimization_api_spend.est_cost_usd       + EXCLUDED.est_cost_usd,
-          failed_calls       = route_optimization_api_spend.failed_calls       + EXCLUDED.failed_calls,
-          last_call_at       = NOW()
-  `;
-  await db.raw(sql, [
-    success ? 1 : 0,
-    success ? vehicles : 0,
-    success ? shipments : 0,
-    cost,
-    success ? 0 : 1,
-  ]);
-  // timeout flag se loggea pero no se persiste como columna separada;
-  // failed_calls cubre la métrica y los logs estructurados distinguen el code.
+  if (validateOnly) {
+    await db.raw(`
+      INSERT INTO route_optimization_api_spend
+        (day, validate_only_calls, first_call_at, last_call_at)
+      VALUES (CURRENT_DATE, 1, NOW(), NOW())
+      ON CONFLICT (day) DO UPDATE
+        SET validate_only_calls = route_optimization_api_spend.validate_only_calls + 1,
+            last_call_at = NOW()
+    `);
+    return;
+  }
+
+  const isFleet = kind === 'fleet';
+
+  // Spend settlement under advisory lock — reads the month-to-date shipment
+  // count for this SKU before computing the incremental piecewise cost. This
+  // makes tier-boundary settlement deterministic under concurrency: two
+  // 4_998-and-4_999 → 5_001 settlements both read the same "before" value.
+  await db.transaction(async (trx) => {
+    await trx.raw('SELECT pg_advisory_xact_lock(?)', [SPEND_ADVISORY_LOCK_KEY]);
+
+    let monthlySoFar = 0;
+    if (success && shipments > 0) {
+      const row = await trx('route_optimization_api_spend')
+        .where('day', '>=', utcMonthStartISO())
+        .sum({
+          single: 'single_vehicle_shipments',
+          fleet: 'fleet_routing_shipments',
+        })
+        .first();
+      monthlySoFar = Number((isFleet ? row?.fleet : row?.single) || 0);
+    }
+
+    const cost = success
+      ? pricing.routeOptimizationIncrementalCost({
+        shipments, currentMonthlyVolume: monthlySoFar, kind: isFleet ? 'fleet' : 'single',
+      })
+      : 0;
+
+    await trx.raw(`
+      INSERT INTO route_optimization_api_spend
+        (day, optimization_calls, total_vehicles, total_shipments,
+         single_vehicle_calls, single_vehicle_shipments,
+         fleet_routing_calls, fleet_routing_shipments,
+         est_cost_usd, failed_calls, first_call_at, last_call_at)
+      VALUES (CURRENT_DATE, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+      ON CONFLICT (day) DO UPDATE
+        SET optimization_calls       = route_optimization_api_spend.optimization_calls       + EXCLUDED.optimization_calls,
+            total_vehicles           = route_optimization_api_spend.total_vehicles           + EXCLUDED.total_vehicles,
+            total_shipments          = route_optimization_api_spend.total_shipments          + EXCLUDED.total_shipments,
+            single_vehicle_calls     = route_optimization_api_spend.single_vehicle_calls     + EXCLUDED.single_vehicle_calls,
+            single_vehicle_shipments = route_optimization_api_spend.single_vehicle_shipments + EXCLUDED.single_vehicle_shipments,
+            fleet_routing_calls      = route_optimization_api_spend.fleet_routing_calls      + EXCLUDED.fleet_routing_calls,
+            fleet_routing_shipments  = route_optimization_api_spend.fleet_routing_shipments  + EXCLUDED.fleet_routing_shipments,
+            est_cost_usd             = route_optimization_api_spend.est_cost_usd             + EXCLUDED.est_cost_usd,
+            failed_calls             = route_optimization_api_spend.failed_calls             + EXCLUDED.failed_calls,
+            last_call_at             = NOW()
+    `, [
+      success ? 1 : 0,
+      success ? vehicles : 0,
+      success ? shipments : 0,
+      (success && !isFleet) ? 1 : 0,
+      (success && !isFleet) ? shipments : 0,
+      (success && isFleet) ? 1 : 0,
+      (success && isFleet) ? shipments : 0,
+      cost,
+      success ? 0 : 1,
+    ]);
+  });
 }
 
 module.exports = {

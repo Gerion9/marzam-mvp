@@ -173,10 +173,36 @@
           ${statTile('USD hoy', fmtUsd(opt.today_usd))}
           ${statTile('USD MTD', fmtUsd(opt.mtd_usd))}
           ${statTile('USD YTD', fmtUsd(opt.ytd_usd))}
-          ${statTile('Optimizaciones MTD', fmtInt(opt.mtd_calls))}
-          ${statTile('Shipments MTD', fmtInt(opt.mtd_shipments), `${(opt.usd_per_shipment || 0).toFixed(4)} USD c/u`)}
+          ${statTile('Optimizaciones MTD', fmtInt(opt.mtd_calls), opt.mtd_validate_only_calls ? `+${fmtInt(opt.mtd_validate_only_calls)} validate-only (\$0)` : '')}
+          ${statTile('Shipments MTD', fmtInt(opt.mtd_shipments), 'Pricing piecewise por SKU')}
           ${statTile('Fallidas MTD', fmtInt(opt.mtd_failed || 0))}
-        </div>` : ''}
+        </div>
+
+        ${opt.single_vehicle || opt.fleet_routing ? `
+        <h4 style="margin:18px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#64748b">SKU split — pricing oficial Google (post-marzo 2025)</h4>
+        <div class="drawer-grid-3">
+          ${opt.single_vehicle ? statTileCompare(
+    'Single Vehicle (Pro)',
+    opt.single_vehicle.est_cost_real_usd,
+    opt.single_vehicle.est_cost_naive_usd,
+    opt.single_vehicle.est_savings_vs_naive,
+  ) : ''}
+          ${opt.single_vehicle ? freeTierBar('Single · free 5k/mes', opt.single_vehicle.mtd_shipments, 5000) : ''}
+          ${opt.single_vehicle ? statTile('Optimizaciones Single MTD', fmtInt(opt.single_vehicle.mtd_calls), `${fmtInt(opt.single_vehicle.mtd_shipments)} shipments`) : ''}
+
+          ${opt.fleet_routing ? statTileCompare(
+    'Fleet Routing (Enterprise)',
+    opt.fleet_routing.est_cost_real_usd,
+    opt.fleet_routing.est_cost_naive_usd,
+    opt.fleet_routing.est_savings_vs_naive,
+  ) : ''}
+          ${opt.fleet_routing ? freeTierBar('Fleet · free 1k/mes', opt.fleet_routing.mtd_shipments, 1000) : ''}
+          ${opt.fleet_routing ? statTile('Optimizaciones Fleet MTD', fmtInt(opt.fleet_routing.mtd_calls), `${fmtInt(opt.fleet_routing.mtd_shipments)} shipments`) : ''}
+        </div>
+        <p style="margin-top:8px;font-size:11px;color:#64748b">
+          Google factura el SKU según <code>vehicles.length</code> del payload: 1 = Single (Pro, free 5k), 2+ = Fleet (Enterprise, free 1k, ~3× más caro post-free). Validate-only no factura ningún shipment.
+        </p>
+        ` : ''}` : ''}
 
         <h3 style="margin:24px 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Routes · breakdown MTD</h3>
         <div style="overflow:auto"><table class="data-table"><thead><tr>

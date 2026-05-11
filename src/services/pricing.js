@@ -52,9 +52,51 @@ const PRO_TIERS = Object.freeze([
   Object.freeze({ upTo: Infinity, pricePerK: 3.0 }),
 ]);
 
-// Tentativo — pricing exacto de Route Optimization API pendiente de
-// confirmación. Ajustar aquí cuando esté en stone.
-const ROUTE_OPTIMIZATION_USD_PER_SHIPMENT = 0.0013;
+// Route Optimization API — pricing oficial post-marzo 2025.
+//
+// Google bifurca el SKU dinámicamente leyendo `vehicles.length` del payload:
+//   1 vehicle      → SKU "Single Vehicle Routing" (categoría Pro)
+//   2+ vehicles    → SKU "Fleet Routing"          (categoría Enterprise)
+// Esto es decidido por el motor de facturación de Google, no se selecciona
+// manualmente. Inyectar 2 vehículos de prueba en QA con 10 envíos triplica el
+// costo unitario (de $10/1k a $30/1k en el primer tier post-free). Por eso el
+// hook en planGenerator usa SIEMPRE 1 vehicle por (rep,day) — el problema ya
+// fue particionado por el assignByGreedy upstream.
+//
+// Ambas curvas son piecewise estrictas con free tier dedicado y degradación
+// agresiva por volumen mensual consolidado (la suma se hace a nivel Billing
+// Account, no por proyecto — la sub-organización vive bajo el mismo descuento).
+
+const OPTIMIZATION_SINGLE_TIERS = Object.freeze([
+  Object.freeze({ upTo: 5000, pricePerK: 0 }),         // free
+  Object.freeze({ upTo: 100000, pricePerK: 10.0 }),
+  Object.freeze({ upTo: 500000, pricePerK: 4.0 }),
+  Object.freeze({ upTo: 1000000, pricePerK: 2.0 }),
+  Object.freeze({ upTo: 5000000, pricePerK: 0.8 }),
+  Object.freeze({ upTo: Infinity, pricePerK: 0.7 }),
+]);
+
+const OPTIMIZATION_FLEET_TIERS = Object.freeze([
+  Object.freeze({ upTo: 1000, pricePerK: 0 }),         // free (1/5 de Single)
+  Object.freeze({ upTo: 100000, pricePerK: 30.0 }),
+  Object.freeze({ upTo: 500000, pricePerK: 14.0 }),
+  Object.freeze({ upTo: 1000000, pricePerK: 6.0 }),
+  Object.freeze({ upTo: 5000000, pricePerK: 2.4 }),
+  Object.freeze({ upTo: Infinity, pricePerK: 2.1 }),
+]);
+
+/**
+ * Clasifica el SKU que Google va a facturar según el número de vehículos
+ * declarado en el payload. Esto es determinístico por diseño de Google —
+ * exportado para que el caller pueda etiquetar consistentemente sus métricas.
+ */
+function classifyOptimizationSku(vehicleCount) {
+  return Number(vehicleCount || 0) >= 2 ? 'fleet' : 'single';
+}
+
+function optimizationTiers(kind) {
+  return kind === 'fleet' ? OPTIMIZATION_FLEET_TIERS : OPTIMIZATION_SINGLE_TIERS;
+}
 
 // 4 decimales — suficiente para mostrar centavos sin arrastrar ruido de FP.
 function round4(n) {
@@ -117,10 +159,36 @@ function routesProCost(monthlyVolume) {
   return piecewiseCost(monthlyVolume, PRO_TIERS);
 }
 
-function routeOptimizationCost(shipments) {
+/**
+ * Costo "as-if-isolated" de `shipments` procesados bajo el SKU indicado, sin
+ * tener en cuenta volumen previo del mes. Útil para estimaciones del FE antes
+ * de invocar la API. Usar `routeOptimizationIncrementalCost` para el cargo
+ * REAL contra el contador mensual.
+ *
+ * opts.kind: 'single' (default) | 'fleet'.
+ */
+function routeOptimizationCost(shipments, opts = {}) {
+  const tiers = optimizationTiers(opts.kind === 'fleet' ? 'fleet' : 'single');
+  return piecewiseCost(shipments, tiers);
+}
+
+/**
+ * Costo incremental real cuando ya has procesado `currentMonthlyVolume`
+ * envíos este mes contra ese SKU. Se calcula como
+ *   piecewise(prev + shipments) − piecewise(prev)
+ * de modo que cruzar un tier boundary durante la llamada parte el cargo
+ * correctamente entre las bandas adyacentes. Es la fórmula que `recordSpend`
+ * debe usar para no over/under-charge cuando el volumen pasa de 4_999 a 5_001
+ * (toca el free tier).
+ */
+function routeOptimizationIncrementalCost({ shipments, currentMonthlyVolume = 0, kind = 'single' }) {
   const n = Number(shipments);
   if (!Number.isFinite(n) || n <= 0) return 0;
-  return round4(n * ROUTE_OPTIMIZATION_USD_PER_SHIPMENT);
+  const tiers = optimizationTiers(kind === 'fleet' ? 'fleet' : 'single');
+  const prev = Math.max(0, Number(currentMonthlyVolume) || 0);
+  const before = piecewiseCost(prev, tiers);
+  const after = piecewiseCost(prev + n, tiers);
+  return round4(Math.max(0, after - before));
 }
 
 /**
@@ -184,13 +252,17 @@ function enrich(monthlyVolume, opts = {}) {
 module.exports = {
   ESSENTIALS_TIERS,
   PRO_TIERS,
-  ROUTE_OPTIMIZATION_USD_PER_SHIPMENT,
+  OPTIMIZATION_SINGLE_TIERS,
+  OPTIMIZATION_FLEET_TIERS,
   piecewiseCost,
   freeTierRemaining,
   geocodingCost,
   routesEssentialsCost,
   routesProCost,
   routeOptimizationCost,
+  routeOptimizationIncrementalCost,
+  classifyOptimizationSku,
+  optimizationTiers,
   naiveCost,
   geocodingNaiveCost,
   routesEssentialsNaiveCost,

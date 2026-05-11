@@ -4,12 +4,16 @@ const assert = require('node:assert/strict');
 const {
   ESSENTIALS_TIERS,
   PRO_TIERS,
+  OPTIMIZATION_SINGLE_TIERS,
+  OPTIMIZATION_FLEET_TIERS,
   piecewiseCost,
   freeTierRemaining,
   geocodingCost,
   routesEssentialsCost,
   routesProCost,
   routeOptimizationCost,
+  routeOptimizationIncrementalCost,
+  classifyOptimizationSku,
   naiveCost,
   geocodingNaiveCost,
   routesEssentialsNaiveCost,
@@ -111,13 +115,84 @@ test('routesProCost == piecewiseCost(PRO)', () => {
   }
 });
 
-test('routeOptimizationCost: shipments * $0.0013', () => {
-  eq(routeOptimizationCost(0), 0);
-  eq(routeOptimizationCost(1), 0.0013);
-  eq(routeOptimizationCost(1000), 1.3);
-  eq(routeOptimizationCost(100000), 130);
-  eq(routeOptimizationCost(-1), 0);
-  eq(routeOptimizationCost(NaN), 0);
+test('classifyOptimizationSku: 1 vehicle → single; 2+ → fleet', () => {
+  assert.equal(classifyOptimizationSku(0), 'single');
+  assert.equal(classifyOptimizationSku(1), 'single');
+  assert.equal(classifyOptimizationSku(2), 'fleet');
+  assert.equal(classifyOptimizationSku(50), 'fleet');
+});
+
+test('routeOptimizationCost (single, Pro): free tier 5k, then $10/1k', () => {
+  eq(routeOptimizationCost(0, { kind: 'single' }), 0);
+  eq(routeOptimizationCost(5000, { kind: 'single' }), 0);                 // still free
+  eq(routeOptimizationCost(5001, { kind: 'single' }), 0.01);              // 1 @ $10/1k
+  eq(routeOptimizationCost(100000, { kind: 'single' }), 950);             // 95k @ $10/1k
+  eq(routeOptimizationCost(500000, { kind: 'single' }), 950 + 400000 * 0.004);    // = $2550
+  eq(routeOptimizationCost(1000000, { kind: 'single' }), 2550 + 500000 * 0.002);  // = $3550
+});
+
+test('routeOptimizationCost (fleet, Enterprise): tighter 1k free, then $30/1k', () => {
+  eq(routeOptimizationCost(0, { kind: 'fleet' }), 0);
+  eq(routeOptimizationCost(1000, { kind: 'fleet' }), 0);
+  eq(routeOptimizationCost(1001, { kind: 'fleet' }), 0.03);               // 1 @ $30/1k
+  eq(routeOptimizationCost(100000, { kind: 'fleet' }), 99000 * 0.03);     // = $2970
+  eq(routeOptimizationCost(500000, { kind: 'fleet' }), 2970 + 400000 * 0.014);   // = $8570
+  eq(routeOptimizationCost(1000000, { kind: 'fleet' }), 8570 + 500000 * 0.006);  // = $11570
+});
+
+test('routeOptimizationCost: default kind is single', () => {
+  eq(routeOptimizationCost(5001), 0.01);
+  eq(routeOptimizationCost(5001, {}), 0.01);
+});
+
+test('routeOptimizationCost: negative/NaN/null → 0 for both SKUs', () => {
+  eq(routeOptimizationCost(-1, { kind: 'single' }), 0);
+  eq(routeOptimizationCost(NaN, { kind: 'fleet' }), 0);
+  eq(routeOptimizationCost(null, { kind: 'fleet' }), 0);
+});
+
+test('routeOptimizationIncrementalCost: respects tier boundary crossings', () => {
+  // 4_999 → 5_001: only 1 shipment crosses out of free.
+  eq(routeOptimizationIncrementalCost({ shipments: 2, currentMonthlyVolume: 4999, kind: 'single' }), 0.01);
+  // Exactly at boundary: cross 5_000 → 6_000 = 1_000 at $10/1k = $10.
+  eq(routeOptimizationIncrementalCost({ shipments: 1000, currentMonthlyVolume: 5000, kind: 'single' }), 10);
+  // Spans two tiers: 99_500 → 101_000 = 500 @ $10/1k + 1000 @ $4/1k.
+  eq(routeOptimizationIncrementalCost({ shipments: 1500, currentMonthlyVolume: 99500, kind: 'single' }),
+    500 * 0.01 + 1000 * 0.004);
+  // Fleet inside the $30/1k tier: simple linear within band.
+  eq(routeOptimizationIncrementalCost({ shipments: 100, currentMonthlyVolume: 50000, kind: 'fleet' }), 100 * 0.03);
+  // Fleet free tier exhaustion: 999 → 1001 → 1 unit beyond free.
+  eq(routeOptimizationIncrementalCost({ shipments: 2, currentMonthlyVolume: 999, kind: 'fleet' }), 0.03);
+});
+
+test('routeOptimizationIncrementalCost: invalid inputs → 0', () => {
+  eq(routeOptimizationIncrementalCost({ shipments: 0, currentMonthlyVolume: 100, kind: 'single' }), 0);
+  eq(routeOptimizationIncrementalCost({ shipments: -5, currentMonthlyVolume: 100, kind: 'single' }), 0);
+  eq(routeOptimizationIncrementalCost({ shipments: NaN, currentMonthlyVolume: 100, kind: 'fleet' }), 0);
+});
+
+test('Fleet vs Single: same volume is 3x to 5x more expensive on Fleet', () => {
+  // The whole point of the SKU split: never let a casual 2-vehicle test
+  // payload accidentally trip the Enterprise tier.
+  const v = 50000;
+  const single = routeOptimizationCost(v, { kind: 'single' });
+  const fleet = routeOptimizationCost(v, { kind: 'fleet' });
+  // Single: 5k free + 45k @ $10 = $450; Fleet: 1k free + 49k @ $30 = $1470.
+  eq(single, 450);
+  eq(fleet, 1470);
+  assert.ok(fleet / single >= 3);
+});
+
+test('OPTIMIZATION_*_TIERS exported with documented free-tier boundaries', () => {
+  assert.equal(OPTIMIZATION_SINGLE_TIERS[0].upTo, 5000);
+  assert.equal(OPTIMIZATION_SINGLE_TIERS[0].pricePerK, 0);
+  assert.equal(OPTIMIZATION_FLEET_TIERS[0].upTo, 1000);
+  assert.equal(OPTIMIZATION_FLEET_TIERS[0].pricePerK, 0);
+  // Bottom-of-curve asymptote ratios from the public docs.
+  const singleAsymptote = OPTIMIZATION_SINGLE_TIERS[OPTIMIZATION_SINGLE_TIERS.length - 1].pricePerK;
+  const fleetAsymptote = OPTIMIZATION_FLEET_TIERS[OPTIMIZATION_FLEET_TIERS.length - 1].pricePerK;
+  eq(singleAsymptote, 0.7);
+  eq(fleetAsymptote, 2.1);
 });
 
 test('naiveCost: ignores free tier and tier degradation', () => {
