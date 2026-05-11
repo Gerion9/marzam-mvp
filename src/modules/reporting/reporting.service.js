@@ -60,7 +60,6 @@ async function getPharmacyFunnel() {
     const interested = currentRows.filter((row) => row.visit_status === 'interested').length;
     const needs_follow_up = currentRows.filter((row) => row.visit_status === 'follow_up_required').length;
     const invalid_closed = currentRows.filter((row) => ['closed', 'invalid', 'duplicate', 'moved', 'wrong_category', 'chain_not_independent'].includes(row.visit_status)).length;
-    const contact_made = currentRows.filter((row) => row.visit_status === 'contact_made').length;
     return {
       total_pharmacies: total,
       assigned,
@@ -68,7 +67,6 @@ async function getPharmacyFunnel() {
       interested,
       needs_follow_up,
       invalid_closed,
-      contact_made,
       coverage_pct: total > 0 ? Number(((visited * 100) / total).toFixed(1)) : 0,
     };
   }
@@ -81,7 +79,6 @@ async function getPharmacyFunnel() {
       db.raw(`count(*) FILTER (WHERE is_independent = true AND last_visit_outcome = 'interested') AS interested`),
       db.raw(`count(*) FILTER (WHERE is_independent = true AND last_visit_outcome = 'needs_follow_up') AS needs_follow_up`),
       db.raw(`count(*) FILTER (WHERE is_independent = true AND status IN ('closed','invalid','duplicate','moved')) AS invalid_closed`),
-      db.raw(`count(*) FILTER (WHERE is_independent = true AND last_visit_outcome = 'contact_made') AS contact_made`),
     )
     .where(function () {
       this.whereNull('colonia_id')

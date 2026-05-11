@@ -7,8 +7,6 @@ const { resolveEvidenceAccessUrl } = require('../../utils/gcsEvidence');
 const accessDirectory = require('../../services/accessDirectory');
 
 const OUTCOME_TO_VISIT_STATUS = {
-  visited: 'visited',
-  contact_made: 'contact_made',
   interested: 'interested',
   not_interested: 'not_interested',
   needs_follow_up: 'follow_up_required',
