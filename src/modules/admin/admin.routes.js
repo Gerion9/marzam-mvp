@@ -17,6 +17,7 @@ const routesMatrix = require('../../services/routesMatrix');
 const db = require('../../config/database');
 const { secretsEqual } = require('../../utils/secretCompare');
 const { recordCronRun } = require('../../utils/cronRunRecorder');
+const branchPlanSettings = require('../../services/branchPlanSettings');
 
 const router = Router();
 
@@ -375,5 +376,27 @@ async function cronPurgeRateLimit(req, res, next) {
 }
 router.get('/cron/purge-rate-limit', adminOrAnyAdminOrCron, withCronLock('purge-rate-limit', cronPurgeRateLimit));
 router.post('/cron/purge-rate-limit', adminOrAnyAdminOrCron, withCronLock('purge-rate-limit', cronPurgeRateLimit));
+
+// ── Branch plan settings (admin override) ─────────────────────────────────
+// Permite a un admin Marzam ajustar { daily_plans_limit, cutoff_hhmm, ... }
+// para una sucursal individual. Caso de uso V1: subir la cuota de planes/día
+// (default 3) para una sucursal específica cuando un manager necesita más.
+router.get('/branches/:branchId/plan-settings', authenticate, authorize({ adminOnly: true }), async (req, res, next) => {
+  try {
+    const settings = await branchPlanSettings.get(req.params.branchId);
+    res.json(settings);
+  } catch (err) { next(err); }
+});
+
+router.patch('/branches/:branchId/plan-settings', authenticate, authorize({ adminOnly: true }), async (req, res, next) => {
+  try {
+    const patch = req.body || {};
+    if (!patch || typeof patch !== 'object') {
+      return res.status(400).json({ error: 'request body must be a JSON object' });
+    }
+    const updated = await branchPlanSettings.update(req.params.branchId, patch);
+    res.json(updated);
+  } catch (err) { next(err); }
+});
 
 module.exports = router;

@@ -5,8 +5,70 @@ const routesMatrix = require('../../services/routesMatrix');
 const securityPolygons = require('../../services/securityPolygons');
 const { orderStopsFromDepot, twoOptImprove } = require('../../utils/routeOrdering');
 const intradayReoptimizer = require('./intradayReoptimizer');
+const branchPlanSettings = require('../../services/branchPlanSettings');
 
 const ENABLE_CAP_VALIDATION_REASSIGN = process.env.PLAN_ENABLE_CAP_VALIDATION === 'true';
+
+/**
+ * Fórmula pura para el cómputo de cuota — testeable sin DB. Recibe el límite
+ * configurado, los planes ya usados hoy, y un `now` (default Date.now()) y
+ * devuelve el bloque que se le sirve al cliente.
+ *
+ * `reset_at` es la siguiente medianoche UTC: las cuotas son por día UTC para
+ * evitar ambigüedades de DST. Si el cliente Marzam necesita "día Cd. de México"
+ * en algún momento, basta con cambiar este cálculo y todo el stack hereda.
+ */
+function computeQuotaResult({ limit, used, now = new Date() }) {
+  const lim = Math.max(0, Math.floor(Number(limit) || 0));
+  const useNum = Math.max(0, Math.floor(Number(used) || 0));
+  const remaining = Math.max(0, lim - useNum);
+  const nextMidnight = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0,
+  ));
+  return {
+    daily_limit: lim,
+    used_today: useNum,
+    remaining,
+    exceeded: useNum >= lim,
+    reset_at: nextMidnight.toISOString(),
+    // Hint estable para el frontend (no requiere config en cada vista):
+    _hint: lim === 0
+      ? 'Tu sucursal tiene la cuota deshabilitada (0). Pide al admin que la suba.'
+      : `Las cuotas se resetean a media noche UTC (${nextMidnight.toISOString().slice(11, 16)} UTC).`,
+  };
+}
+
+/**
+ * Cuota diaria de planes del owner. Mira la branch del user (si tiene), lee
+ * `plan_settings.daily_plans_limit` con validación + default 3, y cuenta los
+ * planes generados HOY (UTC) por ese owner que no estén archived.
+ *
+ * Plans con status `archived` no cuentan: la idea del límite es prevenir que
+ * un manager queme presupuesto con drafts infinitos, pero si ya descartó el
+ * draft no debería seguir penalizando.
+ */
+async function getRemainingPlanQuota({ userId }) {
+  if (!userId) {
+    return computeQuotaResult({ limit: branchPlanSettings.DEFAULTS.daily_plans_limit, used: 0 });
+  }
+
+  // Branch del owner. Puede ser NULL para virtuales — en ese caso usamos default.
+  const owner = await db('users').where({ id: userId }).select('branch_id').first();
+  const branchId = owner?.branch_id || null;
+  const settings = await branchPlanSettings.get(branchId);
+  const limit = Number.isFinite(settings.daily_plans_limit)
+    ? settings.daily_plans_limit
+    : branchPlanSettings.DEFAULTS.daily_plans_limit;
+
+  const row = await db('visit_plans')
+    .where('owner_user_id', userId)
+    .whereNot('status', 'archived')
+    .whereRaw("created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC')")
+    .count('* as n')
+    .first();
+  const used = Number(row?.n || 0);
+  return computeQuotaResult({ limit, used });
+}
 
 function haversineKmService(a, b) {
   const R = 6371;
@@ -1158,4 +1220,6 @@ module.exports = {
   reoptimizeDay,
   listReoptimizations,
   findReassignAlternatives,
+  getRemainingPlanQuota,
+  __computeQuotaResult: computeQuotaResult, // exported for tests
 };

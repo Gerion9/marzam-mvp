@@ -93,6 +93,24 @@ async function create(req, res, next) {
     if (!granularity || !periodStart || !periodEnd) {
       return res.status(400).json({ error: 'granularity, period_start, period_end required' });
     }
+
+    // Daily plan quota gate. Demo users y admins is_global bypass — el gate
+    // existe para frenar a managers operativos que podrían reventar el budget
+    // a base de regenerar planes a discreción.
+    if (req.user?.data_scope !== 'demo' && !req.user?.is_global) {
+      const quota = await service.getRemainingPlanQuota({ userId: req.user.id });
+      if (quota.exceeded) {
+        return res.status(429).json({
+          error: 'daily_plan_quota_exceeded',
+          daily_limit: quota.daily_limit,
+          used_today: quota.used_today,
+          remaining: 0,
+          reset_at: quota.reset_at,
+          _hint: quota._hint,
+        });
+      }
+    }
+
     const canonicalIds = scopeUserIds.map((id) => accessDirectory.toCanonicalId(id));
     const scopeUserRoles = await loadScopeUserRoles(canonicalIds);
     const paretoErr = validateParetoFilter(req, paretoFilter, scopeUserRoles);
@@ -109,6 +127,36 @@ async function create(req, res, next) {
       actorIsGlobal: !!req.user.is_global,
     });
     res.status(201).json(result);
+  } catch (err) { next(err); }
+}
+
+/**
+ * GET /api/visit-plans/quota — cuota diaria del usuario actual. Útil para que
+ * el plan-editor render el chip "Planes hoy: 1/3" sin tener que intentar un
+ * create para descubrir el límite.
+ */
+async function quota(req, res, next) {
+  try {
+    if (req.user?.data_scope === 'demo' || req.user?.is_global) {
+      // Bypass — devolvemos un payload "infinite" pero con remaining=∞ para que
+      // el FE no enmascare el chip. used_today se calcula igual por curiosidad.
+      const used = await require('../../config/database')('visit_plans')
+        .where('owner_user_id', req.user.id)
+        .whereNot('status', 'archived')
+        .whereRaw("created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC')")
+        .count('* as n').first();
+      return res.json({
+        daily_limit: null,
+        used_today: Number(used?.n || 0),
+        remaining: null,
+        exceeded: false,
+        reset_at: null,
+        bypassed: true,
+        _hint: 'Admin / demo: la cuota no aplica.',
+      });
+    }
+    const result = await service.getRemainingPlanQuota({ userId: req.user.id });
+    res.json(result);
   } catch (err) { next(err); }
 }
 
@@ -497,4 +545,5 @@ module.exports = {
   reoptimizeDay,
   listReoptimizations,
   replan,
+  quota,
 };
