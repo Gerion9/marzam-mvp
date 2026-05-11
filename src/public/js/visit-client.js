@@ -49,20 +49,23 @@
   // Constantes — outcomes de visita y razones de no-pedido.
   // ──────────────────────────────────────────────────────────
 
+  // Agrupados en 3 categorías visuales para el dropdown nativo (<optgroup>):
+  //   pos  → "Visitado · positivo" (registra prospecto + side-effect)
+  //   neg  → "Visitado · negativo" (registra visita sin interés)
+  //   skip → "No se pudo registrar" (skip stop + review queue)
   const VISIT_OUTCOMES = [
-    { code: 'visited',                  label: 'Visitado',                 positive: true  },
-    { code: 'contact_made',             label: 'Contacto realizado',       positive: true  },
-    { code: 'interested',               label: 'Interesado',               positive: true  },
-    { code: 'not_interested',           label: 'No interesado',            positive: false },
-    { code: 'needs_follow_up',          label: 'Requiere seguimiento',     positive: true  },
-    { code: 'closed',                   label: 'Cerrado',                  positive: false },
-    { code: 'invalid',                  label: 'Inválido',                 positive: false },
-    { code: 'duplicate',                label: 'Duplicado',                positive: false },
-    { code: 'moved',                    label: 'Se mudó',                  positive: false },
-    { code: 'wrong_category',           label: 'Categoría incorrecta',     positive: false },
-    { code: 'chain_not_independent',    label: 'Cadena / No independiente', positive: false },
+    { code: 'interested',            label: 'Visitado · Cliente prospecto',           positive: true,  group: 'pos'  },
+    { code: 'needs_follow_up',       label: 'Visitado · Requiere seguimiento',        positive: true,  group: 'pos'  },
+    { code: 'not_interested',        label: 'Visitado · No le interesa',              positive: false, group: 'neg'  },
+    { code: 'closed',                label: 'Local cerrado / Fuera de negocio',        positive: false, group: 'skip' },
+    { code: 'duplicate',             label: 'Ya registrada (duplicada en sistema)',    positive: false, group: 'skip' },
+    { code: 'moved',                 label: 'Se mudó de dirección',                    positive: false, group: 'skip' },
+    { code: 'invalid',               label: 'Registro inválido (no existe)',           positive: false, group: 'skip' },
+    { code: 'wrong_category',        label: 'Categoría incorrecta (no es farmacia)',   positive: false, group: 'skip' },
+    { code: 'chain_not_independent', label: 'Cadena / Franquicia (no independiente)',  positive: false, group: 'skip' },
   ];
   const POSITIVE_OUTCOMES = new Set(VISIT_OUTCOMES.filter((o) => o.positive).map((o) => o.code));
+  const OUTCOME_GROUP_LABELS = { pos: 'Visitado · positivo', neg: 'Visitado · negativo', skip: 'No se pudo registrar' };
 
   const NO_ORDER_REASONS = [
     { code: 'sin_inventario_marzam', label: 'Sin inventario en Marzam' },
@@ -273,11 +276,20 @@
       btnNext.disabled = true;
       btnNext.textContent = 'Registrando...';
       try {
+        // Mapeo del flujo Marzam-client (cliente ya en padrón) a los outcomes
+        // canónicos de VISIT_OUTCOMES.  'completed'/'visited'/'cancelled' eran
+        // códigos legacy que NO existen en el statemachine — mapear a los
+        // outcomes válidos preserva la semántica:
+        //   visitó + pedido      → interested        (actividad comercial real)
+        //   visitó sin pedido    → needs_follow_up   (requiere seguimiento)
+        //   no visitó            → invalid           (no se pudo registrar visita)
+        // El flujo de prospecto (renderProspectOutcome) usa el dropdown con
+        // los 9 outcomes y NO pasa por este branch.
         const visit = await API.post('/visits', {
           pharmacy_id: pharmacy.id,
           outcome: state.visited
-            ? (state.order_placed ? 'completed' : 'visited')
-            : 'cancelled',
+            ? (state.order_placed ? 'interested' : 'needs_follow_up')
+            : 'invalid',
           notes: state.notes || (state.visited ? 'Visita cliente' : 'No visitada'),
           order_placed: !!state.order_placed,
           no_order_reason: state.no_order_reason || null,
@@ -1121,6 +1133,18 @@
   // ──────────────────────────────────────────────────────────
 
   function renderProspectOutcome(state, refresh) {
+    // Agrupa los outcomes por categoría visual (`group`) en <optgroup>. El
+    // <select> nativo en iOS/Android respeta los <optgroup> con headers en
+    // negrita — sin librerías, sin JS extra.
+    const groupOrder = ['pos', 'neg', 'skip'];
+    const groupedHtml = groupOrder.map((g) => {
+      const items = VISIT_OUTCOMES.filter((o) => o.group === g);
+      if (!items.length) return '';
+      const opts = items.map((o) => `
+        <option value="${o.code}" ${state.outcome === o.code ? 'selected' : ''}>${escapeHtml(o.label)}</option>
+      `).join('');
+      return `<optgroup label="${escapeHtml(OUTCOME_GROUP_LABELS[g] || g)}">${opts}</optgroup>`;
+    }).join('');
     const w = el(`
       <div>
         <h2 class="onb-step-title">Resultado de la visita *</h2>
@@ -1128,9 +1152,7 @@
         <label class="onb-field">
           <select class="onb-input" id="vp-outcome">
             <option value="">Seleccionar...</option>
-            ${VISIT_OUTCOMES.map((o) => `
-              <option value="${o.code}" ${state.outcome === o.code ? 'selected' : ''}>${escapeHtml(o.label)}</option>
-            `).join('')}
+            ${groupedHtml}
           </select>
         </label>
       </div>
