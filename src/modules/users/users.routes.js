@@ -76,4 +76,30 @@ router.put(
   controller.updateHome,
 );
 
+// ── User skills (mig 093) ────────────────────────────────────────────────
+// Catálogo abierto — cualquier authenticated user puede listarlo para
+// renderizar pickers (no expone secret state).
+router.get('/skills/catalog', authenticate, controller.getSkillsCatalog);
+
+// GET / PUT del propio perfil de skills. PUT solo para management+ (un rep
+// no edita su propio perfil de skills; eso lo hace su supervisor o admin
+// para evitar abuso — el gate vive en el controller).
+router.get('/me/skills', authenticate, controller.getMySkills);
+router.put(
+  '/me/skills',
+  authenticate,
+  auditLog('user.skills_self_updated'),
+  controller.updateMySkills,
+);
+
+// Admin edita skills de cualquier user. adminOnly (Marzam admin) — blackprint
+// queda fuera porque es read-only sobre Marzam data per denyBlackprintWrites.
+router.put(
+  '/:id/skills',
+  authenticate,
+  authorize({ adminOnly: true }),
+  auditLog('user.skills_updated_by_admin'),
+  controller.updateUserSkills,
+);
+
 module.exports = router;
