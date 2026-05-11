@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="/css/app-shell.css?v=app-21">
   <link rel="stylesheet" href="/css/onboarding-wizard.css?v=app-21">
   <link rel="stylesheet" href="/css/views.css?v=app-21">
+  <link rel="stylesheet" href="/css/tour.css?v=app-21">
 </head>
 <body class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
 
@@ -54,6 +55,21 @@
       </select>
     </div>
 
+    <!-- Tour: mobile menu (rayitas) — opens help center on small screens.
+         Always visible alongside the avatar so reps can find the tutorial
+         without opening the user menu. Hidden on desktop where the `?`
+         button is the primary entry point. -->
+    <button id="tour-mobile-menu" class="md:hidden w-11 h-11 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full flex items-center justify-center border border-white/60 ring-1 ring-slate-200/50 text-slate-700 hover:text-[#e5730a] transition-all duration-300 flex-shrink-0" aria-label="Abrir menú de tutorial">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    </button>
+
+    <!-- Tour: ? help button — primary entry point on desktop, also visible
+         on mobile to reinforce discoverability. Opens the help center
+         drawer/sheet with the index of chapters. -->
+    <button id="tour-help-btn" class="w-11 h-11 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full flex items-center justify-center border border-white/60 ring-1 ring-slate-200/50 text-slate-700 hover:text-[#e5730a] hover:scale-105 transition-all duration-300 flex-shrink-0" aria-label="Ayuda y tutorial" title="Ayuda y tutorial (?)">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 4"/><path d="M12 17.5h.01" stroke-linecap="round"/></svg>
+    </button>
+
     <!-- User menu -->
     <div class="relative group flex-shrink-0">
       <button id="user-menu-btn" class="w-11 h-11 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full flex items-center justify-center border border-white/60 ring-1 ring-slate-200/50 text-slate-700 hover:text-[#e5730a] hover:scale-105 transition-all duration-300">
@@ -66,6 +82,10 @@
           <p id="usermenu-zone" class="text-[11px] text-slate-400 truncate mt-0.5"></p>
         </div>
         <button id="usermenu-stop-impersonate" class="hidden w-full text-left px-4 py-2 text-sm text-violet-600 hover:bg-slate-50 font-semibold">↩ Volver a mi sesión</button>
+        <button id="tour-help-menu-item" class="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+          <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 4"/><path d="M12 17.5h.01" stroke-linecap="round"/></svg>
+          Tutorial y ayuda
+        </button>
         <button id="btn-logout" class="w-full text-left px-4 py-2 text-sm text-rose-600 hover:bg-slate-50">Cerrar sesión</button>
       </div>
     </div>
@@ -146,6 +166,14 @@
   <!-- ─── Modals container ───────────────────────────────────── -->
   <div id="modals-root"></div>
 
+  <!-- ─── Tour root ───────────────────────────────────────────
+       The guided-tour engine renders its overlay (z=240), spotlight,
+       callout (z=250), and help-center drawer here. Kept separate from
+       #modals-root so the z-stacking is predictable: tour wins over any
+       MarzamModal so it can highlight an open modal (e.g. the alta-de-
+       farmacia wizard). -->
+  <div id="tour-root" class="hidden"></div>
+
   <!-- ─── Offline banner ─────────────────────────────────────── -->
   <div id="offline-banner" class="hidden absolute bottom-0 left-0 right-0 z-[9998] bg-amber-500 text-white text-center text-[11px] font-bold py-1.5 tracking-wide">
     Sin conexión — Las visitas se guardarán localmente
@@ -189,6 +217,13 @@
   <script src="/js/visit-client.js?v=app-21"></script>
   <script src="/js/distribution.js?v=app-21"></script>
   <script src="/js/marzam-analytics-ext.js?v=app-21"></script>
+  <!-- Guided tour system (load AFTER all views so targets are in the DOM
+       by the time the engine boots). Order matters: engine first, then
+       content (registry of tours), then demo injector + help center UI. -->
+  <script src="/js/tour/tour-engine.js?v=app-21"></script>
+  <script src="/js/tour/tour-content.js?v=app-21"></script>
+  <script src="/js/tour/tour-demo-injector.js?v=app-21"></script>
+  <script src="/js/tour/tour-help-center.js?v=app-21"></script>
 </body>
 </html>
 
