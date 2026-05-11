@@ -224,3 +224,39 @@ test('module surface: exports the documented API', () => {
   assert.equal(typeof m.buildPayload, 'function');
   assert.equal(typeof m.callOptimizeTours, 'function');
 });
+
+test('buildPayload: solvingMode=VALIDATE_ONLY is forwarded when options.validateOnly true', () => {
+  const f = fixture();
+  const p = buildPayload({ ...f, options: { validateOnly: true } });
+  assert.equal(p.solvingMode, 'VALIDATE_ONLY');
+});
+
+test('buildPayload: solvingMode is omitted by default (DEFAULT_SOLVE implicit)', () => {
+  const p = buildPayload(fixture());
+  assert.equal(p.solvingMode, undefined);
+});
+
+test('buildPayload: solvingMode can be passed verbatim via options.solvingMode', () => {
+  const p = buildPayload({ ...fixture(), options: { solvingMode: 'VALIDATE_ONLY' } });
+  assert.equal(p.solvingMode, 'VALIDATE_ONLY');
+});
+
+test('callOptimizeTours: VALIDATE_ONLY surfaces solvingMode in body', async () => {
+  const stub = makeFetchStub([{ ok: true, status: 200, json: { routes: [] } }]);
+  const payload = buildPayload({ ...fixture(), options: { validateOnly: true } });
+  await callOptimizeTours(payload, {
+    fetchImpl: stub.fetch, maxRetries: 0, timeoutSeconds: 5,
+  });
+  const sentBody = JSON.parse(stub.calls()[0].init.body);
+  assert.equal(sentBody.solvingMode, 'VALIDATE_ONLY');
+});
+
+test('callOptimizeTours: omits solvingMode in body when not set (no DEFAULT_SOLVE echoed)', async () => {
+  const stub = makeFetchStub([{ ok: true, status: 200, json: { routes: [] } }]);
+  const payload = buildPayload(fixture());
+  await callOptimizeTours(payload, {
+    fetchImpl: stub.fetch, maxRetries: 0, timeoutSeconds: 5,
+  });
+  const sentBody = JSON.parse(stub.calls()[0].init.body);
+  assert.equal(sentBody.solvingMode, undefined);
+});

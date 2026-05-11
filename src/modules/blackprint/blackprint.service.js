@@ -189,34 +189,77 @@ async function costSummary() {
     out.total_mtd_savings_usd += enriched.est_savings_vs_naive;
   }
 
-  // -- Route Optimization API (mig 095) --
+  // -- Route Optimization API (mig 095 + 096) --
   // La tabla existe aunque el feature flag PLAN_USE_OPTIMIZATION_API esté off
-  // (devolverá 0s). Cuando el flag se enciende, routeOptimization.js empieza a
-  // poblar las filas vía UPSERT.
+  // (devolverá 0s). Google bifurca dinámicamente el SKU según vehicles.length
+  // del payload — almacenamos counts separados per SKU (Single/Fleet) en mig
+  // 096. Free tier y curva piecewise también difieren por SKU.
   if (await tableExists('route_optimization_api_spend')) {
+    // Detect availability of the mig-096 columns so older deploys keep
+    // rendering the legacy aggregate shape without crashing.
+    const hasSkuSplit = await db.schema.hasColumn('route_optimization_api_spend', 'single_vehicle_shipments');
+
     const todayRow = await db('route_optimization_api_spend').where({ day: today }).first();
+    const mtdSum = {
+      usd: 'est_cost_usd',
+      calls: 'optimization_calls',
+      shipments: 'total_shipments',
+      vehicles: 'total_vehicles',
+      rejected: 'rejected_calls',
+      failed: 'failed_calls',
+    };
+    if (hasSkuSplit) {
+      Object.assign(mtdSum, {
+        single_calls: 'single_vehicle_calls',
+        single_shipments: 'single_vehicle_shipments',
+        fleet_calls: 'fleet_routing_calls',
+        fleet_shipments: 'fleet_routing_shipments',
+        validate_only: 'validate_only_calls',
+      });
+    }
     const mtdAgg = await db('route_optimization_api_spend')
       .where('day', '>=', monthStart)
-      .sum({
-        usd: 'est_cost_usd',
-        calls: 'optimization_calls',
-        shipments: 'total_shipments',
-        vehicles: 'total_vehicles',
-        rejected: 'rejected_calls',
-        failed: 'failed_calls',
-      })
+      .sum(mtdSum)
       .first();
     const ytdAgg = await db('route_optimization_api_spend')
       .where('day', '>=', yearStart)
       .sum({ usd: 'est_cost_usd' })
       .first();
+    const breakdownCols = [
+      'day', 'optimization_calls', 'total_vehicles', 'total_shipments',
+      'est_cost_usd', 'rejected_calls', 'failed_calls',
+    ];
+    if (hasSkuSplit) {
+      breakdownCols.push(
+        'single_vehicle_calls', 'single_vehicle_shipments',
+        'fleet_routing_calls', 'fleet_routing_shipments',
+        'validate_only_calls',
+      );
+    }
     const breakdown = await db('route_optimization_api_spend')
       .where('day', '>=', monthStart)
       .orderBy('day', 'asc')
-      .select(
-        'day', 'optimization_calls', 'total_vehicles', 'total_shipments',
-        'est_cost_usd', 'rejected_calls', 'failed_calls',
-      );
+      .select(...breakdownCols);
+
+    const singleMtd = Number(mtdAgg?.single_shipments || 0);
+    const fleetMtd = Number(mtdAgg?.fleet_shipments || 0);
+
+    // Real (piecewise) per SKU vs naive: naive uses the first paid tier rate
+    // for both SKUs as the pessimistic baseline (matches how dashboards in
+    // routes_api/geocoding_api already compute "naive").
+    const singleEnriched = {
+      est_cost_real_usd: pricing.routeOptimizationCost(singleMtd, { kind: 'single' }),
+      free_tier_remaining: Math.max(0, 5000 - singleMtd),
+      free_tier_limit: 5000,
+    };
+    const fleetEnriched = {
+      est_cost_real_usd: pricing.routeOptimizationCost(fleetMtd, { kind: 'fleet' }),
+      free_tier_remaining: Math.max(0, 1000 - fleetMtd),
+      free_tier_limit: 1000,
+    };
+    // Naive: cost-as-if-all-shipments-were-billable-at-base-rate.
+    const singleNaive = Math.round((singleMtd / 1000) * 10 * 10000) / 10000;
+    const fleetNaive = Math.round((fleetMtd / 1000) * 30 * 10000) / 10000;
 
     out.route_optimization_api = {
       today_usd: Number(todayRow?.est_cost_usd || 0),
@@ -229,8 +272,26 @@ async function costSummary() {
       mtd_vehicles: Number(mtdAgg?.vehicles || 0),
       mtd_rejected: Number(mtdAgg?.rejected || 0),
       mtd_failed: Number(mtdAgg?.failed || 0),
+      mtd_validate_only_calls: Number(mtdAgg?.validate_only || 0),
       ytd_usd: Number(ytdAgg?.usd || 0),
-      usd_per_shipment: pricing.ROUTE_OPTIMIZATION_USD_PER_SHIPMENT,
+
+      single_vehicle: hasSkuSplit ? {
+        mtd_calls: Number(mtdAgg?.single_calls || 0),
+        mtd_shipments: singleMtd,
+        ...singleEnriched,
+        est_cost_naive_usd: singleNaive,
+        est_savings_vs_naive: Math.max(0, Math.round((singleNaive - singleEnriched.est_cost_real_usd) * 10000) / 10000),
+        tier_curve: 'pro',
+      } : null,
+      fleet_routing: hasSkuSplit ? {
+        mtd_calls: Number(mtdAgg?.fleet_calls || 0),
+        mtd_shipments: fleetMtd,
+        ...fleetEnriched,
+        est_cost_naive_usd: fleetNaive,
+        est_savings_vs_naive: Math.max(0, Math.round((fleetNaive - fleetEnriched.est_cost_real_usd) * 10000) / 10000),
+        tier_curve: 'enterprise',
+      } : null,
+
       mtd_breakdown: breakdown.map((r) => ({
         day: r.day,
         calls: Number(r.optimization_calls || 0),
@@ -239,12 +300,23 @@ async function costSummary() {
         usd: Number(r.est_cost_usd || 0),
         rejected: Number(r.rejected_calls || 0),
         failed: Number(r.failed_calls || 0),
+        single_shipments: hasSkuSplit ? Number(r.single_vehicle_shipments || 0) : null,
+        fleet_shipments: hasSkuSplit ? Number(r.fleet_routing_shipments || 0) : null,
+        validate_only_calls: hasSkuSplit ? Number(r.validate_only_calls || 0) : null,
       })),
     };
     out.total_today_usd += out.route_optimization_api.today_usd;
     out.total_mtd_usd += out.route_optimization_api.mtd_usd;
-    // No piecewise — la SKU es lineal $0.0013/shipment; real == naive.
-    out.total_mtd_real_usd += out.route_optimization_api.mtd_usd;
+    // Real piecewise (mig 096 enabled): sum of real-per-SKU. Legacy fallback:
+    // use the historical aggregate (which mirrored naive linear).
+    out.total_mtd_real_usd += hasSkuSplit
+      ? (singleEnriched.est_cost_real_usd + fleetEnriched.est_cost_real_usd)
+      : out.route_optimization_api.mtd_usd;
+    if (hasSkuSplit) {
+      out.total_mtd_savings_usd
+        += out.route_optimization_api.single_vehicle.est_savings_vs_naive
+         + out.route_optimization_api.fleet_routing.est_savings_vs_naive;
+    }
   }
 
   // Subscription suggestion — si el naive MTD ya cruzó el umbral, sugerimos
