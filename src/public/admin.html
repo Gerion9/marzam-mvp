@@ -172,7 +172,6 @@
           <button class="drawer-tab" data-drawer="onboarding">Onboarding</button>
           <button class="drawer-tab" data-drawer="users">Usuarios</button>
           <button class="drawer-tab" data-drawer="quality">Calidad de datos</button>
-          <button class="drawer-tab" data-drawer="system">Sistema</button>
           <button class="drawer-tab" data-drawer="anomalies">Anomalías <span class="drawer-tab-count" id="anomaly-tab-count">·</span></button>
         </div>
         <div class="drawer-body" id="drawer-body">
@@ -212,6 +211,11 @@
         }
         const user = JSON.parse(userJson);
         const role = String(user.role || '').toLowerCase();
+        // BlackPrint admin has its own dashboard (/blackprint) — bounce there.
+        if (role === 'blackprint_admin') {
+          window.location.replace('/blackprint');
+          return;
+        }
         const isAdmin = role === 'admin' || role === 'national_admin';
         if (!isAdmin) {
           window.location.replace('/app');
