@@ -19,6 +19,10 @@ router.get('/:id', authenticate, controller.show);
 router.post('/preview', authenticate, authorize({ roles: MANAGER_ROLES }), controller.preview);
 router.post('/preview-full', authenticate, authorize({ roles: MANAGER_ROLES }), controller.previewFull);
 router.post('/preview/cost-estimate', authenticate, authorize({ roles: MANAGER_ROLES }), controller.costEstimate);
+// Cambio 1 — National estimate without spending Google Routes API.
+// Useful when the user wants to see how a plan would distribute across multiple
+// Entidades Federativas but doesn't want to commit (and pay for) a real plan.
+router.post('/preview/national-estimate', authenticate, authorize({ roles: MANAGER_ROLES }), controller.nationalEstimate);
 // Routing sandbox: pure computation, no DB writes — open to any authenticated user (incl. demo).
 router.post('/preview-routing', authenticate, controller.previewRouting);
 router.post('/', authenticate, authorize({ roles: MANAGER_ROLES }), controller.create);
