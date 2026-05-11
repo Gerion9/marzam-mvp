@@ -30,6 +30,19 @@ const config = require('../config');
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+// In-memory counters for BlackPrint usage-metrics. Per-process; sums across
+// Vercel instances are approximate. Surfaced via getDemoMetrics().
+const demoMetrics = {
+  blocked_writes: 0,        // POST/PUT/PATCH/DELETE answered with synthetic mock
+  passthrough_reads: 0,     // GET/HEAD/OPTIONS from a demo user (we let through)
+  whitelisted_writes: 0,    // login/logout/etc bypass — counted to confirm whitelist works
+  started_at: new Date().toISOString(),
+};
+
+function getDemoMetrics() {
+  return { ...demoMetrics };
+}
+
 // [S11] Cache the DB-side demo flag per user so we don't pay a query on every
 // write request. 60s TTL is small enough that flipping a user out of demo in
 // the DB is reflected within a minute, and large enough to amortize lookups.
@@ -213,13 +226,22 @@ function buildMockResponse(req) {
 function blockWithMock(req, res) {
   const mock = buildMockResponse(req);
   res.set('X-Demo-Mode', 'readonly');
+  demoMetrics.blocked_writes += 1;
   return res.status(200).json(mock);
 }
 
 function demoReadonly(req, res, next) {
   const method = (req.method || '').toUpperCase();
-  if (READ_METHODS.has(method)) return next();
-  if (alwaysAllow(req.originalUrl || req.url || req.path)) return next();
+  if (READ_METHODS.has(method)) {
+    // Only count if request is from a demo user — counting all reads would
+    // make the metric meaningless. Use the cheap sync check.
+    if (readDemoFromToken(req)) demoMetrics.passthrough_reads += 1;
+    return next();
+  }
+  if (alwaysAllow(req.originalUrl || req.url || req.path)) {
+    if (readDemoFromToken(req)) demoMetrics.whitelisted_writes += 1;
+    return next();
+  }
 
   // Fast sync path — covers the honest case (demo user with consistent JWT).
   // This must stay synchronous so unit tests that drive the middleware
@@ -244,5 +266,6 @@ function demoReadonly(req, res, next) {
 
 module.exports = demoReadonly;
 module.exports.isDemoUser = isDemoUser;
+module.exports.getDemoMetrics = getDemoMetrics;
 // Exposed for tests / debugging — clears the in-memory demo cache.
 module.exports._clearDemoCache = () => demoCache.clear();
