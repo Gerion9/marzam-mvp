@@ -363,6 +363,21 @@
               <div class="plan-band__hint">Ajusta período y selección, luego presiona Generar para ver la previsualización.</div>
             </div>
           </div>
+
+          <!-- Status chips: quota / budget / cost estimate. Visible siempre.
+               Colores: gris = sin data, verde = OK, amber = atención, rose = crítico. -->
+          <div class="mz-plan-chips" role="status">
+            <span class="mz-status-chip" :class="'mz-status-chip--' + quotaChipColor()"
+                  :title="planQuota ? ('Restantes: ' + planQuota.remaining + ' · Resetea ' + (planQuota.reset_at||'').slice(11,16) + ' UTC') : ''"
+                  x-text="quotaChipText()"></span>
+            <span class="mz-status-chip" :class="'mz-status-chip--' + budgetChipColor()"
+                  :title="budgetStatus ? ('Routes API · restante $' + Number(budgetStatus.remaining_usd||0).toFixed(2)) : ''"
+                  x-text="budgetChipText()"></span>
+            <span class="mz-status-chip mz-status-chip--slate"
+                  :title="costEstimate ? ('Elementos billables: ' + (costEstimate.matrix_elements||0)) : ''"
+                  x-text="costChipText()"></span>
+          </div>
+
         <!-- Configuration -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
           <div class="grid grid-cols-2 gap-3 text-xs">
@@ -605,8 +620,60 @@
             </div>
           </template>
 
+          <!-- Filtros avanzados (Fase 7) — colapsable. Skill picker filtra
+               localmente el scope antes de generar; Pareto weight y hard
+               windows quedan como placeholders UX (backend recibe wiring
+               cuando el cliente confirme los valores exactos). -->
+          <div class="mt-3 border-t border-slate-100 pt-3">
+            <button type="button" @click="advFiltersOpen = !advFiltersOpen"
+              class="text-[11px] font-bold uppercase tracking-wide text-slate-500 hover:text-slate-700 flex items-center gap-1.5">
+              <span x-text="advFiltersOpen ? '▼' : '▶'"></span>
+              Filtros avanzados
+              <span class="text-[10px] font-normal text-slate-400 normal-case" x-show="!advFiltersOpen">— skills / Pareto / horarios</span>
+            </button>
+            <div x-show="advFiltersOpen" x-cloak class="mt-2 space-y-2.5">
+              <div>
+                <label class="text-[10px] font-bold uppercase tracking-wide text-slate-500 block mb-1">Skill requerida</label>
+                <div class="flex gap-1.5 flex-wrap">
+                  <button type="button" @click="skillFilter = 'any'"
+                    class="text-[11px] px-2 py-1 rounded-full border"
+                    :class="skillFilter === 'any' ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-slate-600 border-slate-200'">
+                    Cualquiera
+                  </button>
+                  <button type="button" @click="skillFilter = 'new_pharmacy_capture'"
+                    class="text-[11px] px-2 py-1 rounded-full border"
+                    :class="skillFilter === 'new_pharmacy_capture' ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-slate-600 border-slate-200'">
+                    Captación nuevas
+                  </button>
+                  <button type="button" @click="skillFilter = 'marzam_maintenance'"
+                    class="text-[11px] px-2 py-1 rounded-full border"
+                    :class="skillFilter === 'marzam_maintenance' ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-slate-600 border-slate-200'">
+                    Mantenimiento Marzam
+                  </button>
+                </div>
+                <p class="text-[10px] text-slate-400 mt-1 italic" x-show="skillFilter !== 'any'">
+                  Solo se considerarán reps cuyo perfil tenga esta skill (o sin skills declaradas).
+                </p>
+              </div>
+              <div>
+                <label class="text-[10px] font-bold uppercase tracking-wide text-slate-500 block mb-1">Peso Pareto</label>
+                <select x-model="paretoWeight" class="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none">
+                  <option value="pareto-first">Priorizar A&gt;B&gt;C&gt;D (sacrificar manejo)</option>
+                  <option value="balanced">Balanceado (default)</option>
+                  <option value="shortest-drive">Minimizar manejo (sacrificar Pareto)</option>
+                </select>
+                <p class="text-[10px] text-slate-400 mt-1 italic">Solo aplica con Optimization API activo. El solver clásico usa balanced.</p>
+              </div>
+              <label class="flex items-center gap-2 text-[11px]">
+                <input type="checkbox" x-model="hardWindowsEnforced" class="accent-orange-500">
+                <span>Respetar horarios duros de farmacia</span>
+                <span class="text-[10px] text-slate-400 italic">(requiere PLAN_HARD_WINDOWS_ENFORCED en backend)</span>
+              </label>
+            </div>
+          </div>
+
           <div class="mt-3 flex items-center gap-2">
-            <button @click="generatePreview()" :disabled="loading || !canGenerate()"
+            <button @click="generatePreview()" :disabled="loading || !canGenerate() || (planQuota && planQuota.exceeded)"
               class="flex-1 bg-gradient-to-r from-[#e5730a] to-orange-400 text-white text-xs font-bold py-2.5 rounded-xl shadow disabled:opacity-50 disabled:cursor-not-allowed">
               <span x-show="!loading">Generar plan</span>
               <span x-show="loading" class="flex items-center justify-center gap-2">
@@ -615,7 +682,28 @@
               </span>
             </button>
           </div>
+          <p class="text-[10px] text-slate-400 mt-1.5 italic" x-show="planQuota && planQuota.exceeded">
+            Alcanzaste tu límite diario de planes — espera al reset para generar otro.
+          </p>
         </div>
+
+        <!-- Quota exceeded modal — surfaces the 429 backend response with
+             reset_at + admin contact hint. -->
+        <template x-if="quotaModal">
+          <div class="mz-quota-modal-overlay" @click="closeQuotaModal()">
+            <div class="mz-quota-modal" @click.stop>
+              <div class="mz-quota-modal__title">⛔ Límite diario de planes alcanzado</div>
+              <p class="mz-quota-modal__body">
+                Has generado <strong x-text="quotaModal.used_today"></strong> de
+                <strong x-text="quotaModal.daily_limit"></strong> planes permitidos hoy.
+                <br><br>
+                Las cuotas se resetean a las <strong x-text="(quotaModal.reset_at || '').slice(11, 16)"></strong> UTC.
+                Si necesitas más planes hoy, contacta a un administrador para ajustar el límite de tu sucursal.
+              </p>
+              <button @click="closeQuotaModal()" class="mz-quota-modal__btn">Entendido</button>
+            </div>
+          </div>
+        </template>
         </div><!-- end plan-band--config -->
 
         <!-- ── Banda 3: Publicar (solo cuando hay preview) ──── -->
@@ -912,6 +1000,15 @@
       _repMeta: new Map(),
       costEstimate: null,
       budgetStatus: null,
+      planQuota: null,           // { daily_limit, used_today, remaining, reset_at, exceeded }
+      quotaModal: null,          // { daily_limit, used_today, reset_at } when 429 hit
+      timeoutWarning: false,     // surfaced when the optimizer fell back to multiStart
+      // Advanced filters panel (Fase 7 — UX-only state; backend wiring lands
+      // as it gets validated by the client).
+      advFiltersOpen: false,
+      skillFilter: 'any',        // 'any' | 'new_pharmacy_capture' | 'marzam_maintenance'
+      paretoWeight: 'balanced',  // 'pareto-first' | 'balanced' | 'shortest-drive'
+      hardWindowsEnforced: false,
       showOverlays: false,
       // PR8: cache hit/miss + solver telemetry shown in the chip tooltip.
       costMeta: {
@@ -1005,6 +1102,10 @@
         } finally {
           this.loadingTeam = false;
         }
+
+        // Quota + budget chips se cargan en paralelo, no bloquean al user.
+        this.loadQuota();
+        try { this.budgetStatus = await API.get('/admin/routes-budget'); } catch { /* optional */ }
       },
 
       // True cuando el usuario sirve la Entidad Federativa seleccionada.
@@ -1565,6 +1666,63 @@
           console.warn('[plan-editor] cost-estimate failed', err);
         }
       },
+      async loadQuota() {
+        try {
+          this.planQuota = await API.get('/visit-plans/quota');
+        } catch (err) {
+          this.planQuota = null;
+          console.warn('[plan-editor] quota load failed', err);
+        }
+      },
+      // Helpers para el template — el ciclo de Alpine evalúa cada uno
+      // muchas veces, así que se mantienen O(1).
+      quotaChipText() {
+        const q = this.planQuota;
+        if (!q || q.daily_limit == null) return 'Planes hoy: —';
+        return `Planes hoy: ${q.used_today}/${q.daily_limit}`;
+      },
+      quotaChipColor() {
+        const q = this.planQuota;
+        if (!q || q.daily_limit == null) return 'slate';
+        if (q.remaining === 0) return 'rose';
+        if (q.remaining <= 1) return 'amber';
+        return 'emerald';
+      },
+      budgetChipText() {
+        const b = this.budgetStatus;
+        if (!b) return 'Budget: —';
+        const spent = Number(b.spent_usd || 0).toFixed(2);
+        const total = Number(b.budget_usd || 50).toFixed(2);
+        const pct = b.budget_usd ? Math.round((b.spent_usd / b.budget_usd) * 100) : 0;
+        return `Budget: $${spent}/$${total} (${pct}%)`;
+      },
+      budgetChipColor() {
+        const b = this.budgetStatus;
+        if (!b || !b.budget_usd) return 'slate';
+        const pct = b.spent_usd / b.budget_usd;
+        if (pct >= 0.95) return 'rose';
+        if (pct >= 0.8) return 'amber';
+        return 'emerald';
+      },
+      costChipText() {
+        const c = this.costEstimate;
+        if (!c || c.est_cost_usd == null) return 'Costo plan: —';
+        return `Costo plan: ~$${Number(c.est_cost_usd).toFixed(4)}`;
+      },
+      // Filtra el scope de reps por skill seleccionada antes de generar. El
+      // backend NO recibe el skillFilter como argumento hoy — el resultado es
+      // mostrar/ocultar reps localmente sin que el usuario tenga que destildar
+      // cada uno. Cuando se desea "any" no filtra nada.
+      effectiveScopeUserIds() {
+        if (!this.skillFilter || this.skillFilter === 'any') return this.scopeUserIds;
+        return this.scopeUserIds.filter((id) => {
+          const u = this.teamUsers.find((x) => x.id === id);
+          const skills = u?.user_skills;
+          if (!Array.isArray(skills) || skills.length === 0) return true; // sin skills = elegible
+          return skills.includes(this.skillFilter);
+        });
+      },
+      closeQuotaModal() { this.quotaModal = null; },
       async toggleOverlays() {
         this.showOverlays = !this.showOverlays;
         if (this.showOverlays) await drawSecurityOverlays(APP.map);
@@ -1595,9 +1753,20 @@
           this.preview = null;
           this.repCards = [];
           clearLayers();
+          // Refrescamos quota — acabamos de gastar 1 plan del día.
+          this.loadQuota();
         } catch (err) {
-          const msg = err?.error || err?.message || 'Error desconocido';
-          window.MarzamToast?.show('No se pudo publicar: ' + msg, 'danger');
+          // 429 daily_plan_quota_exceeded → modal explícito (no toast genérico).
+          if (err?.status === 429 && err?.body?.error === 'daily_plan_quota_exceeded') {
+            this.quotaModal = err.body;
+            this.loadQuota();
+          } else if (err?.error === 'daily_plan_quota_exceeded') {
+            this.quotaModal = err;
+            this.loadQuota();
+          } else {
+            const msg = err?.error || err?.message || 'Error desconocido';
+            window.MarzamToast?.show('No se pudo publicar: ' + msg, 'danger');
+          }
         } finally {
           this.publishing = false;
         }
