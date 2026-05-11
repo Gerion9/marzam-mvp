@@ -99,9 +99,11 @@
 }
 .group\/sidebar:hover .tab-text-wrapper { opacity: 1; width: 130px; }
 @media (max-width: 767px) {
-  .nav-tab { flex-direction: column; gap: 2px; padding: 6px 8px; flex: 1; min-width: 0; }
+  /* Touch targets ≥44×44 px (Apple HIG / Material Design baseline) — necesario
+     para reps en campo y supervisores que editan plan desde móvil. */
+  .nav-tab { flex-direction: column; gap: 2px; padding: 8px 8px; flex: 1; min-width: 0; min-height: 48px; }
   .nav-tab.active::before { display: none; }
-  .nav-icon-box { width: 28px; height: 28px; }
+  .nav-icon-box { width: 44px; height: 44px; border-radius: 10px; }
   .tab-text-wrapper { opacity: 1; width: auto; font-size: 9px; font-weight: 700; }
   .nav-tab .tab-text-wrapper { opacity: 1; width: auto; }
 }
@@ -561,9 +563,11 @@
   #topbar input { font-size: 16px; }
   #topbar input::placeholder { font-size: 12px; }
 
-  #sidenav { left: 8px !important; right: 8px !important; bottom: 8px !important; height: 60px !important; }
-  #sidenav .nav-tab { min-width: 50px; padding: 6px 2px; }
-  #sidenav .nav-icon-box { width: 28px; height: 28px; }
+  /* En pantallas muy pequeñas seguimos respetando el mínimo táctil 40 px
+     y subimos el sidenav a 72 px para que entren targets + labels. */
+  #sidenav { left: 8px !important; right: 8px !important; bottom: 8px !important; height: 72px !important; }
+  #sidenav .nav-tab { min-width: 50px; padding: 6px 2px; min-height: 44px; }
+  #sidenav .nav-icon-box { width: 40px; height: 40px; }
 
   #fab-start-visit { right: 12px; bottom: 76px; padding: 8px 12px; font-size: 11px; }
   #fab-start-visit svg { width: 16px; height: 16px; }

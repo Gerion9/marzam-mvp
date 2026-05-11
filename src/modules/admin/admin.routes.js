@@ -83,13 +83,29 @@ function adminOrAnyAdminOrCron(req, res, next) {
 // ── Routes API budget (for plan editor cost chip + admin dashboard) ────────
 // includeBlackprint: true — BP foots the bill for Google Routes, so they need
 // to see the budget at all times.
+//
+// Defensa en profundidad para el monto USD: solo blackprint_admin (y admin
+// Marzam, por consistencia) reciben el payload completo con spent_usd /
+// budget_usd. Para director/gerente/supervisor devolvemos solo el `severity`
+// derivado — el chip de UI lo pinta como verde/amber/rojo sin exponer el
+// costo financiero de Routes API al cliente.
 router.get('/routes-budget', authenticate, authorize({
   roles: ['director_sucursal', 'gerente_ventas', 'supervisor'],
   includeBlackprint: true,
 }), async (req, res, next) => {
   try {
     const status = await routesMatrix.getDailyBudgetStatus();
-    res.json(status);
+    const role = require('../../constants/roles').normalizeRole(req.user?.role);
+    if (role === 'blackprint_admin' || role === 'admin') {
+      return res.json(status);
+    }
+    const pct = status && status.budget_usd ? (status.spent_usd / status.budget_usd) : 0;
+    const severity = pct >= 0.95 ? 'critical' : pct >= 0.8 ? 'warning' : 'ok';
+    res.json({
+      severity,
+      daily_limit: status?.daily_limit ?? null,
+      used_today: status?.used_today ?? null,
+    });
   } catch (err) { next(err); }
 });
 
