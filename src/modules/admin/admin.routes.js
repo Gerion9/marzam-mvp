@@ -59,23 +59,33 @@ function withCronLock(jobKey, handler) {
 }
 
 /**
- * Permits either a logged-in admin OR a request with x-cron-secret matching
- * the env var. Lets Vercel Cron jobs hit operational endpoints without going
- * through user auth.
+ * Permits a request with x-cron-secret matching the env var, OR a logged-in
+ * admin (Marzam admin OR blackprint_admin). Lets Vercel Cron jobs hit
+ * operational endpoints without user auth, and lets BlackPrint trigger crons
+ * manually for diagnostics.
+ *
+ * BlackPrint writes are blocked platform-wide by denyBlackprintWrites — but
+ * /api/admin/cron/* is in that middleware's whitelist precisely so BP can
+ * fire crons. This is the matching authorization gate.
  */
-function adminOrCron(req, res, next) {
+function adminOrAnyAdminOrCron(req, res, next) {
   const cronSecret = process.env.CRON_SECRET;
   const supplied = req.header('x-cron-secret') || req.query.cron_secret;
   if (cronSecret && secretsEqual(supplied, cronSecret)) return next();
-  // Fall through to standard auth + admin gate.
+  // Fall through to standard auth + any-admin gate.
   return authenticate(req, res, (err) => {
     if (err) return next(err);
-    return authorize({ adminOnly: true })(req, res, next);
+    return authorize({ anyAdmin: true })(req, res, next);
   });
 }
 
 // ── Routes API budget (for plan editor cost chip + admin dashboard) ────────
-router.get('/routes-budget', authenticate, authorize({ roles: ['director_sucursal', 'gerente_ventas', 'supervisor'] }), async (req, res, next) => {
+// includeBlackprint: true — BP foots the bill for Google Routes, so they need
+// to see the budget at all times.
+router.get('/routes-budget', authenticate, authorize({
+  roles: ['director_sucursal', 'gerente_ventas', 'supervisor'],
+  includeBlackprint: true,
+}), async (req, res, next) => {
   try {
     const status = await routesMatrix.getDailyBudgetStatus();
     res.json(status);
@@ -83,7 +93,8 @@ router.get('/routes-budget', authenticate, authorize({ roles: ['director_sucursa
 });
 
 // ── Scheduler health (each cron writes to cron_runs) ──────────────────────
-router.get('/scheduler/health', authenticate, authorize({ adminOnly: true }), async (req, res, next) => {
+// Shared between Marzam admin and BP — both need visibility into cron status.
+router.get('/scheduler/health', authenticate, authorize({ anyAdmin: true }), async (req, res, next) => {
   try {
     // cron_runs is a thin observability table (created in migration 067).
     const exists = await db.raw("SELECT to_regclass('cron_runs') AS t");
@@ -96,8 +107,9 @@ router.get('/scheduler/health', authenticate, authorize({ adminOnly: true }), as
 });
 
 // [O4] ── Admin error log browser (rows from `error_log`, mig 082) ──────────
-// Paginated by occurred_at DESC. Filterable by status/path/since. Admin-only.
-router.get('/errors', authenticate, authorize({ adminOnly: true }), async (req, res, next) => {
+// Paginated by occurred_at DESC. Filterable by status/path/since. Shared
+// between Marzam admin and BP — diagnostics often need BP and Marzam together.
+router.get('/errors', authenticate, authorize({ anyAdmin: true }), async (req, res, next) => {
   try {
     const exists = await db.raw("SELECT to_regclass('error_log') AS t");
     if (!exists.rows?.[0]?.t) {
@@ -138,8 +150,8 @@ async function cronPurgeRouteCache(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/purge-route-cache', adminOrCron, withCronLock('purge-route-cache', cronPurgeRouteCache));
-router.post('/cron/purge-route-cache', adminOrCron, withCronLock('purge-route-cache', cronPurgeRouteCache));
+router.get('/cron/purge-route-cache', adminOrAnyAdminOrCron, withCronLock('purge-route-cache', cronPurgeRouteCache));
+router.post('/cron/purge-route-cache', adminOrAnyAdminOrCron, withCronLock('purge-route-cache', cronPurgeRouteCache));
 
 async function cronPurgeTracking(req, res, next) {
   try {
@@ -165,8 +177,8 @@ async function cronPurgeTracking(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/purge-tracking', adminOrCron, withCronLock('purge-tracking', cronPurgeTracking));
-router.post('/cron/purge-tracking', adminOrCron, withCronLock('purge-tracking', cronPurgeTracking));
+router.get('/cron/purge-tracking', adminOrAnyAdminOrCron, withCronLock('purge-tracking', cronPurgeTracking));
+router.post('/cron/purge-tracking', adminOrAnyAdminOrCron, withCronLock('purge-tracking', cronPurgeTracking));
 
 async function cronGeocodeBackfill(req, res, next) {
   try {
@@ -179,8 +191,8 @@ async function cronGeocodeBackfill(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/geocode-backfill', adminOrCron, withCronLock('geocode-backfill', cronGeocodeBackfill));
-router.post('/cron/geocode-backfill', adminOrCron, withCronLock('geocode-backfill', cronGeocodeBackfill));
+router.get('/cron/geocode-backfill', adminOrAnyAdminOrCron, withCronLock('geocode-backfill', cronGeocodeBackfill));
+router.post('/cron/geocode-backfill', adminOrAnyAdminOrCron, withCronLock('geocode-backfill', cronGeocodeBackfill));
 
 async function cronQuadrantsSnapshot(req, res, next) {
   try {
@@ -193,8 +205,8 @@ async function cronQuadrantsSnapshot(req, res, next) {
     next(err);
   }
 }
-router.get('/quadrants/snapshot', adminOrCron, withCronLock('quadrants-snapshot', cronQuadrantsSnapshot));
-router.post('/quadrants/snapshot', adminOrCron, withCronLock('quadrants-snapshot', cronQuadrantsSnapshot));
+router.get('/quadrants/snapshot', adminOrAnyAdminOrCron, withCronLock('quadrants-snapshot', cronQuadrantsSnapshot));
+router.post('/quadrants/snapshot', adminOrAnyAdminOrCron, withCronLock('quadrants-snapshot', cronQuadrantsSnapshot));
 
 async function cronPurgeLiveOutbox(req, res, next) {
   try {
@@ -210,8 +222,8 @@ async function cronPurgeLiveOutbox(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/purge-live-outbox', adminOrCron, withCronLock('purge-live-outbox', cronPurgeLiveOutbox));
-router.post('/cron/purge-live-outbox', adminOrCron, withCronLock('purge-live-outbox', cronPurgeLiveOutbox));
+router.get('/cron/purge-live-outbox', adminOrAnyAdminOrCron, withCronLock('purge-live-outbox', cronPurgeLiveOutbox));
+router.post('/cron/purge-live-outbox', adminOrAnyAdminOrCron, withCronLock('purge-live-outbox', cronPurgeLiveOutbox));
 
 async function cronParseOpeningHours(req, res, next) {
   try {
@@ -227,8 +239,8 @@ async function cronParseOpeningHours(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/parse-opening-hours', adminOrCron, withCronLock('parse-opening-hours', cronParseOpeningHours));
-router.post('/cron/parse-opening-hours', adminOrCron, withCronLock('parse-opening-hours', cronParseOpeningHours));
+router.get('/cron/parse-opening-hours', adminOrAnyAdminOrCron, withCronLock('parse-opening-hours', cronParseOpeningHours));
+router.post('/cron/parse-opening-hours', adminOrAnyAdminOrCron, withCronLock('parse-opening-hours', cronParseOpeningHours));
 
 /**
  * Monthly retention cron for audit_events.
@@ -277,8 +289,8 @@ async function cronAuditRetention(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/audit-retention', adminOrCron, withCronLock('audit-retention', cronAuditRetention));
-router.post('/cron/audit-retention', adminOrCron, withCronLock('audit-retention', cronAuditRetention));
+router.get('/cron/audit-retention', adminOrAnyAdminOrCron, withCronLock('audit-retention', cronAuditRetention));
+router.post('/cron/audit-retention', adminOrAnyAdminOrCron, withCronLock('audit-retention', cronAuditRetention));
 
 /**
  * Daily presence reconciliation — collapses rep_tracking_points × pharmacies
@@ -303,8 +315,8 @@ async function cronReconcilePresence(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/reconcile-presence', adminOrCron, withCronLock('reconcile-presence', cronReconcilePresence));
-router.post('/cron/reconcile-presence', adminOrCron, withCronLock('reconcile-presence', cronReconcilePresence));
+router.get('/cron/reconcile-presence', adminOrAnyAdminOrCron, withCronLock('reconcile-presence', cronReconcilePresence));
+router.post('/cron/reconcile-presence', adminOrAnyAdminOrCron, withCronLock('reconcile-presence', cronReconcilePresence));
 
 /**
  * Daily purge of expired ephemeral credential tables.
@@ -361,7 +373,7 @@ async function cronPurgeRateLimit(req, res, next) {
     next(err);
   }
 }
-router.get('/cron/purge-rate-limit', adminOrCron, withCronLock('purge-rate-limit', cronPurgeRateLimit));
-router.post('/cron/purge-rate-limit', adminOrCron, withCronLock('purge-rate-limit', cronPurgeRateLimit));
+router.get('/cron/purge-rate-limit', adminOrAnyAdminOrCron, withCronLock('purge-rate-limit', cronPurgeRateLimit));
+router.post('/cron/purge-rate-limit', adminOrAnyAdminOrCron, withCronLock('purge-rate-limit', cronPurgeRateLimit));
 
 module.exports = router;

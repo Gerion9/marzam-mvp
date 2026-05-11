@@ -2,8 +2,13 @@
  * Admin Cockpit — read-only analytics endpoints for the dedicated /admin
  * dashboard. Mounted at /api/admin/cockpit (see src/app.js).
  *
- * All endpoints require admin role. Director_sucursal is intentionally
+ * Gate: anyAdmin — both Marzam admin (the client) and blackprint_admin (the
+ * platform team) may read these analytics. Director_sucursal is intentionally
  * excluded in this phase — they continue to use the shared /app shell.
+ *
+ * BlackPrint reads via /blackprint dashboard (which composes these endpoints
+ * with /api/blackprint/* exclusive ones). The /admin dashboard remains the
+ * Marzam client view.
  */
 
 const { Router } = require('express');
@@ -13,27 +18,27 @@ const ctrl = require('./cockpit.controller');
 
 const router = Router();
 
-const adminOnly = [authenticate, authorize({ adminOnly: true })];
+const anyAdminRO = [authenticate, authorize({ anyAdmin: true })];
 
 // [P10] Routes API matrix cache statistics — exposes hit rate, total pairs,
 // API call count for the admin cockpit so we can tune cache TTL with data.
-router.get('/routes-matrix-stats', ...adminOnly, (_req, res) => {
+router.get('/routes-matrix-stats', ...anyAdminRO, (_req, res) => {
   // eslint-disable-next-line global-require
   const routesMatrix = require('../../services/routesMatrix');
   res.json(routesMatrix.getStats());
 });
 
-router.get('/hero',             ...adminOnly, ctrl.hero);
-router.get('/trend',            ...adminOnly, ctrl.trend);
-router.get('/coverage-heatmap', ...adminOnly, ctrl.coverageHeatmap);
-router.get('/hierarchy',        ...adminOnly, ctrl.hierarchy);
-router.get('/operations',       ...adminOnly, ctrl.operations);
-router.get('/people',           ...adminOnly, ctrl.people);
-router.get('/commercial',       ...adminOnly, ctrl.commercial);
-router.get('/onboarding',       ...adminOnly, ctrl.onboarding);
-router.get('/data-quality',     ...adminOnly, ctrl.dataQuality);
-router.get('/system',           ...adminOnly, ctrl.system);
-router.get('/audit-feed',       ...adminOnly, ctrl.auditFeed);
-router.get('/anomalies',        ...adminOnly, ctrl.anomalies);
+router.get('/hero',             ...anyAdminRO, ctrl.hero);
+router.get('/trend',            ...anyAdminRO, ctrl.trend);
+router.get('/coverage-heatmap', ...anyAdminRO, ctrl.coverageHeatmap);
+router.get('/hierarchy',        ...anyAdminRO, ctrl.hierarchy);
+router.get('/operations',       ...anyAdminRO, ctrl.operations);
+router.get('/people',           ...anyAdminRO, ctrl.people);
+router.get('/commercial',       ...anyAdminRO, ctrl.commercial);
+router.get('/onboarding',       ...anyAdminRO, ctrl.onboarding);
+router.get('/data-quality',     ...anyAdminRO, ctrl.dataQuality);
+router.get('/system',           ...anyAdminRO, ctrl.system);
+router.get('/audit-feed',       ...anyAdminRO, ctrl.auditFeed);
+router.get('/anomalies',        ...anyAdminRO, ctrl.anomalies);
 
 module.exports = router;
