@@ -27,6 +27,12 @@
 
 const db = require('../../config/database');
 const accessDirectory = require('../../services/accessDirectory');
+const pricing = require('../../services/pricing');
+
+// Threshold para sugerir suscripción / negociar tarifa enterprise. Si el MTD
+// pesimista (naive) supera este corte, el dashboard muestra un widget de
+// "subscription suggestion".
+const SUBSCRIPTION_SUGGEST_THRESHOLD_USD = 1000;
 
 async function tableExists(name) {
   const r = await db.raw('SELECT to_regclass(?) AS t', [name]);
@@ -51,8 +57,12 @@ async function costSummary() {
   const out = {
     routes_api: null,
     geocoding_api: null,
+    route_optimization_api: null,
     total_today_usd: 0,
     total_mtd_usd: 0,
+    total_mtd_real_usd: 0,
+    total_mtd_savings_usd: 0,
+    subscription_suggestion: null,
     generated_at: new Date().toISOString(),
   };
 
@@ -61,7 +71,13 @@ async function costSummary() {
     const todayRow = await db('routes_api_spend').where({ day: today }).first();
     const mtdAgg = await db('routes_api_spend')
       .where('day', '>=', monthStart)
-      .sum({ usd: 'est_cost_usd', matrix_calls: 'matrix_calls', rejected: 'rejected_calls' })
+      .sum({
+        usd: 'est_cost_usd',
+        matrix_calls: 'matrix_calls',
+        matrix_elements: 'matrix_elements',
+        route_calls: 'route_calls',
+        rejected: 'rejected_calls',
+      })
       .first();
     const ytdAgg = await db('routes_api_spend')
       .where('day', '>=', yearStart)
@@ -78,6 +94,13 @@ async function costSummary() {
       cacheStats = require('../../services/routesMatrix').getStats?.() || null;
     } catch { /* optional */ }
 
+    // Para piecewise usamos elementos facturables = matrix_elements + route_calls.
+    // Routes API cobra por elementos de matriz (NxM) y por single-route calls;
+    // ambos al mismo precio en el tier essentials. Esto es el volumen que come
+    // free tier y degrada tiers (post-marzo 2025).
+    const mtdBillable = Number(mtdAgg?.matrix_elements || 0) + Number(mtdAgg?.route_calls || 0);
+    const enriched = pricing.enrich(mtdBillable, { tier: 'essentials' });
+
     out.routes_api = {
       today_usd: Number(todayRow?.est_cost_usd || 0),
       today_matrix_calls: Number(todayRow?.matrix_calls || 0),
@@ -85,8 +108,18 @@ async function costSummary() {
       today_rejected_calls: Number(todayRow?.rejected_calls || 0),
       mtd_usd: Number(mtdAgg?.usd || 0),
       mtd_matrix_calls: Number(mtdAgg?.matrix_calls || 0),
+      mtd_matrix_elements: Number(mtdAgg?.matrix_elements || 0),
+      mtd_route_calls: Number(mtdAgg?.route_calls || 0),
+      mtd_billable_elements: mtdBillable,
       mtd_rejected_calls: Number(mtdAgg?.rejected || 0),
       ytd_usd: Number(ytdAgg?.usd || 0),
+      // Real (piecewise) vs naive (linear pessimistic).
+      mtd_real_usd: enriched.est_cost_real_usd,
+      mtd_naive_usd: enriched.est_cost_naive_usd,
+      mtd_savings_usd: enriched.est_savings_vs_naive,
+      free_tier_remaining: enriched.free_tier_remaining,
+      free_tier_limit: 10000,
+      tier_curve: 'essentials',
       mtd_breakdown: breakdown.map((r) => ({
         day: r.day,
         matrix_calls: Number(r.matrix_calls || 0),
@@ -99,6 +132,8 @@ async function costSummary() {
     };
     out.total_today_usd += out.routes_api.today_usd;
     out.total_mtd_usd += out.routes_api.mtd_usd;
+    out.total_mtd_real_usd += enriched.est_cost_real_usd;
+    out.total_mtd_savings_usd += enriched.est_savings_vs_naive;
   }
 
   // -- Geocoding API (mig 092) --
@@ -120,6 +155,8 @@ async function costSummary() {
     const mtdCalls = Number(mtdAgg?.calls || 0);
     const mtdCacheHits = Number(mtdAgg?.cache_hits || 0);
     const total = mtdCalls + mtdCacheHits;
+    // Solo las llamadas a Google (no cache hits) cuentan para el free tier.
+    const enriched = pricing.enrich(mtdCalls, { tier: 'essentials' });
 
     out.geocoding_api = {
       today_usd: Number(todayRow?.est_cost_usd || 0),
@@ -132,6 +169,12 @@ async function costSummary() {
       mtd_rejected: Number(mtdAgg?.rejected || 0),
       mtd_cache_hit_rate: total > 0 ? mtdCacheHits / total : null,
       ytd_usd: Number(ytdAgg?.usd || 0),
+      mtd_real_usd: enriched.est_cost_real_usd,
+      mtd_naive_usd: enriched.est_cost_naive_usd,
+      mtd_savings_usd: enriched.est_savings_vs_naive,
+      free_tier_remaining: enriched.free_tier_remaining,
+      free_tier_limit: 10000,
+      tier_curve: 'essentials',
       mtd_breakdown: breakdown.map((r) => ({
         day: r.day,
         calls: Number(r.geocoding_calls || 0),
@@ -142,6 +185,86 @@ async function costSummary() {
     };
     out.total_today_usd += out.geocoding_api.today_usd;
     out.total_mtd_usd += out.geocoding_api.mtd_usd;
+    out.total_mtd_real_usd += enriched.est_cost_real_usd;
+    out.total_mtd_savings_usd += enriched.est_savings_vs_naive;
+  }
+
+  // -- Route Optimization API (mig 095) --
+  // La tabla existe aunque el feature flag PLAN_USE_OPTIMIZATION_API esté off
+  // (devolverá 0s). Cuando el flag se enciende, routeOptimization.js empieza a
+  // poblar las filas vía UPSERT.
+  if (await tableExists('route_optimization_api_spend')) {
+    const todayRow = await db('route_optimization_api_spend').where({ day: today }).first();
+    const mtdAgg = await db('route_optimization_api_spend')
+      .where('day', '>=', monthStart)
+      .sum({
+        usd: 'est_cost_usd',
+        calls: 'optimization_calls',
+        shipments: 'total_shipments',
+        vehicles: 'total_vehicles',
+        rejected: 'rejected_calls',
+        failed: 'failed_calls',
+      })
+      .first();
+    const ytdAgg = await db('route_optimization_api_spend')
+      .where('day', '>=', yearStart)
+      .sum({ usd: 'est_cost_usd' })
+      .first();
+    const breakdown = await db('route_optimization_api_spend')
+      .where('day', '>=', monthStart)
+      .orderBy('day', 'asc')
+      .select(
+        'day', 'optimization_calls', 'total_vehicles', 'total_shipments',
+        'est_cost_usd', 'rejected_calls', 'failed_calls',
+      );
+
+    out.route_optimization_api = {
+      today_usd: Number(todayRow?.est_cost_usd || 0),
+      today_calls: Number(todayRow?.optimization_calls || 0),
+      today_shipments: Number(todayRow?.total_shipments || 0),
+      today_vehicles: Number(todayRow?.total_vehicles || 0),
+      mtd_usd: Number(mtdAgg?.usd || 0),
+      mtd_calls: Number(mtdAgg?.calls || 0),
+      mtd_shipments: Number(mtdAgg?.shipments || 0),
+      mtd_vehicles: Number(mtdAgg?.vehicles || 0),
+      mtd_rejected: Number(mtdAgg?.rejected || 0),
+      mtd_failed: Number(mtdAgg?.failed || 0),
+      ytd_usd: Number(ytdAgg?.usd || 0),
+      usd_per_shipment: pricing.ROUTE_OPTIMIZATION_USD_PER_SHIPMENT,
+      mtd_breakdown: breakdown.map((r) => ({
+        day: r.day,
+        calls: Number(r.optimization_calls || 0),
+        vehicles: Number(r.total_vehicles || 0),
+        shipments: Number(r.total_shipments || 0),
+        usd: Number(r.est_cost_usd || 0),
+        rejected: Number(r.rejected_calls || 0),
+        failed: Number(r.failed_calls || 0),
+      })),
+    };
+    out.total_today_usd += out.route_optimization_api.today_usd;
+    out.total_mtd_usd += out.route_optimization_api.mtd_usd;
+    // No piecewise — la SKU es lineal $0.0013/shipment; real == naive.
+    out.total_mtd_real_usd += out.route_optimization_api.mtd_usd;
+  }
+
+  // Subscription suggestion — si el naive MTD ya cruzó el umbral, sugerimos
+  // negociar una suscripción / tarifa enterprise. Calculamos break-even como
+  // el volumen al cual la suscripción Pro mensual ($1200) se paga sola contra
+  // el ritmo lineal — el dashboard lo usa para mostrar "a tu ritmo gastarías
+  // $X/mes, plan Pro ahorraría $Y, break-even Z elementos".
+  if (out.total_mtd_usd >= SUBSCRIPTION_SUGGEST_THRESHOLD_USD) {
+    out.subscription_suggestion = {
+      reason: 'mtd_above_threshold',
+      threshold_usd: SUBSCRIPTION_SUGGEST_THRESHOLD_USD,
+      current_mtd_naive_usd: out.total_mtd_usd,
+      estimated_real_mtd_usd: out.total_mtd_real_usd,
+      potential_savings_usd: out.total_mtd_savings_usd,
+      // El usuario validará con Google la oferta concreta; estos valores son
+      // de referencia para el widget. Cambian sin migration.
+      ref_plan: 'pro_1200',
+      break_even_hint:
+        'Break-even contra plan Pro hipotético depende del volumen real y la tasa negociada — usa esto como prompt para abrir conversación con tu account manager.',
+    };
   }
 
   return out;
