@@ -20,6 +20,45 @@ const { encode: geohashEncode } = require('../utils/geohash');
 
 const GEOCODE_ENDPOINT = 'https://maps.googleapis.com/maps/api/geocode/json';
 
+// Pricing constant for the BlackPrint cost-summary surface. First 100k tier.
+// If usage crosses the boundary, BP can recompute from the row counts.
+const GEOCODING_USD_PER_CALL = 0.005;
+
+// Best-effort UPSERT into geocoding_api_spend (mig 092). Same daily-row
+// pattern as routes_api_spend (mig 061). Failures are swallowed — observability
+// must never block a user-facing geocode.
+async function incrementGeocodingSpend({ cacheHit = false, geocodingCall = false, rejected = false } = {}) {
+  const day = new Date().toISOString().slice(0, 10);
+  const cost = geocodingCall ? GEOCODING_USD_PER_CALL : 0;
+  try {
+    await db.raw(`
+      INSERT INTO geocoding_api_spend
+        (day, geocoding_calls, cache_hits, rejected_calls, est_cost_usd,
+         first_call_at, last_call_at)
+      VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+      ON CONFLICT (day) DO UPDATE SET
+        geocoding_calls = geocoding_api_spend.geocoding_calls + EXCLUDED.geocoding_calls,
+        cache_hits      = geocoding_api_spend.cache_hits      + EXCLUDED.cache_hits,
+        rejected_calls  = geocoding_api_spend.rejected_calls  + EXCLUDED.rejected_calls,
+        est_cost_usd    = geocoding_api_spend.est_cost_usd    + EXCLUDED.est_cost_usd,
+        last_call_at    = NOW()
+    `, [
+      day,
+      geocodingCall ? 1 : 0,
+      cacheHit ? 1 : 0,
+      rejected ? 1 : 0,
+      cost,
+    ]);
+  } catch (err) {
+    // Table may not exist on environments that haven't applied mig 092 yet.
+    // Best-effort: warn once per process via a Set, but do not throw.
+    if (!incrementGeocodingSpend._warned) {
+      console.warn('[geocoder] spend tracking failed: ' + err.message);
+      incrementGeocodingSpend._warned = true;
+    }
+  }
+}
+
 function normalizeAddress(addr) {
   if (!addr) return '';
   return String(addr)
@@ -38,6 +77,7 @@ async function geocodeOne(address) {
     db('geocode_cache').where({ normalized_address: norm })
       .increment('hits', 1)
       .catch(() => { /* best-effort */ });
+    incrementGeocodingSpend({ cacheHit: true });
     return { lat: Number(cached.lat), lng: Number(cached.lng), source: 'cache', formatted: cached.formatted_address };
   }
 
@@ -49,15 +89,25 @@ async function geocodeOne(address) {
   url.searchParams.set('components', 'country:MX');
   url.searchParams.set('key', apiKey);
   const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`Geocoder HTTP ${res.status}`);
+  if (!res.ok) {
+    incrementGeocodingSpend({ rejected: true });
+    throw new Error(`Geocoder HTTP ${res.status}`);
+  }
   const json = await res.json();
   if (json.status !== 'OK' || !json.results?.length) {
+    // status NOT_FOUND / ZERO_RESULTS counts as a Google call (we did query)
+    // but didn't get a useful answer. Track as both call AND rejected so the
+    // BP dashboard can show effective hit rate.
+    incrementGeocodingSpend({ geocodingCall: true, rejected: true });
     return null;
   }
   const r = json.results[0];
   const lat = r.geometry?.location?.lat;
   const lng = r.geometry?.location?.lng;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    incrementGeocodingSpend({ geocodingCall: true, rejected: true });
+    return null;
+  }
   await db('geocode_cache')
     .insert({
       normalized_address: norm,
@@ -66,6 +116,7 @@ async function geocodeOne(address) {
       formatted_address: r.formatted_address,
     })
     .onConflict('normalized_address').merge();
+  incrementGeocodingSpend({ geocodingCall: true });
   return { lat, lng, source: 'google', formatted: r.formatted_address };
 }
 
@@ -117,4 +168,4 @@ async function backfillUsersHome({ limit = 100 } = {}) {
   return { processed, geocoded, missed };
 }
 
-module.exports = { geocodeOne, backfillUsersHome, normalizeAddress };
+module.exports = { geocodeOne, backfillUsersHome, normalizeAddress, incrementGeocodingSpend };

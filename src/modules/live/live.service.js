@@ -30,6 +30,14 @@ const recent = []; // local cache for cheap replay
 let outboxAvailable = null; // null = unknown, true/false after first probe
 let listenerStarted = false;
 
+// In-memory subscription counter — surfaced to BlackPrint usage-metrics so we
+// can see how many SSE connections are alive on this Vercel instance. The
+// counter is per-process; in a multi-instance Vercel deployment the BP
+// dashboard sums what each instance reports if/when we add fan-in. For now
+// it's a useful local indicator.
+let activeSubscriptions = 0;
+const liveStartedAt = new Date().toISOString();
+
 async function probeOutbox() {
   try {
     await db.raw("SELECT to_regclass('live_event_outbox') AS t");
@@ -157,7 +165,25 @@ async function subscribe({ userId, isGlobal, lastEventId }, onEvent) {
     if (allowed(ev, isGlobal, manageeIds, userId)) onEvent(ev);
   };
   bus.on('event', handler);
-  return () => bus.off('event', handler);
+  activeSubscriptions += 1;
+  let unsubscribed = false;
+  return () => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+    activeSubscriptions = Math.max(0, activeSubscriptions - 1);
+    bus.off('event', handler);
+  };
+}
+
+function getMetrics() {
+  return {
+    active_subscriptions: activeSubscriptions,
+    recent_buffer_size: recent.length,
+    recent_buffer_max: RECENT_BUFFER_MAX,
+    outbox_available: outboxAvailable === true,
+    listener_started: listenerStarted,
+    started_at: liveStartedAt,
+  };
 }
 
 function allowed(ev, isGlobal, manageeIds, userId) {
@@ -171,4 +197,5 @@ function allowed(ev, isGlobal, manageeIds, userId) {
 module.exports = {
   publish,
   subscribe,
+  getMetrics,
 };

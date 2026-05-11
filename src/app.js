@@ -9,6 +9,7 @@ const errorHandler = require('./middleware/errorHandler');
 const { requestContextMiddleware } = require('./middleware/requestContext');
 const softAuth = require('./middleware/softAuth');
 const demoReadonly = require('./middleware/demoReadonly');
+const denyBlackprintWrites = require('./middleware/denyBlackprintWrites');
 const sanitizeLogUrl = require('./middleware/sanitizeLogUrl');
 const dbRateLimit = require('./middleware/rateLimitDb');
 
@@ -42,6 +43,7 @@ const invitationsRoutes = require('./modules/invitations/invitations.routes');
 const liveRoutes = require('./modules/live/live.routes');
 const adminRoutes = require('./modules/admin/admin.routes');
 const adminCockpitRoutes = require('./modules/admin/cockpit.routes');
+const blackprintRoutes = require('./modules/blackprint/blackprint.routes');
 
 // Boot-time safety check: refuse to start under unsafe configs.
 // The literal expression for SCOPE_FILTERING_ENABLED stays inline so log greps
@@ -179,6 +181,13 @@ app.use('/api/', apiLimiter);
 // un payload sintético en lugar de tocar la BD. Lecturas pasan intactas.
 app.use('/api/', demoReadonly);
 
+// BlackPrint admin platform-wide read-only enforcement (defense in depth).
+// Per-route adminOnly gates already reject blackprint_admin from Marzam-owned
+// writes, but this catches any new mutating route that forgets to gate.
+// Whitelist: /api/auth/{login,logout,me,sse-ticket}, /api/admin/cron/* — see
+// src/middleware/denyBlackprintWrites.js for the canonical list.
+app.use('/api/', denyBlackprintWrites);
+
 app.use('/api/auth', authRoutes);
 app.use('/api/pharmacies', pharmacyRoutes);
 app.use('/api/assignments', assignmentRoutes);
@@ -209,6 +218,7 @@ app.use('/api/admin/invitations', invitationsRoutes);
 app.use('/api/live', liveRoutes);
 app.use('/api/admin/cockpit', adminCockpitRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/blackprint', blackprintRoutes);
 
 app.get('/api/health', async (_req, res) => {
   const result = {
@@ -331,6 +341,7 @@ app.get('/manager-live', (_req, res) => res.sendFile(path.join(__dirname, 'publi
 app.get('/rep', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'rep.html')));
 app.get('/app', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'app.html')));
 app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+app.get('/blackprint', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'blackprint.html')));
 app.get('/activate.html', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'activate.html')));
 app.get('/reset-password.html', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'reset-password.html')));
 
