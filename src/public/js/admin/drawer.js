@@ -1165,5 +1165,20 @@
   }
 
   // ── exposed API ─────────────────────────────────────────────────
-  window.AdminDrawer = { init, switchTo };
+  // registerView lets a sibling script (e.g. /js/blackprint/extra-views.js)
+  // attach additional drawer panels without forking this file. Helpers are
+  // exposed so registered views can render with the same look-and-feel as
+  // the built-in panels.
+  window.AdminDrawer = {
+    init,
+    switchTo,
+    registerView(key, fn) {
+      if (typeof key !== 'string' || typeof fn !== 'function') return;
+      VIEWS[key] = fn;
+    },
+    helpers: {
+      escapeHtml, formatNum, formatCurrency, formatPct, timeAgo,
+      exportButton, rangeQS, pushChart, destroyCharts,
+    },
+  };
 })();

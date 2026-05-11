@@ -118,9 +118,14 @@
     APP.user = user;
     APP.role = normalizeRole(user.role);
 
-    // Admin tiene una sección dedicada (/admin); si llegó aquí, redirigir
+    // Admin tiene una sección dedicada (/admin); si llegó aquí, redirigir.
+    // BlackPrint admin tiene su propio dashboard (/blackprint).
     if (APP.role === 'admin') {
       location.href = '/admin';
+      return;
+    }
+    if (APP.role === 'blackprint_admin') {
+      location.href = '/blackprint';
       return;
     }
 

@@ -147,10 +147,15 @@
       } catch { /* keep hidden */ }
     })();
 
-    // Landing route depends on role: admin → /admin, everyone else → /app
+    // Landing route depends on role:
+    //   blackprint_admin → /blackprint   (BlackPrint platform team)
+    //   admin / national_admin → /admin  (Marzam client admin)
+    //   everyone else → /app             (rep / supervisor / etc.)
     function landingFor(user) {
       const role = String(user?.role || '').toLowerCase();
-      return (role === 'admin' || role === 'national_admin') ? '/admin' : '/app';
+      if (role === 'blackprint_admin') return '/blackprint';
+      if (role === 'admin' || role === 'national_admin') return '/admin';
+      return '/app';
     }
 
     // If already authenticated, jump to landing
