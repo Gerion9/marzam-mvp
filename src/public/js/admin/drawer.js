@@ -975,24 +975,32 @@
       }
       wrap.innerHTML = `<table class="table">
         <thead><tr>
-          <th>Nombre</th><th>Email</th><th>Rol</th><th>Clave</th><th>Estado</th><th>Última sesión</th><th></th>
+          <th>Nombre</th><th>Email</th><th>Rol</th><th>Clave</th><th>Skills</th><th>Estado</th><th>Última sesión</th><th></th>
         </tr></thead>
-        <tbody>${rows.map((u) => `<tr>
-          <td class="table-strong">${escapeHtml(u.full_name || '—')}</td>
-          <td class="muted">${escapeHtml(u.email || '—')}</td>
-          <td><span class="badge">${escapeHtml(ROLE_LABEL_ES[u.role] || u.role || '—')}</span></td>
-          <td class="muted">${escapeHtml(u.employee_code || '—')}</td>
-          <td>${u.is_active === false
-            ? '<span class="badge badge-neg">Inactivo</span>'
-            : '<span class="badge badge-pos">Activo</span>'}</td>
-          <td class="muted">${u.last_login_at ? timeAgo(u.last_login_at) : 'nunca'}</td>
-          <td style="text-align:right">
-            <button class="btn-export" data-user-action="reset" data-user-id="${escapeHtml(u.id)}" title="Resetear contraseña">↻</button>
-            ${u.is_active === false
-              ? '<span class="muted" style="font-size:10px">desactivado</span>'
-              : `<button class="btn-export" data-user-action="deactivate" data-user-id="${escapeHtml(u.id)}" data-user-name="${escapeHtml(u.full_name || u.email)}" title="Desactivar usuario" style="color:#b91c1c">✕</button>`}
-          </td>
-        </tr>`).join('')}</tbody>
+        <tbody>${rows.map((u) => {
+          const skills = Array.isArray(u.user_skills) ? u.user_skills : [];
+          const skillsCell = skills.length === 0
+            ? '<span class="muted" style="font-size:10px">— sin restricción —</span>'
+            : skills.map((s) => `<span class="badge" style="margin-right:2px;font-size:9px">${escapeHtml(s)}</span>`).join('');
+          return `<tr>
+            <td class="table-strong">${escapeHtml(u.full_name || '—')}</td>
+            <td class="muted">${escapeHtml(u.email || '—')}</td>
+            <td><span class="badge">${escapeHtml(ROLE_LABEL_ES[u.role] || u.role || '—')}</span></td>
+            <td class="muted">${escapeHtml(u.employee_code || '—')}</td>
+            <td>${skillsCell}</td>
+            <td>${u.is_active === false
+              ? '<span class="badge badge-neg">Inactivo</span>'
+              : '<span class="badge badge-pos">Activo</span>'}</td>
+            <td class="muted">${u.last_login_at ? timeAgo(u.last_login_at) : 'nunca'}</td>
+            <td style="text-align:right;white-space:nowrap">
+              <button class="btn-export" data-user-action="skills" data-user-id="${escapeHtml(u.id)}" data-user-name="${escapeHtml(u.full_name || u.email)}" title="Editar skills">⚡</button>
+              <button class="btn-export" data-user-action="reset" data-user-id="${escapeHtml(u.id)}" title="Resetear contraseña">↻</button>
+              ${u.is_active === false
+                ? '<span class="muted" style="font-size:10px">desactivado</span>'
+                : `<button class="btn-export" data-user-action="deactivate" data-user-id="${escapeHtml(u.id)}" data-user-name="${escapeHtml(u.full_name || u.email)}" title="Desactivar usuario" style="color:#b91c1c">✕</button>`}
+            </td>
+          </tr>`;
+        }).join('')}</tbody>
       </table>`;
       // Wire row actions.
       wrap.querySelectorAll('[data-user-action]').forEach((btn) => {
@@ -1064,7 +1072,72 @@
       } catch (err) {
         alert('No se pudo desactivar: ' + (err?.error || err?.message || 'error'));
       }
+    } else if (action === 'skills') {
+      openSkillsModal(id, btn.dataset.userName || '');
     }
+  }
+
+  async function openSkillsModal(userId, userName) {
+    let catalog = [];
+    try {
+      const r = await API.get('/users/skills/catalog');
+      catalog = Array.isArray(r?.skills) ? r.skills : [];
+    } catch (err) {
+      alert('No se pudo cargar el catálogo de skills: ' + (err?.error || err?.message || 'error'));
+      return;
+    }
+    // Load current state. The /users list already brought user_skills, but
+    // we re-fetch a single row to guarantee fresh state (admin may have
+    // edited from another tab seconds before).
+    let current = [];
+    try {
+      const all = await API.get('/users');
+      const u = (Array.isArray(all) ? all : []).find((x) => x.id === userId);
+      current = Array.isArray(u?.user_skills) ? u.user_skills : [];
+    } catch { /* keep [] */ }
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:24px;';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:12px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.25);font-family:Inter,sans-serif;padding:20px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:6px">Editar skills · ${escapeHtml(userName)}</div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:14px">
+          Selecciona las skills que el usuario puede ejecutar en campo. Sin checkboxes marcados =
+          el usuario es elegible para cualquier farmacia (sin restricción).
+        </div>
+        <div id="skills-modal-list" style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="skills-modal-cancel" class="btn-export">Cancelar</button>
+          <button id="skills-modal-save" class="btn-export" style="background:#0f766e;color:#fff;border-color:#0f766e">Guardar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const list = overlay.querySelector('#skills-modal-list');
+    list.innerHTML = catalog.map((s) => `
+      <label style="display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer">
+        <input type="checkbox" value="${escapeHtml(s.code)}" ${current.includes(s.code) ? 'checked' : ''}>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:13px">${escapeHtml(s.label)}</div>
+          <div style="font-size:11px;color:#64748b">${escapeHtml(s.description)}</div>
+        </div>
+      </label>
+    `).join('');
+
+    overlay.querySelector('#skills-modal-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#skills-modal-save').addEventListener('click', async () => {
+      const picked = [...list.querySelectorAll('input[type=checkbox]:checked')].map((el) => el.value);
+      try {
+        await API.put(`/users/${userId}/skills`, { user_skills: picked });
+        overlay.remove();
+        switchTo('users'); // reload to refresh the row
+      } catch (err) {
+        alert('No se pudo guardar: ' + (err?.error || err?.message || 'error'));
+      }
+    });
+    overlay.addEventListener('click', (ev) => {
+      if (ev.target === overlay) overlay.remove();
+    });
   }
 
   function openCreateUserModal() {

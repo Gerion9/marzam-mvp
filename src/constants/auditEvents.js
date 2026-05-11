@@ -52,6 +52,8 @@ const AUDIT_EVENTS = Object.freeze({
   USER_DEACTIVATED: 'user.deactivated',
   USER_PASSWORD_RESET: 'user.password_reset',
   USER_HOME_UPDATED: 'user.home_updated',
+  USER_SKILLS_SELF_UPDATED: 'user.skills_self_updated',
+  USER_SKILLS_UPDATED_BY_ADMIN: 'user.skills_updated_by_admin',
 
   // ── Leads ────────────────────────────────────────────────────────────────
   LEAD_UPDATED: 'lead.updated',
