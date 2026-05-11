@@ -23,7 +23,23 @@
  *   node scripts/backfill-visit-reports-client-state.js [--dry-run] [--batch=5000] [--max-rows=N]
  */
 
-const db = require('../src/config/database');
+// Use DATABASE_URL directly so this script can target QA or prod cleanly.
+// `src/config/database.js` uses the development env which falls back to DB_HOST
+// from .env when DATABASE_URL_POOLED is a placeholder — that ignores the
+// caller's DATABASE_URL override and routes the script at the wrong DB.
+require('dotenv').config();
+const knex = require('knex');
+const URL = process.env.DATABASE_URL;
+if (!URL || /[<>]/.test(URL)) {
+  console.error('[backfill] DATABASE_URL must be set to a real connection string (not a placeholder).');
+  process.exit(1);
+}
+const db = knex({
+  client: 'pg',
+  connection: { connectionString: URL },
+  searchPath: ['marzam_app', 'public'],
+  pool: { min: 0, max: 2 },
+});
 
 async function main() {
   const args = process.argv.slice(2);
