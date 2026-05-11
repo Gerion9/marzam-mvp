@@ -264,6 +264,22 @@ async function costEstimate(req, res, next) {
       routeStartHHMM,
       actorIsGlobal: !!req.user.is_global,
     });
+    // Defensa en profundidad: el monto USD del estimado (est_cost_usd) y los
+    // detalles del presupuesto Routes API (spent/budget/remaining_usd) son
+    // información operativa de BlackPrint, NO del cliente Marzam. Solo el
+    // blackprint_admin ve esos números crudos; managers Marzam (incluido el
+    // admin de Marzam) reciben can_afford / matrix_elements / severity sin USD.
+    const role = require('../../constants/roles').normalizeRole(req.user?.role);
+    if (role !== 'blackprint_admin') {
+      if (result && typeof result === 'object') {
+        delete result.est_cost_usd;
+        if (result.budget && typeof result.budget === 'object') {
+          delete result.budget.spent_usd;
+          delete result.budget.budget_usd;
+          delete result.budget.remaining_usd;
+        }
+      }
+    }
     res.json(result);
   } catch (err) { next(err); }
 }

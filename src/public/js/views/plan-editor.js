@@ -1773,9 +1773,20 @@
         return 'emerald';
       },
       costChipText() {
+        // El backend solo devuelve `est_cost_usd` cuando el caller es
+        // blackprint_admin. Para managers Marzam (incluido admin) el USD
+        // viene removido — mostramos `matrix_elements` (cantidad de cómputo
+        // billable) que es información operativa neutra. Esto se alinea con
+        // el chip de budget: cero números financieros para Marzam.
         const c = this.costEstimate;
-        if (!c || c.est_cost_usd == null) return 'Costo plan: —';
-        return `Costo plan: ~$${Number(c.est_cost_usd).toFixed(4)}`;
+        if (!c) return 'Costo plan: —';
+        if (c.est_cost_usd != null) {
+          return `Costo plan: ~$${Number(c.est_cost_usd).toFixed(4)}`;
+        }
+        if (c.matrix_elements != null) {
+          return `Costo plan: ${Number(c.matrix_elements).toLocaleString()} elementos`;
+        }
+        return 'Costo plan: —';
       },
       // Filtra el scope de reps por skill seleccionada antes de generar. El
       // backend NO recibe el skillFilter como argumento hoy — el resultado es

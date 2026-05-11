@@ -736,9 +736,14 @@
   VIEWS.system = async function renderSystem() {
     const data = await API.get('/admin/cockpit/system');
     const ra = data.routes_api || {};
+    // El backend solo devuelve today_usd / mtd_usd / daily_cap_usd al
+    // blackprint_admin. Para admin Marzam mostramos uso operativo (matrix
+    // calls + % del cap) sin dólares.
+    const hasUsd = ra.today_usd != null || ra.mtd_usd != null;
 
     body.innerHTML = `
       <div class="drawer-grid-3" style="margin-bottom:24px">
+        ${hasUsd ? `
         <div class="stat-mini">
           <div class="stat-mini-label">Routes API hoy</div>
           <div class="stat-mini-value numeral">$${(ra.today_usd || 0).toFixed(2)}</div>
@@ -749,6 +754,18 @@
           <div class="stat-mini-value numeral">$${(ra.mtd_usd || 0).toFixed(2)}</div>
           <div class="stat-mini-foot">${formatNum(ra.today_matrix_calls)} matrix calls hoy</div>
         </div>
+        ` : `
+        <div class="stat-mini">
+          <div class="stat-mini-label">Routes API hoy</div>
+          <div class="stat-mini-value numeral">${ra.pct_used == null ? '—' : ra.pct_used + '%'}</div>
+          <div class="stat-mini-foot">${formatNum(ra.today_matrix_calls)} matrix calls hoy</div>
+        </div>
+        <div class="stat-mini">
+          <div class="stat-mini-label">Rechazos hoy</div>
+          <div class="stat-mini-value numeral">${formatNum(ra.today_rejected_calls)}</div>
+          <div class="stat-mini-foot">llamadas bloqueadas por cap</div>
+        </div>
+        `}
         <div class="stat-mini">
           <div class="stat-mini-label">Sesiones activas</div>
           <div class="stat-mini-value numeral">${formatNum(data.active_sessions)}</div>
