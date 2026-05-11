@@ -22,4 +22,9 @@ router.get('/system-health',     ...blackprintOnly, ctrl.systemHealth);
 router.get('/usage-metrics',     ...blackprintOnly, ctrl.usageMetrics);
 router.get('/directory',         ...blackprintOnly, ctrl.directory);
 
+// Cost simulator (what-if scenarios). GET = preset por defecto; POST = body
+// con parámetros custom. Pure compute — no escribe nada.
+router.get('/cost-simulate',     ...blackprintOnly, ctrl.simulateCost);
+router.post('/cost-simulate',    ...blackprintOnly, ctrl.simulateCost);
+
 module.exports = router;

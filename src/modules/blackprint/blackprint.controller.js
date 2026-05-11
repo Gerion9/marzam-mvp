@@ -69,4 +69,20 @@ function directory(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { costSummary, geocodingQuality, systemHealth, usageMetrics, directory };
+/**
+ * Cost simulator — POST acepta params { preset?, reps, ...} en el body para
+ * que el FE pueda pasarse muchos parámetros sin codificarlos en query string.
+ * GET sin body devuelve el preset por defecto (sucursal_full) para hacer
+ * fácil un sanity-check con curl. No toca DB ni red — es 100% determinista.
+ */
+function simulateCost(req, res, next) {
+  try {
+    const params = req.method === 'POST' ? (req.body || {}) : { preset: 'sucursal_full' };
+    const out = service.simulateCost(params);
+    res.json(out);
+  } catch (err) { next(err); }
+}
+
+module.exports = {
+  costSummary, geocodingQuality, systemHealth, usageMetrics, directory, simulateCost,
+};

@@ -28,6 +28,7 @@
 const db = require('../../config/database');
 const accessDirectory = require('../../services/accessDirectory');
 const pricing = require('../../services/pricing');
+const costSimulator = require('../../services/costSimulator');
 
 // Threshold para sugerir suscripción / negociar tarifa enterprise. Si el MTD
 // pesimista (naive) supera este corte, el dashboard muestra un widget de
@@ -539,10 +540,33 @@ function directory() {
   };
 }
 
+/**
+ * Cost simulator — what-if calculator para presupuestar volúmenes hipotéticos
+ * sin tocar el spend real. Recibe los parámetros del cliente (reps,
+ * working_days, stops/rep, optimizer mode, etc.) o un nombre de preset
+ * documentado y devuelve el desglose por API + grand total + comparativa
+ * contra planes de suscripción + recomendación textual.
+ */
+function simulateCost(params = {}) {
+  // Si viene un `preset` válido, lo usamos como base; el caller puede
+  // sobrescribir campos individuales (útil para "preset + reps custom").
+  let inputs = params;
+  if (params.preset && costSimulator.PRESETS[params.preset]) {
+    inputs = { ...costSimulator.PRESETS[params.preset], ...params };
+    delete inputs.preset;
+  }
+  return {
+    presets: costSimulator.PRESETS,
+    subscriptions: costSimulator.SUBSCRIPTIONS,
+    result: costSimulator.simulateMonth(inputs),
+  };
+}
+
 module.exports = {
   costSummary,
   geocodingQuality,
   systemHealth,
   usageMetrics,
   directory,
+  simulateCost,
 };
