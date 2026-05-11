@@ -100,9 +100,15 @@
   // pageshow fires on bfcache restores (event.persisted=true) AND on normal
   // loads. We re-check auth and bounce to /login if the token is gone.
   // ──────────────────────────────────────────────────────────
-  window.addEventListener('pageshow', () => {
+  window.addEventListener('pageshow', (event) => {
     if (!localStorage.getItem('token') || !API.user()) {
       location.replace('/');
+      return;
+    }
+    // bfcache restore: the tour engine may have an overlay still mounted in the
+    // DOM but its JS state is fresh — tear down to avoid orphan UI.
+    if (event.persisted && window.MarzamTour) {
+      try { window.MarzamTour.stop({ silent: true }); } catch (e) { /* ignore */ }
     }
   });
 
@@ -196,6 +202,44 @@
         }
       }
     });
+
+    // ── Tour system wireup ──────────────────────────────────────
+    // Three entry points: '?' button (topbar, both viewports), '≡' rayitas
+    // (mobile-only, reinforces discoverability), and "Tutorial y ayuda"
+    // item in the user menu. All three open the help center; the engine
+    // decides whether to resume an in-progress tour or show the index.
+    const openHelpCenter = () => {
+      if (window.TourHelp && typeof window.TourHelp.open === 'function') {
+        window.TourHelp.open();
+      } else {
+        // Help center JS hasn't loaded — degrade gracefully so the click
+        // doesn't feel broken. Toast tells the user to refresh.
+        window.MarzamToast?.show('El tutorial aún se está cargando, intenta de nuevo en un momento.', 'info');
+      }
+    };
+    document.getElementById('tour-help-btn')?.addEventListener('click', openHelpCenter);
+    document.getElementById('tour-mobile-menu')?.addEventListener('click', openHelpCenter);
+    document.getElementById('tour-help-menu-item')?.addEventListener('click', () => {
+      // Close the user-menu dropdown before opening the help center so the
+      // dropdown doesn't sit on top of the drawer.
+      document.getElementById('user-menu')?.classList.add('hidden');
+      openHelpCenter();
+    });
+
+    // Boot the tour engine. It hydrates state (localStorage + backend) and,
+    // if first-time, shows the welcome modal autonomously. Wrapped in a
+    // try so a tour bug never blocks the rest of the app from loading.
+    if (window.MarzamTour && typeof window.MarzamTour.boot === 'function') {
+      try {
+        await window.MarzamTour.boot({
+          user: APP.user,
+          role: APP.role,
+          isDemo: APP.isDemo,
+        });
+      } catch (err) {
+        console.warn('[app] Tour boot failed:', err);
+      }
+    }
   });
 
   // ──────────────────────────────────────────────────────────

@@ -15,6 +15,11 @@
   --z-overlay: 50;
   --z-toast: 100;
   --z-modal: 200;
+  /* Tour overlay sits above modals so the spotlight can highlight an open
+     modal (e.g. the alta-de-farmacia wizard). The callout is one layer
+     above the spotlight so the dim mask never crosses it. */
+  --z-tour-spotlight: 240;
+  --z-tour: 250;
 
   --space-xs: 4px;
   --space-sm: 8px;

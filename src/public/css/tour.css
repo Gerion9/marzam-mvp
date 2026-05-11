@@ -1,0 +1,537 @@
+/* =============================================================
+   Tour overlay, spotlight, callout, and help center.
+   Vanilla CSS — no Tailwind dependency, so the engine works even
+   if the Tailwind CDN is slow. Tokens come from app.css :root.
+   ============================================================= */
+
+/* ── Root container is hidden by default; engine flips it on. */
+#tour-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--z-tour-spotlight, 240);
+}
+#tour-root:not(.hidden) {
+  pointer-events: none; /* overlay handles its own; callout/sheet have own */
+}
+
+/* ── Backdrop / spotlight mask ─────────────────────────────────
+   The overlay covers the whole viewport with a dim color. The
+   spotlight cutout is implemented with clip-path: a rectangle
+   covering the viewport, minus the target rect. Auto-flip back
+   to a flat overlay (no cutout) for kind=modal steps. */
+.tour-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.62);
+  pointer-events: auto;
+  z-index: var(--z-tour-spotlight, 240);
+  /* clip-path is set inline by the engine per-step. Default: full overlay. */
+  transition: background-color 240ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.tour-overlay--no-cutout {
+  /* For kind=modal steps where there's no spotlight target. */
+}
+
+/* iOS Safari < 14 fallback — drop the rounded inset, just full overlay
+   without cutout. Degraded but functional. */
+@supports not (clip-path: inset(0 round 12px)) {
+  .tour-overlay {
+    /* No cutout — the callout still appears, just no highlighted target. */
+    clip-path: none !important;
+  }
+}
+
+/* ── Spotlight ring — drawn separately so it can have its own
+   border / glow without fighting the clip-path mask. */
+.tour-spotlight-ring {
+  position: fixed;
+  border: 2px solid #fff;
+  border-radius: 14px;
+  box-shadow: 0 0 0 4px rgba(229, 115, 10, 0.45),
+              0 0 24px rgba(229, 115, 10, 0.35);
+  pointer-events: none;
+  z-index: var(--z-tour-spotlight, 240);
+  transition: top 240ms cubic-bezier(0.175, 0.885, 0.32, 1.275),
+              left 240ms cubic-bezier(0.175, 0.885, 0.32, 1.275),
+              width 240ms cubic-bezier(0.175, 0.885, 0.32, 1.275),
+              height 240ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* ── Callout (the floating tooltip card) ─────────────────────── */
+.tour-callout {
+  position: fixed;
+  z-index: var(--z-tour, 250);
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 16px;
+  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.35),
+              0 8px 16px -4px rgba(0, 0, 0, 0.18);
+  max-width: 380px;
+  width: calc(100% - 32px);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Smooth show/hide */
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+  transition: opacity 200ms ease, transform 200ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.tour-callout.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.tour-callout-header {
+  padding: 16px 18px 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.tour-callout-step-pill {
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #1b365d, #2563eb);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.tour-callout-title {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.25;
+  margin: 0;
+}
+.tour-callout-close {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.tour-callout-close:hover { background: #f1f5f9; color: #475569; }
+.tour-callout-close:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+
+.tour-callout-body {
+  padding: 6px 18px 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #334155;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.tour-callout-body p { margin: 0 0 10px; }
+.tour-callout-body p:last-child { margin-bottom: 0; }
+.tour-callout-body strong { color: #0f172a; font-weight: 700; }
+.tour-callout-body ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.tour-callout-body li { margin-bottom: 4px; }
+
+.tour-callout-footer {
+  padding: 12px 18px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-top: 1px solid #f1f5f9;
+}
+.tour-callout-footer .spacer { flex: 1; }
+
+.tour-btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  border: 0;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 100ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tour-btn:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.tour-btn:active { transform: translateY(1px); }
+.tour-btn-primary {
+  background: linear-gradient(135deg, #1b365d, #2563eb);
+  color: #fff;
+}
+.tour-btn-primary:hover { background: linear-gradient(135deg, #152845, #1e40af); }
+.tour-btn-secondary {
+  background: #f1f5f9;
+  color: #334155;
+}
+.tour-btn-secondary:hover { background: #e2e8f0; }
+.tour-btn-ghost {
+  background: transparent;
+  color: #64748b;
+  padding: 10px 12px;
+}
+.tour-btn-ghost:hover { color: #0f172a; background: #f8fafc; }
+
+/* ── Arrow ─────────────────────────────────────────────────────
+   Drawn as an absolutely-positioned div with one rotated face;
+   the engine sets data-placement so we point the arrow correctly. */
+.tour-callout-arrow {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  transform: rotate(45deg);
+  z-index: -1;
+}
+.tour-callout[data-placement="top"] .tour-callout-arrow {
+  bottom: -7px;
+  left: 50%;
+  margin-left: -7px;
+  box-shadow: 4px 4px 8px -2px rgba(0, 0, 0, 0.15);
+}
+.tour-callout[data-placement="bottom"] .tour-callout-arrow {
+  top: -7px;
+  left: 50%;
+  margin-left: -7px;
+  box-shadow: -2px -2px 6px -2px rgba(0, 0, 0, 0.1);
+}
+.tour-callout[data-placement="left"] .tour-callout-arrow {
+  right: -7px;
+  top: 50%;
+  margin-top: -7px;
+  box-shadow: 4px -2px 6px -2px rgba(0, 0, 0, 0.12);
+}
+.tour-callout[data-placement="right"] .tour-callout-arrow {
+  left: -7px;
+  top: 50%;
+  margin-top: -7px;
+  box-shadow: -4px 2px 6px -2px rgba(0, 0, 0, 0.12);
+}
+/* Modal kind: no arrow, callout is centered. */
+.tour-callout[data-placement="center"] .tour-callout-arrow { display: none; }
+.tour-callout[data-placement="center"] {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.96);
+}
+.tour-callout[data-placement="center"].is-visible {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* ── Mobile callout — pin to bottom safe area ────────────────── */
+@media (max-width: 767px) {
+  .tour-callout {
+    /* Override engine's computed top/left/right when on mobile. We use
+       inset/bottom/left/right so the engine can opt into this layout by
+       setting data-mobile-pinned="true" on the callout. */
+  }
+  .tour-callout[data-mobile-pinned="true"] {
+    top: auto !important;
+    left: 12px !important;
+    right: 12px !important;
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+    width: auto;
+    /* Hide arrow when pinned — there's no clear pointing target. */
+  }
+  .tour-callout[data-mobile-pinned="true"] .tour-callout-arrow { display: none; }
+
+  .tour-callout-body {
+    max-height: 38dvh;
+  }
+}
+
+/* ── Hierarchy diagram (special body for "Tu lugar en el equipo") ── */
+.tour-hierarchy {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  background: #f8fafc;
+  padding: 12px;
+  border-radius: 12px;
+  margin: 4px 0;
+}
+.tour-hierarchy-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+.tour-hierarchy-row.is-self {
+  background: linear-gradient(135deg, rgba(229, 115, 10, 0.1), rgba(229, 115, 10, 0.04));
+  border-color: rgba(229, 115, 10, 0.3);
+  color: #1b365d;
+}
+.tour-hierarchy-row.is-self .tour-hierarchy-pill {
+  background: #e5730a;
+  color: #fff;
+}
+.tour-hierarchy-pill {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+}
+.tour-hierarchy-direction {
+  font-size: 11px;
+  color: #94a3b8;
+  text-align: center;
+  margin: 4px 0;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ── Help center (drawer desktop / sheet mobile) ───────────────── */
+.tour-help-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.42);
+  z-index: var(--z-tour, 250);
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+}
+.tour-help-backdrop.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tour-help-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 420px;
+  max-width: 95vw;
+  background: #fff;
+  z-index: calc(var(--z-tour, 250) + 1);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -20px 0 40px -10px rgba(0, 0, 0, 0.25);
+  transform: translateX(100%);
+  transition: transform 280ms cubic-bezier(0.175, 0.885, 0.32, 1.05);
+  overflow: hidden;
+}
+.tour-help-drawer.is-visible {
+  transform: translateX(0);
+}
+
+@media (max-width: 767px) {
+  .tour-help-drawer {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: 88dvh;
+    border-radius: 24px 24px 0 0;
+    transform: translateY(100%);
+  }
+  .tour-help-drawer.is-visible {
+    transform: translateY(0);
+  }
+}
+
+.tour-help-handle {
+  display: none;
+  width: 100%;
+  padding: 10px 0;
+  flex-shrink: 0;
+}
+.tour-help-handle::after {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: #cbd5e1;
+  margin: 0 auto;
+}
+@media (max-width: 767px) {
+  .tour-help-handle { display: block; }
+}
+
+.tour-help-header {
+  padding: 16px 20px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #f1f5f9;
+  flex-shrink: 0;
+}
+.tour-help-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+  flex: 1;
+  line-height: 1.2;
+}
+.tour-help-header p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+.tour-help-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 0;
+  background: #f1f5f9;
+  color: #475569;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tour-help-close:hover { background: #e2e8f0; color: #0f172a; }
+.tour-help-close:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+
+.tour-help-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 20px;
+  background: #f8fafc;
+}
+
+.tour-help-section-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin: 12px 4px 8px;
+}
+
+.tour-help-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 100ms ease, box-shadow 160ms ease;
+  text-align: left;
+  width: 100%;
+  margin-bottom: 8px;
+  font-family: inherit;
+  min-height: 64px;
+}
+.tour-help-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.08);
+}
+.tour-help-card:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.tour-help-card:active { transform: translateY(1px); }
+
+.tour-help-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #1b365d, #2563eb);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.tour-help-card.is-completed .tour-help-card-icon {
+  background: linear-gradient(135deg, #059669, #10b981);
+}
+.tour-help-card-text {
+  flex: 1;
+  min-width: 0;
+}
+.tour-help-card-text h3 {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.2;
+}
+.tour-help-card-text p {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.35;
+}
+.tour-help-card-status {
+  font-size: 11px;
+  color: #059669;
+  font-weight: 700;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Welcome modal (uses .tour-callout placement=center) ─────── */
+.tour-welcome-illustration {
+  width: 100%;
+  height: 120px;
+  background: linear-gradient(135deg, #1b365d 0%, #2563eb 60%, #e5730a 130%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  margin-bottom: 12px;
+  position: relative;
+  overflow: hidden;
+}
+.tour-welcome-illustration svg {
+  width: 64px;
+  height: 64px;
+}
+
+/* ── Reduced motion ──────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .tour-overlay,
+  .tour-spotlight-ring,
+  .tour-callout,
+  .tour-help-backdrop,
+  .tour-help-drawer {
+    transition: none !important;
+  }
+}
+
+/* ── Screen-reader-only text (aria-live region) ──────────────── */
+.tour-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
