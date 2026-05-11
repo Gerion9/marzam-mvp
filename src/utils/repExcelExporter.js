@@ -103,17 +103,15 @@ function buildRepWorkbook(repName, repEmail, stops, waveId, campaignObjective) {
 
   const outcomeRef = [
     ['Valor App', 'Valor Excel'],
-    ['visited', 'Visitado'],
-    ['contact_made', 'Contacto realizado'],
-    ['interested', 'Interesado'],
-    ['not_interested', 'No interesado'],
-    ['needs_follow_up', 'Requiere seguimiento'],
-    ['closed', 'Cerrado'],
-    ['invalid', 'Inválido'],
-    ['duplicate', 'Duplicado'],
-    ['moved', 'Se mudó'],
-    ['wrong_category', 'Categoría incorrecta'],
-    ['chain_not_independent', 'Cadena / No independiente'],
+    ['interested', 'Visitado · Cliente prospecto'],
+    ['needs_follow_up', 'Visitado · Requiere seguimiento'],
+    ['not_interested', 'Visitado · No le interesa'],
+    ['closed', 'Local cerrado / Fuera de negocio'],
+    ['duplicate', 'Ya registrada (duplicada en sistema)'],
+    ['moved', 'Se mudó de dirección'],
+    ['invalid', 'Registro inválido (no existe)'],
+    ['wrong_category', 'Categoría incorrecta (no es farmacia)'],
+    ['chain_not_independent', 'Cadena / Franquicia (no independiente)'],
   ];
   const wsRef = XLSX.utils.aoa_to_sheet(outcomeRef);
   wsRef['!cols'] = [{ wch: 25 }, { wch: 30 }];
