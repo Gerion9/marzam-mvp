@@ -7,6 +7,37 @@ const DEVICE_USER_NAMESPACE = '74e8d182-c5ba-4f5c-bffe-7549315401a3';
 // Legacy roles still accepted while the rename rolls out.
 const LEGACY_ROLES = new Set(['manager', 'field_rep']);
 
+// BlackPrint admin override.
+//
+// Comma-separated list of emails (BLACKPRINT_ADMIN_EMAILS) that should be
+// promoted to role=blackprint_admin regardless of what the source directory
+// says. Read lazily so test suites can mutate process.env between cases.
+//
+// Semantics: this is a pure ROLE override — the user must already exist in the
+// directory (via AUTH_DIRECTORY_JSON customUsers, the auto-generated rep set,
+// or the manager). Listing an email that no one has does NOT create a ghost
+// user; nothing happens.
+function getBlackprintAdminEmails() {
+  const raw = String(process.env.BLACKPRINT_ADMIN_EMAILS || '').trim();
+  if (!raw) return new Set();
+  return new Set(raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
+
+function isBlackprintAdminEmail(email) {
+  if (!email) return false;
+  return getBlackprintAdminEmails().has(String(email).trim().toLowerCase());
+}
+
+function applyBlackprintOverride(users) {
+  const set = getBlackprintAdminEmails();
+  if (set.size === 0) return users;
+  return users.map((u) => (
+    set.has(String(u.email || '').trim().toLowerCase())
+      ? { ...u, role: ROLES.BLACKPRINT_ADMIN }
+      : u
+  ));
+}
+
 function pad(num) {
   return String(num).padStart(3, '0');
 }
@@ -79,14 +110,19 @@ function buildVirtualUsers() {
 
 function listUsers() {
   const virtualUsers = buildVirtualUsers();
+  let merged;
   if (Array.isArray(config.authDirectory.customUsers) && config.authDirectory.customUsers.length) {
     const customUsers = config.authDirectory.customUsers.map(normalizeCustomUser);
     const customIds = new Set(customUsers.map((u) => u.id));
     const customEmails = new Set(customUsers.map((u) => u.email));
-    const merged = virtualUsers.filter((u) => !customIds.has(u.id) && !customEmails.has(u.email));
-    return [...merged, ...customUsers];
+    const filtered = virtualUsers.filter((u) => !customIds.has(u.id) && !customEmails.has(u.email));
+    merged = [...filtered, ...customUsers];
+  } else {
+    merged = virtualUsers;
   }
-  return virtualUsers;
+  // Apply BLACKPRINT_ADMIN_EMAILS override last so it wins over both the
+  // auto-generated and the customUsers branches.
+  return applyBlackprintOverride(merged);
 }
 
 function listFieldReps() {
@@ -218,4 +254,6 @@ module.exports = {
   toCanonicalId,
   isCanonicalUuid,
   authenticate,
+  isBlackprintAdminEmail,
+  getBlackprintAdminEmails,
 };

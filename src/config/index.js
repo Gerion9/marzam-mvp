@@ -111,6 +111,11 @@ const config = {
     repNamePrefix: process.env.FIELD_REP_NAME_PREFIX || 'Pilot Rep ',
     repDefaultPassword: process.env.FIELD_REP_DEFAULT_PASSWORD || 'Rep2026!',
     customUsers: parseJsonEnv(process.env.AUTH_DIRECTORY_JSON, null),
+    // Comma-separated list of emails promoted to role=blackprint_admin by
+    // accessDirectory.applyBlackprintOverride(). Surfaced here for visibility
+    // and admin tooling; the canonical reader is accessDirectory.js (lazy so
+    // tests can mutate process.env between cases).
+    blackprintAdminEmails: String(process.env.BLACKPRINT_ADMIN_EMAILS || '').trim(),
   },
 };
 
