@@ -5,8 +5,6 @@
  */
 
 const VISIT_OUTCOMES = [
-  'visited',
-  'contact_made',
   'interested',
   'not_interested',
   'needs_follow_up',
@@ -54,8 +52,6 @@ const OUTCOMES_SKIPPING_STOP = [
 // Effectively: every outcome submitted requires at least one photo. We keep
 // the constant explicit so future outcomes can opt out if business decides.
 const OUTCOMES_REQUIRING_PHOTO = [
-  'visited',
-  'contact_made',
   'interested',
   'not_interested',
   'needs_follow_up',

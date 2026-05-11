@@ -37,9 +37,23 @@ test('OUTCOMES_SKIPPING_STOP and OUTCOMES_CREATING_FLAG agree', () => {
 });
 
 test('validateOutcome accepts known and rejects unknown', () => {
-  assert.doesNotThrow(() => sm.validateOutcome('visited'));
+  assert.doesNotThrow(() => sm.validateOutcome('interested'));
   assert.doesNotThrow(() => sm.validateOutcome('closed'));
   assert.throws(() => sm.validateOutcome('made_up'));
   assert.throws(() => sm.validateOutcome(''));
   assert.throws(() => sm.validateOutcome(null));
+});
+
+test('deprecated outcomes visited/contact_made are rejected', () => {
+  // Ratchet against accidentally re-introducing the generic outcomes that
+  // Marzam asked to remove (they were opaque to the field rep and duplicated
+  // the semantics of `interested` / `needs_follow_up`).
+  assert.throws(() => sm.validateOutcome('visited'));
+  assert.throws(() => sm.validateOutcome('contact_made'));
+});
+
+test('canonical outcomes set has exactly 9 entries', () => {
+  // Locks the post-refactor count. Adding/removing outcomes is a product
+  // decision — flip the count here intentionally if the set changes.
+  assert.strictEqual(sm.VISIT_OUTCOMES.length, 9);
 });
