@@ -359,6 +359,261 @@
       </div>`;
   });
 
+  // ── COST SIMULATOR ───────────────────────────────────────────────
+  //
+  // Vista interactiva para presupuestar escenarios sin tocar la facturación
+  // real. Se mantiene cliente-side todo el estado del formulario; cada vez
+  // que el usuario cambia un input, se pide al backend un POST /cost-simulate
+  // y se redibuja. Sin debounce el motor procesa ~20 req/s sin sudar (es
+  // 100% in-memory).
+
+  const SIM_STATE = {
+    preset: 'sucursal_full',
+    reps: 50,
+    working_days_per_month: 22,
+    stops_per_rep_per_day: 23,
+    plans_per_month_per_rep: 4,
+    optimizer_mode: 'single_vehicle',
+    geocoding_calls_per_month: 2000,
+    routes_matrix_elements_per_plan: 600,
+    routes_route_calls_per_plan: 50,
+  };
+
+  function applyPreset(presetKey, presets) {
+    const p = presets[presetKey];
+    if (!p) return;
+    Object.assign(SIM_STATE, p, { preset: presetKey });
+  }
+
+  async function fetchSimulation() {
+    const token = window.__ADMIN_TOKEN__;
+    // Strip the `preset` key before sending so the backend uses the explicit
+    // values (let the FE drive). The presets affect the FE controls only.
+    const body = { ...SIM_STATE };
+    delete body.preset;
+    const res = await fetch('/api/blackprint/cost-simulate', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+
+  function renderBlockUsd(label, real, naive, savings, free) {
+    const savePct = naive > 0 ? Math.round((savings / naive) * 100) : 0;
+    return `
+      <div class="bp-sim-block">
+        <div class="bp-sim-block-title">${escape(label)}</div>
+        <div class="bp-sim-block-figures">
+          <div class="bp-sim-real">${fmtUsd(real)}/mes</div>
+          <div class="bp-sim-naive">vs naive ${fmtUsd(naive)} <span class="bp-savings-pill">−${fmtUsd(savings)} (${savePct}%)</span></div>
+        </div>
+        ${free && free.limit ? freeTierBar(`Free tier · ${escape(free.label || '')}`, free.used, free.limit) : ''}
+        ${free && free.note ? `<div class="bp-sim-note">${escape(free.note)}</div>` : ''}
+      </div>`;
+  }
+
+  function renderSubscriptionRow(s, totalRealPYG) {
+    const verdict = (s.effective_monthly_usd < totalRealPYG)
+      ? '<span class="bp-savings-pill">recomendado</span>'
+      : '';
+    return `<tr>
+      <td><strong>${escape(s.label)}</strong></td>
+      <td>${fmtUsd(s.monthly_base_usd)}</td>
+      <td>${s.covers_combined ? '✓' : '<span style="color:#be123c">excede bolsa</span>'}</td>
+      <td>${s.extra_opt_usd > 0 ? '+ ' + fmtUsd(s.extra_opt_usd) : '—'}</td>
+      <td><strong>${fmtUsd(s.effective_monthly_usd)}</strong> ${verdict}</td>
+      <td class="muted" style="font-size:11px">${escape(s.notes || '')}</td>
+    </tr>`;
+  }
+
+  function renderRecommendation(rec) {
+    if (!rec) return '';
+    const color = rec.level === 'critical' ? '#be123c' : (rec.level === 'warning' ? '#92400e' : '#0f766e');
+    const bg = rec.level === 'critical' ? '#fef2f2' : (rec.level === 'warning' ? '#fffbeb' : '#ecfdf5');
+    const border = rec.level === 'critical' ? '#fecaca' : (rec.level === 'warning' ? '#fde68a' : '#a7f3d0');
+    return `
+      <div style="margin:14px 0;padding:14px 18px;background:${bg};border:1px solid ${border};border-left:4px solid ${color};border-radius:10px">
+        <div style="font-weight:700;color:${color};margin-bottom:4px">${escape(rec.title)}</div>
+        <div style="font-size:13px;line-height:1.5;color:#475569">${escape(rec.body)}</div>
+      </div>`;
+  }
+
+  async function redrawSimulator() {
+    const presetsContainer = document.getElementById('bp-sim-presets');
+    if (presetsContainer) {
+      [...presetsContainer.querySelectorAll('button[data-preset]')].forEach((b) => {
+        b.classList.toggle('is-active', b.dataset.preset === SIM_STATE.preset);
+      });
+    }
+    const out = document.getElementById('bp-sim-output');
+    if (out) out.innerHTML = '<div class="muted" style="padding:14px">Calculando…</div>';
+    try {
+      const data = await fetchSimulation();
+      const r = data.result;
+      const opt = r.route_optimization;
+      const totalNaive = r.grand_total.monthly_naive_usd;
+      const totalReal = r.grand_total.monthly_real_usd;
+      const totalSavings = r.grand_total.monthly_savings_usd;
+      const annual = r.grand_total.annual_real_usd;
+
+      out.innerHTML = `
+        <div style="margin-bottom:14px;padding:14px 18px;background:#0f172a;color:#f8fafc;border-radius:12px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;opacity:0.7">Volumen mensual del escenario</div>
+          <div style="display:flex;gap:24px;margin-top:8px;flex-wrap:wrap">
+            <div><div style="font-size:24px;font-weight:700">${fmtInt(r.totals.total_shipments_per_month)}</div><div style="font-size:11px;opacity:0.7">shipments / mes</div></div>
+            <div><div style="font-size:24px;font-weight:700">${fmtInt(r.totals.routes_billable_elements_per_month)}</div><div style="font-size:11px;opacity:0.7">elements Routes API / mes</div></div>
+            <div><div style="font-size:24px;font-weight:700">${fmtInt(r.totals.total_plans_per_month)}</div><div style="font-size:11px;opacity:0.7">planes generados / mes</div></div>
+          </div>
+        </div>
+
+        ${renderRecommendation(r.recommendation)}
+
+        <div class="drawer-grid-3" style="margin-bottom:18px">
+          ${renderBlockUsd('Geocoding API', r.geocoding.real_usd, r.geocoding.naive_usd, r.geocoding.savings_usd,
+    { label: 'Geocoding', used: r.geocoding.monthly_volume, limit: r.geocoding.free_tier_limit, note: r.geocoding.note })}
+          ${renderBlockUsd('Routes API', r.routes_api.real_usd, r.routes_api.naive_usd, r.routes_api.savings_usd,
+    { label: 'Routes', used: r.routes_api.monthly_volume, limit: r.routes_api.free_tier_limit, note: r.routes_api.note })}
+          ${opt ? renderBlockUsd(opt.sku_label, opt.real_usd, opt.naive_usd, opt.savings_usd,
+    { label: opt.sku, used: opt.monthly_volume, limit: opt.free_tier_limit, note: opt.note }) : `
+            <div class="bp-sim-block">
+              <div class="bp-sim-block-title">Route Optimization API</div>
+              <div class="bp-sim-block-figures">
+                <div class="bp-sim-real">$0.00/mes</div>
+                <div class="bp-sim-naive">Modo classic — sin Optimization API</div>
+              </div>
+              <div class="bp-sim-note">El solver corre en JS (NN + 2-opt). Cero costo de API.</div>
+            </div>`}
+        </div>
+
+        <div style="padding:16px 22px;background:#fff;border:2px solid #0f172a;border-radius:12px;margin-bottom:18px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">
+            <div>
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Total mensual</div>
+              <div style="font-size:32px;font-weight:700;color:#0f172a;font-family:'Instrument Serif',serif;letter-spacing:-0.02em">${fmtUsd(totalReal)}</div>
+              <div style="font-size:12px;color:#64748b">naive: ${fmtUsd(totalNaive)} · <span style="color:#047857;font-weight:600">ahorras ${fmtUsd(totalSavings)}/mes vs naive</span></div>
+            </div>
+            <div>
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b">Proyección anual</div>
+              <div style="font-size:32px;font-weight:700;color:#0f172a;font-family:'Instrument Serif',serif;letter-spacing:-0.02em">${fmtUsd(annual)}</div>
+              <div style="font-size:12px;color:#64748b">naive anual: ${fmtUsd(r.grand_total.annual_naive_usd)}</div>
+            </div>
+          </div>
+        </div>
+
+        <h4 style="margin:14px 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#64748b">Comparativa contra planes de suscripción</h4>
+        <div style="overflow:auto"><table class="data-table"><thead><tr>
+          <th>Plan</th><th>Cuota base</th><th>Cubre bolsa</th><th>Extra Opt</th><th>Total efectivo</th><th>Notas</th>
+        </tr></thead><tbody>
+          ${r.subscriptions.map((s) => renderSubscriptionRow(s, totalReal)).join('')}
+        </tbody></table></div>
+        <p style="margin-top:10px;font-size:11px;color:#64748b">
+          La columna "Total efectivo" combina cuota base + cualquier extra de Route Optimization
+          que el plan no cubra. Si el escenario excede la bolsa combinada del plan, se factura
+          el delta a tarifa pago-por-uso pesimista. Es un estimado conservador, no una oferta.
+        </p>
+      `;
+    } catch (err) {
+      out.innerHTML = `<div class="empty"><div class="empty-title">Error</div><div class="empty-sub">${escape(err.message)}</div></div>`;
+    }
+  }
+
+  window.AdminDrawer.registerView('simulator', async () => {
+    // Fetch initial state — presets de Google los traemos en la primera carga.
+    let presets = {};
+    try {
+      const initial = await fetchJson('/api/blackprint/cost-simulate');
+      presets = initial.presets || {};
+    } catch { /* fallback to empty */ }
+
+    drawerBody().innerHTML = `
+      <div style="padding:18px 22px">
+        <div style="margin-bottom:18px">
+          <div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:4px">Simulador de costos</div>
+          <div style="font-size:12px;color:#64748b;line-height:1.5">
+            Calcula el gasto mensual y anual aproximado para escenarios hipotéticos.
+            Pricing oficial post-marzo 2025 (free tiers + piecewise por SKU). Pure compute,
+            no toca facturación real.
+          </div>
+        </div>
+
+        <h4 style="margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#64748b">Escenarios pre-armados</h4>
+        <div id="bp-sim-presets" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px"></div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:18px">
+          <label class="bp-sim-input"><span>Reps activos</span>
+            <input type="number" min="0" data-sim-input="reps" value="${SIM_STATE.reps}"></label>
+          <label class="bp-sim-input"><span>Días operativos/mes</span>
+            <input type="number" min="1" max="31" data-sim-input="working_days_per_month" value="${SIM_STATE.working_days_per_month}"></label>
+          <label class="bp-sim-input"><span>Stops/rep/día</span>
+            <input type="number" min="0" data-sim-input="stops_per_rep_per_day" value="${SIM_STATE.stops_per_rep_per_day}"></label>
+          <label class="bp-sim-input"><span>Planes/mes/rep</span>
+            <input type="number" min="0" data-sim-input="plans_per_month_per_rep" value="${SIM_STATE.plans_per_month_per_rep}"></label>
+          <label class="bp-sim-input"><span>Geocoding nuevas/mes</span>
+            <input type="number" min="0" data-sim-input="geocoding_calls_per_month" value="${SIM_STATE.geocoding_calls_per_month}"></label>
+          <label class="bp-sim-input"><span>Matrix elements/plan</span>
+            <input type="number" min="0" data-sim-input="routes_matrix_elements_per_plan" value="${SIM_STATE.routes_matrix_elements_per_plan}"></label>
+        </div>
+
+        <div style="margin-bottom:18px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;margin-bottom:6px">Modo del optimizer</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <label class="bp-sim-radio"><input type="radio" name="bp-sim-mode" value="classic" ${SIM_STATE.optimizer_mode === 'classic' ? 'checked' : ''}>
+              <span><strong>Solver clásico</strong><br><small>Sin Optimization API · solo Routes</small></span></label>
+            <label class="bp-sim-radio"><input type="radio" name="bp-sim-mode" value="single_vehicle" ${SIM_STATE.optimizer_mode === 'single_vehicle' ? 'checked' : ''}>
+              <span><strong>Single Vehicle (Pro)</strong><br><small>Free 5k shipments/mes · $10/1k post-free</small></span></label>
+            <label class="bp-sim-radio"><input type="radio" name="bp-sim-mode" value="fleet" ${SIM_STATE.optimizer_mode === 'fleet' ? 'checked' : ''}>
+              <span><strong>⚠ Fleet Routing (Enterprise)</strong><br><small>Free 1k · $30/1k post-free</small></span></label>
+          </div>
+        </div>
+
+        <div id="bp-sim-output"></div>
+      </div>`;
+
+    // Wire presets
+    const presetsContainer = document.getElementById('bp-sim-presets');
+    presetsContainer.innerHTML = Object.entries(presets).map(([k, p]) => `
+      <button class="bp-sim-preset" data-preset="${escape(k)}" title="${escape(p.description)}">
+        ${escape(p.label)}
+      </button>
+    `).join('');
+    [...presetsContainer.querySelectorAll('button[data-preset]')].forEach((b) => {
+      b.addEventListener('click', () => {
+        applyPreset(b.dataset.preset, presets);
+        // Refresh inputs to reflect the new preset.
+        [...drawerBody().querySelectorAll('[data-sim-input]')].forEach((el) => {
+          const key = el.dataset.simInput;
+          if (SIM_STATE[key] != null) el.value = SIM_STATE[key];
+        });
+        [...drawerBody().querySelectorAll('input[name="bp-sim-mode"]')].forEach((el) => {
+          el.checked = el.value === SIM_STATE.optimizer_mode;
+        });
+        redrawSimulator();
+      });
+    });
+
+    // Wire inputs (debounced)
+    let inputDebounce = null;
+    [...drawerBody().querySelectorAll('[data-sim-input]')].forEach((el) => {
+      el.addEventListener('input', () => {
+        SIM_STATE[el.dataset.simInput] = Number(el.value) || 0;
+        SIM_STATE.preset = 'custom';
+        clearTimeout(inputDebounce);
+        inputDebounce = setTimeout(redrawSimulator, 250);
+      });
+    });
+    [...drawerBody().querySelectorAll('input[name="bp-sim-mode"]')].forEach((el) => {
+      el.addEventListener('change', () => {
+        SIM_STATE.optimizer_mode = el.value;
+        SIM_STATE.preset = 'custom';
+        redrawSimulator();
+      });
+    });
+
+    redrawSimulator();
+  });
+
   // ── DIRECTORY ────────────────────────────────────────────────────
   window.AdminDrawer.registerView('directory', async () => {
     const data = await fetchJson('/api/blackprint/directory');

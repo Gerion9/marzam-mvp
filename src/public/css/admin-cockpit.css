@@ -1154,3 +1154,109 @@ html, body {
   color: #78350f;
   line-height: 1.5;
 }
+
+/* ── Cost simulator ── */
+
+.bp-sim-preset {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.bp-sim-preset:hover { border-color: #94a3b8; background: #f8fafc; }
+.bp-sim-preset.is-active {
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #fff;
+}
+
+.bp-sim-input {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.bp-sim-input span {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+.bp-sim-input input {
+  border: none;
+  outline: none;
+  font-size: 16px;
+  font-weight: 600;
+  font-family: 'Instrument Serif', serif;
+  letter-spacing: -0.01em;
+  color: var(--ink-1);
+  background: transparent;
+  padding: 2px 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.bp-sim-radio {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+.bp-sim-radio:has(input:checked) {
+  border-color: #0f766e;
+  background: #ecfdf5;
+}
+.bp-sim-radio strong { font-size: 13px; color: var(--ink-1); }
+.bp-sim-radio small { font-size: 11px; color: var(--ink-3); font-weight: 400; }
+
+.bp-sim-block {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-tile);
+}
+.bp-sim-block-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--ink-3);
+  margin-bottom: 8px;
+}
+.bp-sim-block-figures { margin-bottom: 10px; }
+.bp-sim-real {
+  font-family: 'Instrument Serif', serif;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  color: var(--ink-1);
+  line-height: 1;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.bp-sim-naive {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.bp-sim-note {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e2e8f0;
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.5;
+}
