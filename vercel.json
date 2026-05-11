@@ -19,6 +19,7 @@
     { "src": "/rep", "dest": "/api/index.js" },
     { "src": "/app", "dest": "/api/index.js" },
     { "src": "/admin", "dest": "/api/index.js" },
+    { "src": "/blackprint", "dest": "/api/index.js" },
     { "src": "/(.*)", "dest": "/src/public/$1" }
   ],
   "crons": [
