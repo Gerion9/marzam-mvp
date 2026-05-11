@@ -123,6 +123,20 @@ async function dataQuality(req, res, next) {
 async function system(req, res, next) {
   try {
     const data = await service.system();
+    // Routes API spend (today_usd / mtd_usd / daily_cap_usd / pct_used) es
+    // información financiera de BlackPrint. Solo blackprint_admin la ve cruda;
+    // el admin Marzam recibe únicamente los contadores operativos (matrix
+    // calls, rejected) sin dólares. Ver memoria feedback_cost_simulator_scope.
+    const role = require('../../constants/roles').normalizeRole(req.user?.role);
+    if (role !== 'blackprint_admin' && data && data.routes_api) {
+      const { today_matrix_calls, today_rejected_calls, pct_used } = data.routes_api;
+      data.routes_api = {
+        today_matrix_calls,
+        today_rejected_calls,
+        // pct_used (porcentaje) NO expone USD crudo → safe para Marzam.
+        pct_used,
+      };
+    }
     res.json(data);
   } catch (err) {
     if (isDbConnectionError(err)) return res.json(degraded({ cron_runs: [], routes_api: null }));
