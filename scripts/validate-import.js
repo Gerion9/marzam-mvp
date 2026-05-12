@@ -227,7 +227,13 @@ async function main() {
           row: applyAliasMap(row, aliasMap),
         }));
         const meta = args.period ? { period: args.period } : {};
+        // Cross-reference validation against EXISTING DB state — runs BEFORE
+        // processBatch so reads aren't polluted by the batch's own upserts.
+        // Same transaction → same rollback semantics.
+        const { validateCrossReferences } = require('../src/modules/imports/crossReferenceValidator');
+        const crossRef = await validateCrossReferences(trx, dbKind, normalized, { period: args.period });
         const res = await processor.processBatch(trx, normalized, { meta, job: { id: 'dry-run' } });
+        res.crossRef = crossRef;
         // Always rollback so nothing persists.
         const rollback = new Error('__intentional_rollback__');
         rollback.__rollback = true;
@@ -258,7 +264,28 @@ async function main() {
         console.log(dim(`  ... and ${outcome.errors.length - 10} more`));
       }
     }
-    if (outcome.failed > 0) {
+    if (outcome.crossRef) {
+      const xr = outcome.crossRef;
+      console.log(`\n${bold('Cross-reference checks:')}`);
+      console.log(`  ${err('errors')}:   ${xr.errors.length}   (would fail on real commit)`);
+      console.log(`  ${warn('warnings')}: ${xr.warnings.length}   (would commit but flag for review)`);
+      if (xr.errors.length) {
+        console.log(`\n${err('First 10 cross-ref errors:')}`);
+        for (const e of xr.errors.slice(0, 10)) {
+          console.log(`  row ${e.row} (${e.field}): ${err(e.message)}`);
+        }
+        if (xr.errors.length > 10) {
+          console.log(dim(`  ... and ${xr.errors.length - 10} more`));
+        }
+      }
+      if (xr.warnings.length) {
+        console.log(`\n${warn('First 5 cross-ref warnings:')}`);
+        for (const w of xr.warnings.slice(0, 5)) {
+          console.log(`  row ${w.row} (${w.field}): ${warn(w.message)}`);
+        }
+      }
+    }
+    if (outcome.failed > 0 || (outcome.crossRef?.errors?.length || 0) > 0) {
       process.exitCode = 2;
     }
   } else {
