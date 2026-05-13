@@ -1,0 +1,139 @@
+/* ==========================================================================
+   BlackPrint Design System — Tokens
+   --------------------------------------------------------------------------
+   Source of truth for brand tokens. Consumed by admin-cockpit.css and
+   territory-os.css. Only :root + @font-face — no body/h1/h2 selectors,
+   so the consuming stylesheets retain cascade authority.
+
+   Color system: "Shades" depth scale (depth 1 -> depth 9) + decisive
+   blue/pink accents. Marketing also has Natural (beige/brown) and Cool
+   (navy/teal) sets. Text must be at least two depth levels away from its
+   container (e.g. depth 7 container -> depth 5 or lighter text).
+   Never #000000, always #FFFFFF.
+   ========================================================================== */
+
+@import url("https://fonts.googleapis.com/css2?family=Bai+Jamjuree:ital,wght@0,200;0,300;0,400;0,500;0,700;1,700&family=Work+Sans:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  /* =====================================================================
+     SHADES — primary color system. Warm-grey scale.
+     ===================================================================== */
+  --depth-9: #2F2F2F;
+  --depth-8: #383838;
+  --depth-7: #484848;
+  --depth-6: #646669;
+  --depth-5: #8D9398;
+  --depth-3: #B7BCC0;
+  --depth-1: #D7DCE0;
+  --on-secondary: #231F20;
+  --on-primary: #FFFFFF;
+
+  /* =====================================================================
+     ACCENTS — sparingly, for key brand moments, links, status.
+     ===================================================================== */
+  --blue-h: #52BCF5;
+  --blue-p: #0875E3;
+  --pink-h: #FF9E9E;
+  --pink-p: #FE2B7C;
+
+  /* =====================================================================
+     SEMANTIC STATUS
+     ===================================================================== */
+  --success: #0CA036;
+  --success-soft: #DCEFE4;
+  --danger: #AA2009;
+  --danger-soft: #FF9E9E;
+  --info-soft: #DAF1FF;
+  --warning: #C0CA33;
+  --warning-soft: #FCF1D9;
+
+  /* =====================================================================
+     MARKETING PALETTES (lower usage)
+     ===================================================================== */
+  --natural-cream: #E2D9D0;
+  --natural-taupe: #AAA39D;
+  --natural-brown: #493628;
+  --natural-warm: #897F79;
+  --cool-navy: #8AA0CA;
+  --cool-teal: #8ACAC4;
+  --coral: #FF6F61;
+
+  /* =====================================================================
+     SEMANTIC ALIASES — preferred in components.
+     ===================================================================== */
+  --bg:           var(--on-primary);
+  --bg-dark:      var(--depth-9);
+  --surface:      var(--on-primary);
+  --surface-2:    #F7F8F9;
+  --surface-3:    #EEEFF1;
+  --surface-dark:  var(--depth-8);
+  --surface-dark-2:var(--depth-7);
+
+  --fg:           var(--on-secondary);
+  --fg-2:         var(--depth-6);
+  --fg-3:         var(--depth-5);
+  --fg-inverse:   var(--on-primary);
+  --fg-inverse-2: var(--depth-3);
+  --fg-inverse-3: var(--depth-5);
+
+  --border:       var(--depth-1);
+  --border-2:     #E7E6EA;
+  --border-strong:#C7CDD2;
+  --border-dark:  var(--depth-7);
+
+  --accent:       var(--blue-p);
+  --accent-hover: var(--blue-h);
+  --link:         var(--blue-p);
+
+  /* =====================================================================
+     TYPOGRAPHY
+     ===================================================================== */
+  --font-sans:    "Work Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-ui:      "Inter", "Work Sans", system-ui, sans-serif;
+  --font-display: "Bai Jamjuree", "Work Sans", sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Type scale (from Figma /Design-System/Typography) */
+  --fs-h1:   48px;   --lh-h1:   1.2;   --tr-h1:   -0.03em;
+  --fs-h2:   24px;   --lh-h2:   1.2;   --tr-h2:   -0.03em;
+  --fs-h3:   20px;   --lh-h3:   1.2;   --tr-h3:   -0.03em;
+  --fs-h4:   18px;   --lh-h4:   1.4;   --tr-h4:   -0.02em;
+  --fs-p:    16px;   --lh-p:    1.5;   --tr-p:    -0.01em;
+  --fs-sm:   14px;   --lh-sm:   1.5;   --tr-sm:   -0.03em;
+  --fs-xs:   12px;   --lh-xs:   16px;  --tr-xs:   -0.03em;
+  --fs-micro:10px;   --lh-micro:1.4;   --tr-micro:-0.02em;
+
+  /* =====================================================================
+     SPACING / RADII / ELEVATION
+     ===================================================================== */
+  --s-1: 2px;
+  --s-2: 4px;
+  --s-3: 8px;
+  --s-4: 12px;
+  --s-5: 16px;
+  --s-6: 24px;
+  --s-7: 32px;
+  --s-8: 48px;
+  --s-9: 64px;
+
+  --r-xs:   4px;
+  --r-sm:   8px;
+  --r-md:   12px;
+  --r-lg:   16px;
+  --r-xl:   24px;
+  --r-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.06), 0 1px 1px rgba(0,0,0,0.04);
+  --shadow-2: 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-3: 0 8px 24px rgba(0,0,0,0.12);
+  --shadow-4: 0 12px 40px rgba(0,0,0,0.25);
+  --shadow-inset-glow: inset 0 0 0 1px rgba(255,255,255,0.06);
+
+  /* =====================================================================
+     MOTION — 120-200ms ease-out, no bounces.
+     ===================================================================== */
+  --t-fast: 150ms;
+  --t-base: 220ms;
+  --t-slow: 360ms;
+  --ease:   cubic-bezier(0.4, 0, 0.2, 1);
+}
