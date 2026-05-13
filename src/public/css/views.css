@@ -378,12 +378,21 @@
 }
 .plan-step--past .plan-step__title { color: #475569; }
 
-/* Stepper en mobile — hint se oculta para no romper layout */
+/* Stepper en mobile — hint se oculta para no romper layout. Cada paso
+   fija su ancho (no flex-shrink) para que el title con white-space:nowrap
+   no desborde sobre el num del paso siguiente. El stepper hace scroll
+   horizontal si no caben los 4 pasos. */
 @container panelbody (max-width: 560px) {
-  .plan-step { min-width: 84px; padding: 0.5rem 0.55rem; gap: 0.4rem; }
+  .plan-step {
+    flex: 0 0 auto;
+    min-width: 104px;
+    padding: 0.5rem 0.55rem;
+    gap: 0.4rem;
+  }
   .plan-step__hint { display: none; }
   .plan-step__num { width: 24px; height: 24px; font-size: 11px; }
-  .plan-step__title { font-size: 11px; }
+  .plan-step__title { font-size: 10px; }
+  .plan-step__label { overflow: hidden; }
 }
 
 /* ── Tooltip card del stepper (group-hover) ──────────────────── */
