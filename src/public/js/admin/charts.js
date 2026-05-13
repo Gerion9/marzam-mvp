@@ -2,18 +2,29 @@
  * Chart.js wrappers for the admin cockpit — monochromatic, editorial.
  * All charts use a near-black palette plus a single colored accent so the
  * data is the protagonist (vs the manager's role-colored palette).
+ *
+ * Palette pulls live values from the BlackPrint Design System tokens on
+ * <html>:root, so body.bp-mode automatically flips the accent from blue
+ * to pink without duplicating chart code.
  */
 (function () {
   if (!window.Chart) { console.warn('[admin/charts] Chart.js not loaded'); return; }
 
-  const INK_1 = '#0a0a0a';
-  const INK_2 = '#404040';
-  const INK_4 = '#a3a3a3';
-  const GRID = '#f0f0f0';
-  const POS = '#15803d';
-  const ACCENT = '#1d4ed8';
+  const rootStyle = getComputedStyle(document.documentElement);
+  const tok = (name, fallback) => {
+    const v = rootStyle.getPropertyValue(name).trim();
+    return v || fallback;
+  };
+  const INK_1 = tok('--on-secondary', '#231F20');
+  const INK_2 = tok('--depth-6', '#646669');
+  const INK_4 = tok('--depth-5', '#8D9398');
+  const GRID = tok('--border-2', '#E7E6EA');
+  const POS = tok('--success', '#0CA036');
+  const ACCENT = document.body.classList.contains('bp-mode')
+    ? tok('--pink-p', '#FE2B7C')
+    : tok('--blue-p', '#0875E3');
 
-  Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+  Chart.defaults.font.family = "'Work Sans', 'Inter', system-ui, sans-serif";
   Chart.defaults.font.size = 11;
   Chart.defaults.color = INK_4;
   Chart.defaults.scale.grid.color = GRID;
@@ -65,7 +76,7 @@
             label: 'Visitas',
             data: visits,
             borderColor: INK_1,
-            backgroundColor: 'rgba(10,10,10,0.04)',
+            backgroundColor: 'rgba(35,31,32,0.06)',
             borderWidth: 2,
             fill: true,
             tension: 0.32,
@@ -99,7 +110,7 @@
             labels: { boxWidth: 8, boxHeight: 8, color: INK_2, padding: 12, font: { size: 11 } },
           },
           tooltip: {
-            backgroundColor: '#0a0a0a',
+            backgroundColor: INK_1,
             titleColor: '#fff', bodyColor: '#fff',
             padding: 10,
             cornerRadius: 6,
@@ -145,7 +156,7 @@
         indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { backgroundColor: '#0a0a0a' } },
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: INK_1 } },
         scales: {
           x: { grid: { color: GRID }, ticks: { font: { size: 10 } } },
           y: { grid: { display: false }, ticks: { font: { size: 11 }, color: INK_2 } },
@@ -157,7 +168,7 @@
   function donut(canvas, labels, values) {
     if (!canvas) return null;
     const ctx = canvas.getContext('2d');
-    const palette = ['#0a0a0a', '#404040', '#737373', '#a3a3a3', '#d4d4d4', '#1d4ed8', '#15803d'];
+    const palette = [INK_1, INK_2, tok('--depth-6', '#646669'), INK_4, tok('--depth-3', '#B7BCC0'), ACCENT, POS];
     return new Chart(ctx, {
       type: 'doughnut',
       data: {
@@ -174,7 +185,7 @@
         cutout: '68%',
         plugins: {
           legend: { position: 'right', labels: { boxWidth: 8, color: INK_2, padding: 10, font: { size: 11 } } },
-          tooltip: { backgroundColor: '#0a0a0a' },
+          tooltip: { backgroundColor: INK_1 },
         },
       },
     });

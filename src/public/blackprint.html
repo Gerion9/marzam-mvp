@@ -7,19 +7,19 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 
-  <link rel="stylesheet" href="/css/admin-cockpit.css?v=admin-2">
+  <link rel="stylesheet" href="/css/blackprint-tokens.css?v=bp-1">
+  <link rel="stylesheet" href="/css/admin-cockpit.css?v=admin-3">
 </head>
-<body>
+<body class="bp-mode">
 
   <!-- Demo banner (reuses existing convention) -->
-  <div id="demo-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99;background:#1d4ed8;color:white;text-align:center;font-size:11px;font-weight:600;padding:4px;letter-spacing:0.08em">
-    MODO DEMO — DATOS SINTÉTICOS
+  <div id="demo-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99;background:var(--pink-p);color:white;text-align:center;font-size:11px;font-weight:600;padding:4px;letter-spacing:0.18em;text-transform:uppercase">
+    Modo demo — datos sintéticos
   </div>
 
   <div class="cockpit-shell">
@@ -27,10 +27,12 @@
     <!-- ── Topbar ─────────────────────────────────────────────────── -->
     <header class="cockpit-topbar">
       <div class="cockpit-brand">
-        <div class="cockpit-brand-mark" style="background:#0f172a;color:#fbbf24">BP</div>
+        <div class="cockpit-brand-mark cockpit-brand-mark--bp">
+          <img src="/images/logo-simple-light.png" alt="BlackPrint">
+        </div>
         <div>
-          <div class="cockpit-brand-title">BlackPrint</div>
-          <div class="cockpit-brand-sub">Marzam · Platform</div>
+          <div class="cockpit-brand-title">Platform</div>
+          <div class="cockpit-brand-sub">BlackPrint · Operations</div>
         </div>
       </div>
 
@@ -57,7 +59,7 @@
       </button>
 
       <div class="cockpit-user">
-        <div class="cockpit-user-avatar" id="user-avatar" style="background:#0f172a;color:#fbbf24">B</div>
+        <div class="cockpit-user-avatar cockpit-user-avatar--bp" id="user-avatar">B</div>
         <div>
           <div class="cockpit-user-name" id="user-name">—</div>
         </div>
@@ -169,7 +171,7 @@
           <button class="drawer-tab" data-drawer="onboarding">Onboarding</button>
           <button class="drawer-tab" data-drawer="quality">Calidad de datos</button>
           <button class="drawer-tab" data-drawer="anomalies">Anomalías <span class="drawer-tab-count" id="anomaly-tab-count">·</span></button>
-          <button class="drawer-tab" data-drawer="costs" style="border-left:1px solid #e2e8f0;margin-left:6px;padding-left:14px">Costos</button>
+          <button class="drawer-tab drawer-tab--bp-divider" data-drawer="costs">Costos</button>
           <button class="drawer-tab" data-drawer="simulator">Simulador</button>
           <button class="drawer-tab" data-drawer="health">Salud sistema</button>
           <button class="drawer-tab" data-drawer="usage">Uso del producto</button>
@@ -228,13 +230,13 @@
     })();
   </script>
 
-  <script src="/js/api.js?v=admin-2"></script>
-  <script src="/js/admin/charts.js?v=admin-2"></script>
-  <script src="/js/admin/big-map.js?v=admin-2"></script>
-  <script src="/js/admin/hierarchy-tree.js?v=admin-2"></script>
-  <script src="/js/admin/drawer.js?v=admin-2"></script>
+  <script src="/js/api.js?v=admin-3"></script>
+  <script src="/js/admin/charts.js?v=admin-3"></script>
+  <script src="/js/admin/big-map.js?v=admin-3"></script>
+  <script src="/js/admin/hierarchy-tree.js?v=admin-3"></script>
+  <script src="/js/admin/drawer.js?v=admin-3"></script>
   <!-- BlackPrint extra views — must load BEFORE cockpit.js so its registerView calls win. -->
   <script src="/js/blackprint/extra-views.js?v=bp-1"></script>
-  <script src="/js/admin/cockpit.js?v=admin-2"></script>
+  <script src="/js/admin/cockpit.js?v=admin-3"></script>
 </body>
 </html>

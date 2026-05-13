@@ -1,52 +1,58 @@
 /* ───────────────────────────────────────────────────────────────────────────
- * Admin Cockpit — editorial premium theme.
+ * Admin Cockpit — hybrid dark-top / light-body theme aligned to the
+ * BlackPrint Design System.
  *
- * Distinct from the manager/rep app shell: light, monochromatic, generous
- * whitespace, large serif numerals over crisp sans labels. No gradients,
- * no heavy shadows, no role-color confetti — the data is the protagonist.
- * ─────────────────────────────────────────────────────────────────────── */
+ * Tokens live in /css/blackprint-tokens.css (loaded BEFORE this file).
+ * Topbar uses the BP "flight deck" depth-9 surface; the body keeps the
+ * data-forward light surface where dense KPIs, tables and basemaps
+ * read clearest. Headings use Bai Jamjuree (display face), the rest
+ * Work Sans (sans) and Inter (dense / numerals).
+ * ─────────────────────────────────────────────────────────────────── */
 
 :root {
-  --bg-app: #fafafa;
-  --bg-tile: #ffffff;
-  --bg-tile-hover: #fcfcfc;
-  --bg-soft: #f5f5f5;
-  --bg-deeper: #f0f0f0;
+  /* Legacy admin tokens — re-mapped onto BlackPrint Design System
+     equivalents. The names are preserved so existing rules and JS
+     stay green; only the values change. */
+  --bg-app: var(--surface-2);
+  --bg-tile: var(--surface);
+  --bg-tile-hover: #FCFCFD;
+  --bg-soft: #EEEFF1;
+  --bg-deeper: #E2E5E9;
 
-  --border: #e8e8e8;
-  --border-strong: #d4d4d4;
-  --border-soft: #f0f0f0;
+  --border-soft: var(--border-2);
+  /* --border and --border-strong intentionally inherit BP tokens. */
 
-  --ink-1: #0a0a0a;
-  --ink-2: #404040;
-  --ink-3: #737373;
-  --ink-4: #a3a3a3;
-  --ink-5: #d4d4d4;
+  --ink-1: var(--on-secondary);
+  --ink-2: var(--depth-6);
+  --ink-3: #7A7F84;
+  --ink-4: var(--depth-5);
+  --ink-5: var(--depth-3);
 
-  --accent: #0a0a0a;
-  --pos: #15803d;
-  --pos-soft: #dcfce7;
-  --neg: #b91c1c;
-  --neg-soft: #fee2e2;
-  --warn: #b45309;
-  --warn-soft: #fef3c7;
-  --info: #1d4ed8;
-  --info-soft: #dbeafe;
+  /* Accent is now BlackPrint blue — body.bp-mode swaps it to pink-p
+     for the BlackPrint admin variant. */
+  --accent: var(--blue-p);
+  --pos: var(--success);
+  --pos-soft: var(--success-soft);
+  --neg: var(--danger);
+  --neg-soft: rgba(255, 158, 158, 0.35);
+  --warn: #A55F0E;
+  --warn-soft: var(--warning-soft);
+  --info: var(--blue-p);
+  /* --info-soft inherits BP token */
 
-  --grid-line: #f0f0f0;
+  --grid-line: #EEEFF1;
 
-  --radius-sm: 6px;
-  --radius: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  /* Legacy radius aliases — promoted to BP scale. */
+  --radius-sm: var(--r-sm);
+  --radius:    var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+}
 
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.05);
-
-  --t-fast: 150ms;
-  --t-base: 220ms;
-  --t-slow: 360ms;
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+body.bp-mode {
+  /* BlackPrint admin context — accent shifts from blue to hot pink
+     across charts, drawer-tab indicator and avatar treatment. */
+  --accent: var(--pink-p);
 }
 
 * { box-sizing: border-box; }
@@ -56,7 +62,7 @@ html, body {
   padding: 0;
   background: var(--bg-app);
   color: var(--ink-1);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
   font-feature-settings: 'cv11', 'ss01', 'cv02';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -65,14 +71,21 @@ html, body {
 }
 
 .display {
-  font-family: 'Instrument Serif', Georgia, 'Times New Roman', serif;
-  font-weight: 400;
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  font-weight: 300;
+  letter-spacing: -0.03em;
 }
 
 .numeral {
+  font-family: var(--font-ui);
   font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum', 'cv11';
+  font-feature-settings: 'tnum';
+}
+
+/* Uniform focus ring — BP rule. */
+:focus-visible {
+  outline: 2px solid var(--blue-p);
+  outline-offset: 2px;
 }
 
 /* ── Layout ──────────────────────────────────────────────────────────── */
@@ -83,18 +96,20 @@ html, body {
   flex-direction: column;
 }
 
+/* Topbar — dark depth-9 "flight deck". */
 .cockpit-topbar {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(250, 250, 250, 0.85);
+  background: rgba(47, 47, 47, 0.92);
   backdrop-filter: saturate(180%) blur(12px);
   -webkit-backdrop-filter: saturate(180%) blur(12px);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   padding: 14px 32px;
   display: flex;
   align-items: center;
   gap: 24px;
+  color: var(--on-primary);
 }
 
 .cockpit-brand {
@@ -104,56 +119,75 @@ html, body {
 }
 
 .cockpit-brand-mark {
-  width: 28px; height: 28px;
-  background: var(--ink-1);
-  color: white;
-  border-radius: 6px;
+  width: 32px; height: 32px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: var(--on-primary);
+  border-radius: var(--r-sm);
   display: grid; place-items: center;
-  font-family: 'Instrument Serif', serif;
-  font-size: 18px;
-  font-weight: 400;
-  letter-spacing: -0.04em;
+  overflow: hidden;
+}
+
+.cockpit-brand-mark img {
+  display: block;
+  max-width: 70%;
+  max-height: 70%;
+  width: auto;
+  height: auto;
+}
+
+/* BlackPrint admin variant — transparent square with pink ring. */
+.cockpit-brand-mark--bp {
+  background: transparent;
+  border-color: rgba(255, 158, 158, 0.30);
 }
 
 .cockpit-brand-title {
-  font-family: 'Instrument Serif', serif;
+  font-family: var(--font-display);
+  font-weight: 300;
   font-size: 20px;
-  letter-spacing: -0.02em;
-  color: var(--ink-1);
+  letter-spacing: -0.03em;
+  color: var(--on-primary);
 }
 
 .cockpit-brand-sub {
+  font-family: var(--font-sans);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--ink-4);
+  color: var(--depth-3);
   margin-top: 2px;
 }
 
 .cockpit-spacer { flex: 1; }
 
+/* Refresh / utility pill on dark topbar. */
 .cockpit-pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 7px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 999px;
-  background: var(--bg-tile);
+  background: rgba(255, 255, 255, 0.06);
+  font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 500;
-  color: var(--ink-2);
+  color: var(--on-primary);
   cursor: pointer;
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
 
-.cockpit-pill:hover { border-color: var(--border-strong); background: var(--bg-tile-hover); }
+.cockpit-pill:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.10);
+}
 
 .cockpit-pill[data-active="true"] {
-  background: var(--ink-1);
-  color: white;
-  border-color: var(--ink-1);
+  background: var(--on-primary);
+  color: var(--on-secondary);
+  border-color: var(--on-primary);
 }
 
 .cockpit-anomaly-banner {
@@ -161,9 +195,11 @@ html, body {
   align-items: center;
   gap: 10px;
   padding: 6px 14px;
-  background: var(--neg-soft);
-  color: var(--neg);
+  background: rgba(170, 32, 9, 0.20);
+  color: var(--danger-soft);
+  border: 1px solid rgba(170, 32, 9, 0.35);
   border-radius: 999px;
+  font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -172,7 +208,7 @@ html, body {
 
 .cockpit-anomaly-dot {
   width: 8px; height: 8px;
-  background: var(--neg);
+  background: var(--danger-soft);
   border-radius: 50%;
   animation: pulse-soft 2s var(--ease) infinite;
 }
@@ -186,34 +222,49 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 14px 6px 6px;
-  border: 1px solid var(--border);
+  padding: 4px 14px 4px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 999px;
-  background: var(--bg-tile);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .cockpit-user-avatar {
   width: 28px; height: 28px;
-  background: var(--ink-1);
-  color: white;
+  background: var(--blue-p);
+  color: var(--on-primary);
   border-radius: 50%;
   display: grid; place-items: center;
+  font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 600;
 }
 
-.cockpit-user-name { font-size: 12px; color: var(--ink-2); font-weight: 500; }
+/* BP variant: outlined avatar with blue-h ink — subtle BP signature. */
+.cockpit-user-avatar--bp {
+  background: transparent;
+  border: 1.5px solid var(--blue-h);
+  color: var(--blue-h);
+}
+
+.cockpit-user-name {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--on-primary);
+  font-weight: 500;
+}
 
 .cockpit-logout {
+  font-family: var(--font-sans);
   font-size: 11px;
-  color: var(--ink-4);
+  color: var(--depth-3);
   background: none;
   border: none;
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
+  transition: color var(--t-fast) var(--ease);
 }
-.cockpit-logout:hover { color: var(--neg); }
+.cockpit-logout:hover { color: var(--pink-h); }
 
 .cockpit-main {
   flex: 1;
@@ -228,19 +279,21 @@ html, body {
 }
 
 .cockpit-section-title {
-  font-family: 'Instrument Serif', serif;
-  font-size: 22px;
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 28px;
+  letter-spacing: -0.03em;
   color: var(--ink-1);
   margin: 0 0 4px 0;
 }
 
 .cockpit-section-sub {
+  font-family: var(--font-sans);
   font-size: 12px;
   color: var(--ink-4);
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  font-weight: 600;
+  font-weight: 500;
   margin-bottom: 18px;
 }
 
@@ -278,6 +331,7 @@ html, body {
 .kpi-tile:hover { background: var(--bg-tile-hover); }
 
 .kpi-tile-label {
+  font-family: var(--font-sans);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -286,10 +340,11 @@ html, body {
 }
 
 .kpi-tile-value {
-  font-family: 'Instrument Serif', serif;
+  font-family: var(--font-display);
+  font-weight: 200;
   font-size: 56px;
   line-height: 1;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.03em;
   color: var(--ink-1);
   font-variant-numeric: tabular-nums;
 }
@@ -298,6 +353,7 @@ html, body {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
+  font-family: var(--font-ui);
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
@@ -347,13 +403,15 @@ html, body {
 }
 
 .cockpit-card-title {
-  font-family: 'Instrument Serif', serif;
-  font-size: 18px;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 20px;
   color: var(--ink-1);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.03em;
 }
 
 .cockpit-card-meta {
+  font-family: var(--font-sans);
   font-size: 11px;
   color: var(--ink-4);
   font-weight: 500;
@@ -375,6 +433,7 @@ html, body {
 }
 
 .layer-toggle {
+  font-family: var(--font-sans);
   font-size: 11px;
   padding: 5px 11px 5px 9px;
   border-radius: 999px;
@@ -392,13 +451,8 @@ html, body {
 }
 
 .layer-toggle:hover {
-  border-color: var(--border-strong);
+  border-color: var(--blue-p);
   color: var(--ink-1);
-}
-
-.layer-toggle:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(10, 10, 10, 0.12);
 }
 
 .layer-toggle-dot {
@@ -456,6 +510,7 @@ html, body {
   max-height: calc(100vh - 28px);
   display: flex;
   flex-direction: column;
+  font-family: var(--font-sans);
   font-size: 11px;
   color: var(--ink-2);
   pointer-events: auto;
@@ -472,6 +527,7 @@ html, body {
 }
 
 .big-map-legend-title {
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -519,6 +575,7 @@ html, body {
 }
 
 .legend-block-title {
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -559,6 +616,7 @@ html, body {
 }
 
 .legend-value {
+  font-family: var(--font-ui);
   font-variant-numeric: tabular-nums;
   color: var(--ink-3);
   font-weight: 500;
@@ -616,6 +674,7 @@ html, body {
 }
 
 .htree-role {
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -623,7 +682,7 @@ html, body {
   color: var(--ink-4);
   background: var(--bg-soft);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
 }
 
 .htree-presence {
@@ -633,10 +692,11 @@ html, body {
   background: var(--ink-5);
   flex-shrink: 0;
 }
-.htree-presence[data-status="live"] { background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2); }
-.htree-presence[data-status="idle"] { background: #d97706; }
+.htree-presence[data-status="live"] { background: var(--success); box-shadow: 0 0 0 3px rgba(12, 160, 54, 0.20); }
+.htree-presence[data-status="idle"] { background: var(--warn); }
 
 .htree-kpi {
+  font-family: var(--font-ui);
   font-size: 12px;
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
@@ -644,6 +704,7 @@ html, body {
 }
 
 .htree-kpi-label {
+  font-family: var(--font-sans);
   font-size: 9px;
   color: var(--ink-4);
   letter-spacing: 0.08em;
@@ -670,6 +731,7 @@ html, body {
 }
 
 .trend-totals-label {
+  font-family: var(--font-sans);
   font-size: 10px;
   color: var(--ink-4);
   letter-spacing: 0.12em;
@@ -678,14 +740,17 @@ html, body {
 }
 
 .trend-totals-value {
-  font-family: 'Instrument Serif', serif;
+  font-family: var(--font-display);
+  font-weight: 300;
   font-size: 32px;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   color: var(--ink-1);
   margin-top: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 .trend-totals-yoy {
+  font-family: var(--font-ui);
   font-size: 11px;
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
@@ -714,22 +779,43 @@ html, body {
   background: transparent;
   border: none;
   padding: 16px 20px;
+  font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
   color: var(--ink-3);
   cursor: pointer;
   position: relative;
   border-bottom: 2px solid transparent;
-  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
   white-space: nowrap;
 }
-.drawer-tab:hover { color: var(--ink-1); }
+.drawer-tab:hover {
+  color: var(--ink-1);
+  background: rgba(8, 117, 227, 0.04);
+}
 .drawer-tab[data-active="true"] {
   color: var(--ink-1);
-  border-bottom-color: var(--ink-1);
+  border-bottom-color: var(--accent);
+}
+
+/* BP-mode pink underline for active tab. */
+body.bp-mode .drawer-tab[data-active="true"] {
+  border-bottom-color: var(--pink-p);
+}
+body.bp-mode .drawer-tab:hover {
+  background: rgba(254, 43, 124, 0.04);
+}
+
+/* Divider between Marzam-shared tabs and BlackPrint-only tabs.
+   Lives in CSS instead of inline style so the value follows tokens. */
+.drawer-tab--bp-divider {
+  border-left: 1px solid var(--border);
+  margin-left: 8px;
+  padding-left: 14px;
 }
 
 .drawer-tab-count {
+  font-family: var(--font-ui);
   font-size: 10px;
   color: var(--ink-4);
   margin-left: 6px;
@@ -763,6 +849,7 @@ html, body {
   background: var(--bg-tile);
 }
 .stat-mini-label {
+  font-family: var(--font-sans);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.12em;
@@ -770,14 +857,17 @@ html, body {
   color: var(--ink-4);
 }
 .stat-mini-value {
-  font-family: 'Instrument Serif', serif;
+  font-family: var(--font-display);
+  font-weight: 300;
   font-size: 28px;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   color: var(--ink-1);
   margin-top: 6px;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 .stat-mini-foot {
+  font-family: var(--font-ui);
   font-size: 11px;
   color: var(--ink-3);
   margin-top: 4px;
@@ -789,6 +879,7 @@ html, body {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
+  font-family: var(--font-sans);
   font-size: 13px;
 }
 
@@ -838,12 +929,14 @@ html, body {
 }
 
 .audit-tail-title {
-  font-family: 'Instrument Serif', serif;
-  font-size: 17px;
-  letter-spacing: -0.01em;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 18px;
+  letter-spacing: -0.03em;
 }
 
 .audit-tail-status {
+  font-family: var(--font-ui);
   font-size: 11px;
   color: var(--ink-4);
   display: flex;
@@ -853,7 +946,7 @@ html, body {
 
 .audit-pulse {
   width: 6px; height: 6px;
-  background: var(--pos);
+  background: var(--success);
   border-radius: 50%;
   animation: pulse-soft 2s var(--ease) infinite;
 }
@@ -870,20 +963,26 @@ html, body {
   grid-template-columns: 90px 1fr 120px 80px;
   gap: 14px;
   align-items: center;
+  font-family: var(--font-sans);
   font-size: 12px;
   color: var(--ink-2);
 }
 
 .audit-item:last-child { border-bottom: none; }
 
-.audit-item-time { font-variant-numeric: tabular-nums; color: var(--ink-4); font-size: 11px; }
+.audit-item-time {
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-4);
+  font-size: 11px;
+}
 .audit-item-action {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-1);
   background: var(--bg-soft);
   padding: 3px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
   display: inline-block;
   width: fit-content;
 }
@@ -892,12 +991,13 @@ html, body {
 
 .badge {
   display: inline-block;
+  font-family: var(--font-ui);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 3px 7px;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
   background: var(--bg-soft);
   color: var(--ink-2);
 }
@@ -936,12 +1036,14 @@ html, body {
   color: var(--ink-4);
 }
 .empty-title {
-  font-family: 'Instrument Serif', serif;
-  font-size: 18px;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 20px;
+  letter-spacing: -0.03em;
   color: var(--ink-2);
   margin-bottom: 6px;
 }
-.empty-sub { font-size: 12px; }
+.empty-sub { font-family: var(--font-sans); font-size: 12px; }
 
 /* ── Buttons / inputs ────────────────────────────────────────── */
 
@@ -950,49 +1052,59 @@ html, body {
   border: 1px solid var(--border);
   width: 30px; height: 30px;
   display: grid; place-items: center;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   cursor: pointer;
   color: var(--ink-3);
   transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.btn-icon:hover { border-color: var(--border-strong); color: var(--ink-1); }
+.btn-icon:hover { border-color: var(--blue-p); color: var(--ink-1); }
 
 .btn-export {
-  background: var(--ink-1);
-  color: white;
+  background: var(--blue-p);
+  color: var(--on-primary);
   border: none;
-  padding: 7px 14px;
-  border-radius: 6px;
-  font-size: 11px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.04em;
+  letter-spacing: -0.01em;
   cursor: pointer;
-  transition: opacity var(--t-fast) var(--ease);
+  transition: background var(--t-fast) var(--ease);
 }
-.btn-export:hover { opacity: 0.85; }
+.btn-export:hover { background: var(--blue-h); }
 
+body.bp-mode .btn-export { background: var(--pink-p); }
+body.bp-mode .btn-export:hover { background: var(--pink-h); color: var(--on-secondary); }
+
+/* Range picker — segmented pill BP-style. */
 .range-picker {
   display: inline-flex;
-  gap: 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  padding: 3px;
 }
 
 .range-preset {
-  background: var(--bg-tile);
+  background: transparent;
   border: none;
-  padding: 6px 12px;
+  padding: 6px 14px;
+  height: 28px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 500;
-  color: var(--ink-3);
+  letter-spacing: 0.02em;
+  color: var(--depth-3);
   cursor: pointer;
-  border-right: 1px solid var(--border);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.range-preset:last-child { border-right: none; }
+.range-preset:hover { color: var(--on-primary); }
 .range-preset[data-active="true"] {
-  background: var(--ink-1);
-  color: white;
+  background: var(--on-primary);
+  color: var(--on-secondary);
 }
 
 /* ── Anomaly feed (drawer & banner subviews) ────────────────── */
@@ -1017,10 +1129,11 @@ html, body {
 .anomaly-dot[data-severity="warn"] { background: var(--warn); }
 .anomaly-dot[data-severity="info"] { background: var(--info); }
 
-.anomaly-title { font-size: 13px; color: var(--ink-1); font-weight: 500; }
-.anomaly-meta { font-size: 11px; color: var(--ink-4); margin-top: 2px; }
+.anomaly-title { font-family: var(--font-sans); font-size: 13px; color: var(--ink-1); font-weight: 500; }
+.anomaly-meta { font-family: var(--font-ui); font-size: 11px; color: var(--ink-4); margin-top: 2px; }
 
-/* ── Heatmap (people compliance) ────────────────────────────── */
+/* ── Heatmap (people compliance) — semantic data viz colors,
+   preserved as-is. ───────────────────────────────────────────── */
 
 .heatmap-grid {
   display: grid;
@@ -1075,6 +1188,7 @@ html, body {
 /* ── BlackPrint cost view — Real vs Naive + free tier + subscription ── */
 
 .stat-mini-sub {
+  font-family: var(--font-ui);
   font-size: 11px;
   color: var(--ink-3);
   margin-top: 4px;
@@ -1083,13 +1197,13 @@ html, body {
 .bp-savings-pill {
   display: inline-block;
   padding: 2px 8px;
-  font-family: 'Inter', sans-serif;
+  font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
-  background: #dcfce7;
-  color: #166534;
-  border-radius: 6px;
+  background: var(--pos-soft);
+  color: var(--pos);
+  border-radius: var(--r-sm);
   margin-left: 6px;
   vertical-align: middle;
 }
@@ -1107,6 +1221,7 @@ html, body {
   margin-bottom: 8px;
 }
 .bp-free-tier-label {
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1114,13 +1229,14 @@ html, body {
   color: var(--ink-3);
 }
 .bp-free-tier-num {
+  font-family: var(--font-ui);
   font-size: 12px;
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
 .bp-free-tier-bar {
   height: 6px;
-  background: #f1f5f9;
+  background: var(--bg-soft);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -1130,6 +1246,7 @@ html, body {
 }
 .bp-free-tier-sub {
   margin-top: 6px;
+  font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 500;
 }
@@ -1137,43 +1254,47 @@ html, body {
 .bp-subscription-suggest {
   margin-bottom: 18px;
   padding: 14px 18px;
-  border: 1px solid #fde68a;
-  border-left: 4px solid #f59e0b;
+  border: 1px solid var(--warning-soft);
+  border-left: 4px solid var(--warn);
   border-radius: var(--radius);
-  background: #fffbeb;
+  background: #FFFBEF;
 }
 .bp-subscription-suggest-title {
+  font-family: var(--font-sans);
   font-weight: 600;
   font-size: 14px;
-  color: #92400e;
+  color: var(--warn);
   margin-bottom: 6px;
 }
 .bp-subscription-suggest-body p {
   margin: 4px 0;
+  font-family: var(--font-sans);
   font-size: 13px;
-  color: #78350f;
+  color: #6B4014;
   line-height: 1.5;
 }
 
 /* ── Cost simulator ── */
 
 .bp-sim-preset {
-  padding: 6px 12px;
+  padding: 6px 14px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: #fff;
+  background: var(--bg-tile);
+  font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 500;
   color: var(--ink-2);
   cursor: pointer;
-  transition: all 120ms ease;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.bp-sim-preset:hover { border-color: #94a3b8; background: #f8fafc; }
+.bp-sim-preset:hover { border-color: var(--blue-p); background: var(--bg-tile-hover); }
 .bp-sim-preset.is-active {
-  background: #0f172a;
-  border-color: #0f172a;
-  color: #fff;
+  background: var(--ink-1);
+  border-color: var(--ink-1);
+  color: var(--on-primary);
 }
+body.bp-mode .bp-sim-preset:hover { border-color: var(--pink-p); }
 
 .bp-sim-input {
   display: flex;
@@ -1181,10 +1302,11 @@ html, body {
   gap: 4px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #fff;
+  border-radius: var(--r-sm);
+  background: var(--bg-tile);
 }
 .bp-sim-input span {
+  font-family: var(--font-sans);
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1194,10 +1316,10 @@ html, body {
 .bp-sim-input input {
   border: none;
   outline: none;
-  font-size: 16px;
-  font-weight: 600;
-  font-family: 'Instrument Serif', serif;
-  letter-spacing: -0.01em;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 20px;
+  letter-spacing: -0.03em;
   color: var(--ink-1);
   background: transparent;
   padding: 2px 0;
@@ -1212,14 +1334,15 @@ html, body {
   gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #fff;
+  border-radius: var(--r-md);
+  background: var(--bg-tile);
   cursor: pointer;
+  font-family: var(--font-sans);
   font-size: 12px;
 }
 .bp-sim-radio:has(input:checked) {
-  border-color: #0f766e;
-  background: #ecfdf5;
+  border-color: var(--success);
+  background: var(--pos-soft);
 }
 .bp-sim-radio strong { font-size: 13px; color: var(--ink-1); }
 .bp-sim-radio small { font-size: 11px; color: var(--ink-3); font-weight: 400; }
@@ -1227,10 +1350,11 @@ html, body {
 .bp-sim-block {
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--r-md);
   background: var(--bg-tile);
 }
 .bp-sim-block-title {
+  font-family: var(--font-sans);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1240,23 +1364,26 @@ html, body {
 }
 .bp-sim-block-figures { margin-bottom: 10px; }
 .bp-sim-real {
-  font-family: 'Instrument Serif', serif;
-  font-size: 24px;
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 28px;
+  letter-spacing: -0.03em;
   color: var(--ink-1);
   line-height: 1;
   margin-bottom: 4px;
   font-variant-numeric: tabular-nums;
 }
 .bp-sim-naive {
+  font-family: var(--font-ui);
   font-size: 11px;
   color: var(--ink-3);
 }
 .bp-sim-note {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px dashed #e2e8f0;
+  border-top: 1px dashed var(--border);
+  font-family: var(--font-sans);
   font-size: 11px;
-  color: #64748b;
+  color: var(--ink-3);
   line-height: 1.5;
 }

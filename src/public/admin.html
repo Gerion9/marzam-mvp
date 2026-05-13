@@ -7,19 +7,19 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 
-  <link rel="stylesheet" href="/css/admin-cockpit.css?v=admin-2">
+  <link rel="stylesheet" href="/css/blackprint-tokens.css?v=bp-1">
+  <link rel="stylesheet" href="/css/admin-cockpit.css?v=admin-3">
 </head>
 <body>
 
   <!-- Demo banner (reuses existing convention) -->
-  <div id="demo-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99;background:#1d4ed8;color:white;text-align:center;font-size:11px;font-weight:600;padding:4px;letter-spacing:0.08em">
-    MODO DEMO — DATOS SINTÉTICOS
+  <div id="demo-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99;background:var(--blue-p);color:white;text-align:center;font-size:11px;font-weight:600;padding:4px;letter-spacing:0.18em;text-transform:uppercase">
+    Modo demo — datos sintéticos
   </div>
 
   <div class="cockpit-shell">
@@ -27,7 +27,9 @@
     <!-- ── Topbar ─────────────────────────────────────────────────── -->
     <header class="cockpit-topbar">
       <div class="cockpit-brand">
-        <div class="cockpit-brand-mark">M</div>
+        <div class="cockpit-brand-mark">
+          <img src="/images/logo_marzam.svg" alt="Marzam" style="filter:brightness(0) invert(1)">
+        </div>
         <div>
           <div class="cockpit-brand-title">Cockpit</div>
           <div class="cockpit-brand-sub">Marzam · Admin</div>
@@ -231,11 +233,11 @@
     })();
   </script>
 
-  <script src="/js/api.js?v=admin-2"></script>
-  <script src="/js/admin/charts.js?v=admin-2"></script>
-  <script src="/js/admin/big-map.js?v=admin-2"></script>
-  <script src="/js/admin/hierarchy-tree.js?v=admin-2"></script>
-  <script src="/js/admin/drawer.js?v=admin-2"></script>
-  <script src="/js/admin/cockpit.js?v=admin-2"></script>
+  <script src="/js/api.js?v=admin-3"></script>
+  <script src="/js/admin/charts.js?v=admin-3"></script>
+  <script src="/js/admin/big-map.js?v=admin-3"></script>
+  <script src="/js/admin/hierarchy-tree.js?v=admin-3"></script>
+  <script src="/js/admin/drawer.js?v=admin-3"></script>
+  <script src="/js/admin/cockpit.js?v=admin-3"></script>
 </body>
 </html>
