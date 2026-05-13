@@ -723,6 +723,12 @@
     if (stack.length) {
       const knownDescendants = cascade.descendants || cascade.direct_reports || [];
       for (const id of stack) {
+        // Cache primero — capturado al momento del click drill. Resuelve el
+        // caso común sin pegar al backend (que no expone GET /users/:id).
+        if (APP.drillUserCache && APP.drillUserCache.has(id)) {
+          stackUsers.set(id, APP.drillUserCache.get(id));
+          continue;
+        }
         if (APP.isDemo) {
           const u = DEMO_H.STORE.users.find((x) => x.id === id);
           if (u) { stackUsers.set(id, u); continue; }
@@ -926,7 +932,14 @@
     list.querySelectorAll('[data-action="drill"]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        APP.drillStack.push(btn.dataset.userId);
+        const userId = btn.dataset.userId;
+        // Cacheamos el subordinado al momento del click — el cascade que se
+        // re-fetcheará trae a sus descendientes, no a él mismo, y el backend
+        // no expone GET /users/:id. Sin esto el breadcrumb se queda en
+        // "Cargando…" indefinido.
+        const userObj = filtered.find((u) => String(u.id) === String(userId));
+        if (userObj) APP.drillUserCache.set(userId, userObj);
+        APP.drillStack.push(userId);
         window.MarzamApp.selectTab('team');
       });
     });

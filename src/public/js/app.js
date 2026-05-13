@@ -89,6 +89,7 @@
     activeSession: null,    // visit_session activa, si hay
     timer: null,            // setInterval handle del cronómetro
     drillStack: [],         // pila de userIds para drill-down
+    drillUserCache: new Map(), // userId -> objeto user del subordinado
     teamPositionsLayer: null,
   };
   window.APP = APP;
