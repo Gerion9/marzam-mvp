@@ -55,17 +55,9 @@
       </select>
     </div>
 
-    <!-- Tour: mobile menu (rayitas) — opens help center on small screens.
-         Always visible alongside the avatar so reps can find the tutorial
-         without opening the user menu. Hidden on desktop where the `?`
-         button is the primary entry point. -->
-    <button id="tour-mobile-menu" class="md:hidden w-11 h-11 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full flex items-center justify-center border border-white/60 ring-1 ring-slate-200/50 text-slate-700 hover:text-[#e5730a] transition-all duration-300 flex-shrink-0" aria-label="Abrir menú de tutorial">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-    </button>
+    <!-- Tour: ? help button — único entry point al help center (desktop y
+         móvil). Abre el drawer/sheet con el índice de capítulos. -->
 
-    <!-- Tour: ? help button — primary entry point on desktop, also visible
-         on mobile to reinforce discoverability. Opens the help center
-         drawer/sheet with the index of chapters. -->
     <button id="tour-help-btn" class="w-11 h-11 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-full flex items-center justify-center border border-white/60 ring-1 ring-slate-200/50 text-slate-700 hover:text-[#e5730a] hover:scale-105 transition-all duration-300 flex-shrink-0" aria-label="Ayuda y tutorial" title="Ayuda y tutorial (?)">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 4"/><path d="M12 17.5h.01" stroke-linecap="round"/></svg>
     </button>
