@@ -204,10 +204,10 @@
     });
 
     // ── Tour system wireup ──────────────────────────────────────
-    // Three entry points: '?' button (topbar, both viewports), '≡' rayitas
-    // (mobile-only, reinforces discoverability), and "Tutorial y ayuda"
-    // item in the user menu. All three open the help center; the engine
-    // decides whether to resume an in-progress tour or show the index.
+    // Two entry points: the '?' button (topbar, both viewports) and the
+    // "Tutorial y ayuda" item in the user menu. Both open the help center;
+    // the engine decides whether to resume an in-progress tour or show the
+    // index.
     const openHelpCenter = () => {
       if (window.TourHelp && typeof window.TourHelp.open === 'function') {
         window.TourHelp.open();
@@ -218,7 +218,6 @@
       }
     };
     document.getElementById('tour-help-btn')?.addEventListener('click', openHelpCenter);
-    document.getElementById('tour-mobile-menu')?.addEventListener('click', openHelpCenter);
     document.getElementById('tour-help-menu-item')?.addEventListener('click', () => {
       // Close the user-menu dropdown before opening the help center so the
       // dropdown doesn't sit on top of the drawer.
