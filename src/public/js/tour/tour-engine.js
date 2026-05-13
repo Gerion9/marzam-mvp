@@ -433,12 +433,11 @@
     root.appendChild(State.ringEl);
     root.appendChild(State.srLiveEl);
 
-    // Block clicks on the dim area from reaching the underlying app, but only
-    // for spotlight steps. For modal steps the entire viewport is "tour space".
-    State.overlayEl.addEventListener('click', () => {
-      // Soft dismiss — confirm if mid-tour
-      if (State.activeStep && State.activeStep.kind === 'interactive') return;
-      requestExit();
+    // Block clicks on the dim area from reaching the underlying app. The
+    // backdrop is inert — closing happens only via the X button or by
+    // completing the tour. Prevents accidental mid-tutorial dismissal.
+    State.overlayEl.addEventListener('click', (e) => {
+      e.stopPropagation();
     });
   }
 
@@ -740,11 +739,9 @@
 
   function requestExit() {
     if (!State.activeTour) return;
-    // Confirm on non-trivial progress
-    if (State.activeStepIdx > 0) {
-      const ok = window.confirm('¿Salir del tutorial?\n\nPuedes volver desde el botón ? en la barra superior cuando quieras.');
-      if (!ok) return;
-    }
+    // Always confirm — first step counts too. Avoids accidental dismissal.
+    const ok = window.confirm('¿Salir del tutorial?\n\nPuedes volver desde el botón ? en la barra superior cuando quieras.');
+    if (!ok) return;
     document.dispatchEvent(new CustomEvent('tour:dismissed', {
       detail: { tourId: State.activeTour.id, stepIdx: State.activeStepIdx },
     }));
