@@ -294,10 +294,18 @@ button.demo-btn:hover {
 
 .tos-footer-mark { color: var(--depth-3); }
 
-/* ── JS-driven visibility (matches the legacy Tailwind `.hidden`
-       behaviour the login script toggles on .tos-error) ───────────────── */
+/* ── JS-driven visibility ────────────────────────────────────────────
+   - `.hidden` matches the legacy Tailwind class the login script
+     toggles on .tos-error.
+   - `[hidden]` re-asserts the HTML attribute's default display:none.
+     Without this, rules like `.tos-demo { display: flex }` and
+     `.tos-demo-banner { position: fixed }` win the cascade and the
+     demo-picks would render in production even though the script never
+     opted in.
+   ──────────────────────────────────────────────────────────────── */
 
-.hidden { display: none !important; }
+.hidden,
+[hidden] { display: none !important; }
 
 /* ── Demo banner (carries over from admin convention) ────────────────── */
 
