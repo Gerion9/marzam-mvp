@@ -292,8 +292,6 @@ button.demo-btn:hover {
   text-align: center;
 }
 
-.tos-footer-mark { color: var(--depth-3); }
-
 /* ── JS-driven visibility ────────────────────────────────────────────
    - `.hidden` matches the legacy Tailwind class the login script
      toggles on .tos-error.
