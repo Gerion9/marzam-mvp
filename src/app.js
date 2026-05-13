@@ -224,6 +224,12 @@ app.get('/api/health', async (_req, res) => {
   const result = {
     status: 'ok',
     env: config.env,
+    // Vercel sets NODE_ENV=production for both production *and* preview
+    // deployments, so `env` alone can't tell qa-staging apart from prod.
+    // Surface VERCEL_ENV ("production" | "preview" | "development") so the
+    // landing can toggle demo quick-picks for qa-staging without leaking
+    // them into the production deployment.
+    vercel_env: process.env.VERCEL_ENV || null,
     data_backend: config.dataBackend,
     external_data_provider: config.externalData.provider,
     gps_ping_interval_seconds: config.gps.pingIntervalSeconds,
