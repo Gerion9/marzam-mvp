@@ -947,7 +947,17 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const pos = positions.find((p) => p.rep_id === btn.dataset.userId);
-        if (pos && APP.map) APP.map.flyTo({ center: [pos.lng, pos.lat], zoom: 15 });
+        if (!pos || !APP.map) return;
+        // En móvil el panel inferior tapa la mitad baja del mapa; compensamos
+        // con padding bottom alto para que el pin quede visible arriba.
+        const isMobile = window.matchMedia('(max-width: 767px)').matches;
+        APP.map.flyTo({
+          center: [pos.lng, pos.lat],
+          zoom: 15,
+          padding: isMobile
+            ? { top: 60, bottom: 280, left: 30, right: 30 }
+            : { top: 60, bottom: 60,  left: 60, right: 60 },
+        });
       });
     });
     list.querySelectorAll('[data-action="impersonate"]').forEach((btn) => {
