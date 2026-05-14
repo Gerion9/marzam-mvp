@@ -383,11 +383,11 @@
           <div class="grid grid-cols-2 gap-3 text-xs">
             <div>
               <label class="block font-bold text-slate-600 mb-1">Desde</label>
-              <input type="date" x-model="periodStart" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
+              <input type="date" x-model="periodStart" :min="todayIso" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
             </div>
             <div>
               <label class="block font-bold text-slate-600 mb-1">Hasta</label>
-              <input type="date" x-model="periodEnd" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
+              <input type="date" x-model="periodEnd" :min="periodStart || todayIso" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
             </div>
           </div>
 
@@ -1069,6 +1069,11 @@
       loadingTeam: true,
       publishing: false,
       phase: 'Calculando…',
+      // MARZAM-16: usado como :min en los <input type="date"> para bloquear
+      // que el usuario seleccione anos pasados desde el picker. La validacion
+      // dura tambien vive en canCreate (periodStart >= todayIso). Se recalcula
+      // cada vez que se accede porque Alpine lo evalua reactivamente.
+      get todayIso() { return new Date().toISOString().slice(0, 10); },
       periodStart: nextMonday(),
       periodEnd: nextFridayAfter(nextMonday()),
       scopeUserIds: [],
@@ -1337,8 +1342,15 @@
         const enforceEF = window.MarzamFeatures?.ENFORCE_EF_SCOPE !== false; // default ON
         const isAdmin = !!window.APP?.user?.is_global;
         const efOk = !enforceEF || isAdmin || (!!this.zoneFilter && this.zoneFilter !== '__all__');
+        // MARZAM-16: rechaza periodStart con fecha en el pasado. El picker ya
+        // bloquea via :min="todayIso" pero el user puede tipear manualmente o
+        // pegar; esta guard impide que canCreate sea true en ese caso y
+        // por ende deshabilita los CTAs de generar/preview.
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const periodNotPast = this.periodStart && this.periodStart >= todayIso;
         return Array.isArray(this.scopeUserIds) && this.scopeUserIds.length > 0
           && this.periodStart && this.periodEnd && this.periodStart <= this.periodEnd
+          && periodNotPast
           && efOk;
       },
       // Cambio 1 — separate predicate so the UI can distinguish "no EF" from

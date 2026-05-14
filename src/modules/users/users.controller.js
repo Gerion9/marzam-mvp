@@ -36,6 +36,7 @@ async function create(req, res, next) {
       phone: req.body.phone || null,
       created_by: req.user.id,
       territory_ids: req.body.territory_ids || [],
+      manager_id: req.body.manager_id || null,
     });
     res.status(201).json(user);
   } catch (err) {

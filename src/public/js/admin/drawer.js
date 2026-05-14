@@ -1157,12 +1157,29 @@
     });
   }
 
-  function openCreateUserModal() {
+  // Hierarchical parent map — mirrors server-side enforcement in
+  // auth.service.register (ver MARZAM-5). admin y director_sucursal son
+  // globales y NO requieren padre; el resto sí.
+  const HIERARCHY_PARENT_ROLE = {
+    representante: 'supervisor',
+    supervisor: 'gerente_ventas',
+    gerente_ventas: 'director_sucursal',
+  };
+
+  async function openCreateUserModal() {
+    // Pre-fetch the directory so we can populate the manager picker per role.
+    let allUsers = [];
+    try {
+      const resp = await API.get('/users');
+      allUsers = Array.isArray(resp) ? resp : [];
+    } catch { /* sin lista, el picker queda vacío y el server bloqueará */ }
+
     // Self-contained modal — no MarzamModal here because admin.html doesn't
     // load views.js. Built with the same visual language as other admin
     // dialogs (stat-mini cards, btn-export). Validation happens client-side
     // first; the server re-validates per /auth/register's validate() schema
-    // (12-char password minimum, email format, role oneOf).
+    // (12-char password minimum, email format, role oneOf, manager_id
+    // requerido para roles jerárquicos).
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:24px;';
     overlay.innerHTML = `
@@ -1189,6 +1206,13 @@
               ${USER_ROLES_FOR_CREATE.map((r) => `<option value="${r.value}">${escapeHtml(r.label)}</option>`).join('')}
             </select>
           </label>
+          <label id="cu-manager-wrap" style="display:none;flex-direction:column;gap:4px">
+            <span style="font-weight:600;color:#334155">Superior jerárquico <span id="cu-manager-required" style="color:#dc2626">*</span></span>
+            <select id="cu-manager" style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;background:#fff">
+              <option value="">— Selecciona un superior —</option>
+            </select>
+            <span id="cu-manager-hint" style="font-size:10px;color:#64748b">No puede existir un representante sin supervisor, supervisor sin gerente, ni gerente sin director.</span>
+          </label>
           <label style="display:flex;flex-direction:column;gap:4px">
             <span style="font-weight:600;color:#334155">Contraseña inicial *</span>
             <input id="cu-password" type="text" minlength="12" maxlength="200" placeholder="Mínimo 12 caracteres" style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;font-family:JetBrains Mono,monospace" />
@@ -1212,15 +1236,48 @@
     overlay.querySelector('#cu-cancel').addEventListener('click', close);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
+    const roleEl = overlay.querySelector('#cu-role');
+    const mgrWrap = overlay.querySelector('#cu-manager-wrap');
+    const mgrSel = overlay.querySelector('#cu-manager');
+    const mgrHint = overlay.querySelector('#cu-manager-hint');
+
+    const refreshManagerPicker = () => {
+      const role = roleEl.value;
+      const parentRole = HIERARCHY_PARENT_ROLE[role];
+      if (!parentRole) {
+        mgrWrap.style.display = 'none';
+        mgrSel.innerHTML = '<option value="">— No aplica —</option>';
+        mgrSel.value = '';
+        return;
+      }
+      mgrWrap.style.display = 'flex';
+      const candidates = (allUsers || []).filter((u) => {
+        if (u.is_active === false) return false;
+        const r = String(u.role || '').toLowerCase();
+        return r === parentRole || r === 'admin';
+      });
+      const parentLabel = ROLE_LABEL_ES[parentRole] || parentRole;
+      mgrHint.textContent = `Selecciona el ${parentLabel} al que reportará este ${ROLE_LABEL_ES[role] || role}.`;
+      if (!candidates.length) {
+        mgrSel.innerHTML = `<option value="">— No hay ${parentLabel}s activos —</option>`;
+      } else {
+        mgrSel.innerHTML = '<option value="">— Selecciona un superior —</option>'
+          + candidates.map((u) => `<option value="${u.id}">${escapeHtml(u.full_name)} · ${escapeHtml(u.email || '')}</option>`).join('');
+      }
+    };
+    roleEl.addEventListener('change', refreshManagerPicker);
+    refreshManagerPicker();
+
     const errEl = overlay.querySelector('#cu-error');
     const saveBtn = overlay.querySelector('#cu-save');
     saveBtn.addEventListener('click', async () => {
       errEl.style.display = 'none';
       const fullname = overlay.querySelector('#cu-fullname').value.trim();
       const email = overlay.querySelector('#cu-email').value.trim();
-      const role = overlay.querySelector('#cu-role').value;
+      const role = roleEl.value;
       const password = overlay.querySelector('#cu-password').value;
       const phone = overlay.querySelector('#cu-phone').value.trim() || null;
+      const managerId = mgrSel.value || null;
       // Client-side guards mirror the server's validate() schema. Surface
       // the most-likely failure first so the user fixes one thing at a
       // time instead of seeing a wall of validation errors.
@@ -1239,10 +1296,16 @@
         errEl.style.display = 'block';
         return;
       }
+      if (HIERARCHY_PARENT_ROLE[role] && !managerId) {
+        const parentLabel = ROLE_LABEL_ES[HIERARCHY_PARENT_ROLE[role]] || HIERARCHY_PARENT_ROLE[role];
+        errEl.textContent = `Asigna un ${parentLabel} como superior jerárquico — es obligatorio para este rol.`;
+        errEl.style.display = 'block';
+        return;
+      }
       saveBtn.disabled = true;
       saveBtn.textContent = 'Creando…';
       try {
-        await API.post('/users', { email, password, full_name: fullname, role, phone });
+        await API.post('/users', { email, password, full_name: fullname, role, phone, manager_id: managerId });
         close();
         switchTo('users'); // Reload list to show the new user.
       } catch (err) {

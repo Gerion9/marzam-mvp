@@ -259,7 +259,20 @@
     const stopBtn = document.getElementById('usermenu-stop-impersonate');
     if (APP.user.impersonated_by) stopBtn.classList.remove('hidden');
 
-    document.getElementById('btn-logout').addEventListener('click', () => {
+    document.getElementById('btn-logout').addEventListener('click', async () => {
+      // MARZAM-10: si el usuario cierra sesion con Modo Visita activo, la
+      // visit_session en DB queda 'in_progress' indefinidamente y al volver
+      // a entrar el timer se reanuda. Cerramos la sesion antes del logout
+      // como manual-end con reason "logout" para que el contador se detenga
+      // y el reporte de campo sea coherente. Si la peticion falla (red,
+      // 500), igual cerramos sesion local — no queremos atrapar al usuario.
+      if (APP.activeSession) {
+        try {
+          await API.patch(`/visit-sessions/${APP.activeSession.id}/end`, { reason: 'logout' });
+        } catch (err) {
+          console.warn('[logout] no se pudo cerrar Modo Visita antes de logout', err);
+        }
+      }
       localStorage.clear();
       location.href = '/';
     });
@@ -774,8 +787,24 @@
   // ──────────────────────────────────────────────────────────
   // Map setup
   // ──────────────────────────────────────────────────────────
+  // Service-zone constraint (MARZAM-7): el pilot opera unicamente en la
+  // sucursal Ecatepec. Sin maxBounds el usuario podia arrastrar el mapa hasta
+  // Europa/Africa y reportar bug visual; con bounds + indicador de radio el
+  // usuario sabe explicitamente cual es la zona trabajable. Override via
+  // window.MARZAM_SERVICE_BOUNDS para otras sucursales en el futuro.
+  const SERVICE_ZONE = window.MARZAM_SERVICE_BOUNDS || {
+    name: 'Sucursal Ecatepec',
+    center: [-99.060, 19.605],
+    // SW corner / NE corner — generous margin to permitir EdoMex norte +
+    // CDMX sin que el usuario se vaya a otro estado u oceano.
+    bounds: [[-99.45, 19.30], [-98.65, 19.95]],
+    // Radio del circulo guia (km) — mas pequeno que el bounding box para
+    // marcar la zona "core" sin bloquear el pan ligero a colonias adyacentes.
+    radius_km: 12,
+  };
+
   function initMap() {
-    const center = [-99.060, 19.605]; // Ecatepec
+    const center = SERVICE_ZONE.center;
     // Carto basemaps: no API key required and no Referer policy issues
     // (unlike tile.openstreetmap.org which blocks anonymous browser referers).
     APP.map = new maplibregl.Map({
@@ -800,6 +829,38 @@
       },
       center,
       zoom: 12.2,
+      maxBounds: SERVICE_ZONE.bounds,
+      minZoom: 9.5,
+    });
+    APP.map.on('load', () => {
+      try {
+        // Service-zone visual ring — un circulo con radio operativo para que
+        // el rep sepa exactamente la zona trabajable. No bloquea pan ligero
+        // a la afuera del circulo (eso lo hace maxBounds, en una escala mayor).
+        APP.map.addSource('service-zone', {
+          type: 'geojson',
+          data: { type: 'Feature', geometry: { type: 'Point', coordinates: SERVICE_ZONE.center }, properties: {} },
+        });
+        APP.map.addLayer({
+          id: 'service-zone-ring',
+          type: 'circle',
+          source: 'service-zone',
+          paint: {
+            // Conversion km -> pixels usando escala mercator + cos(lat).
+            'circle-radius': [
+              'interpolate', ['exponential', 2], ['zoom'],
+              0, 0,
+              22, SERVICE_ZONE.radius_km * 1000 / (78271.484 / Math.pow(2, 0) * Math.cos(SERVICE_ZONE.center[1] * Math.PI / 180)) * Math.pow(2, 22),
+            ],
+            'circle-color': 'rgba(20, 184, 166, 0.06)',
+            'circle-stroke-color': 'rgba(13, 148, 136, 0.55)',
+            'circle-stroke-width': 2,
+            'circle-stroke-dasharray': [2, 2],
+          },
+        });
+      } catch (err) {
+        console.warn('[service-zone] no se pudo dibujar el indicador', err);
+      }
     });
     window.APP_MAP = APP.map;
   }
@@ -810,7 +871,26 @@
   async function loadActiveSession() {
     try {
       const session = await API.get(`/visit-sessions/active/${APP.user.id}`);
-      if (session && session.id) setActiveSession(session);
+      if (!session || !session.id) return;
+      // MARZAM-10: si la sesion quedo huerfana (mas de 12 horas activa, o
+      // started_at en otro dia calendario UTC), no la resumimos en el FE —
+      // la cerramos como stale para que el contador no siga corriendo
+      // indefinidamente despues de que el user cerro sesion sin terminarla.
+      // 12h cubre la jornada operativa real (8h) + buffer; mas que eso es
+      // signal de que el user nunca presiono "Cerrar visita".
+      const startedAt = new Date(session.started_at || session.created_at || 0).getTime();
+      const ageMs = Date.now() - startedAt;
+      const STALE_MS = 12 * 60 * 60 * 1000;
+      const sameUtcDay = new Date(startedAt).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
+      if (Number.isFinite(startedAt) && (ageMs > STALE_MS || !sameUtcDay)) {
+        try {
+          await API.patch(`/visit-sessions/${session.id}/end`, { reason: 'stale' });
+        } catch (err) {
+          console.warn('[modo-visita] no se pudo cerrar sesion stale', err);
+        }
+        return;
+      }
+      setActiveSession(session);
     } catch { /* no-op */ }
   }
 
@@ -852,6 +932,13 @@
       const ended = await API.patch(`/visit-sessions/${APP.activeSession.id}/end`, { reason: 'manual' });
       const summary = { ...APP.activeSession, ...ended };
       clearActiveSession();
+      // MARZAM-14: la vista "Mis rutas" (renderMyRoutes) decide al render
+      // si pinta la tarjeta "Modo Visita activo" o el CTA "Sales a campo?"
+      // leyendo APP.activeSession. Al cerrar la sesion no rerendereaba sola
+      // y el componente seguia mostrando la visita en curso. Forzamos un
+      // re-render del tab actual si esta en routes para que el cambio de
+      // estado se refleje inmediatamente.
+      if (APP.activeTab === 'routes') selectTab('routes');
       window.MarzamViews?.showSessionSummary?.(summary);
     } catch (err) {
       console.error(err);

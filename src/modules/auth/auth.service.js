@@ -6,6 +6,7 @@ const accessDirectory = require('../../services/accessDirectory');
 const { isExternalDataMode } = require('../../repositories/runtime');
 const { getDataScope } = require('../../middleware/requestContext');
 const { computeUserScope, isGlobalRole } = require('../../services/userScope');
+const { ROLES, normalizeRole } = require('../../constants/roles');
 
 const SALT_ROUNDS = 10;
 
@@ -72,11 +73,47 @@ async function buildAuthResult(user, extra = {}) {
   };
 }
 
-async function register({ email, password, full_name, role, phone = null, created_by = null, territory_ids = [] }) {
+async function register({ email, password, full_name, role, phone = null, created_by = null, territory_ids = [], manager_id = null }) {
   if (isExternalDataMode()) {
     const err = new Error('Register is disabled in external mode. Use AUTH_DIRECTORY settings.');
     err.status = 501;
     throw err;
+  }
+
+  // Hierarchy enforcement (Marzam Execution Doc §3 + ticket MARZAM-5):
+  // representante/supervisor/gerente_ventas no pueden existir sueltos — exigen
+  // un manager_id apuntando a un user del nivel inmediato superior.
+  // admin/director_sucursal/blackprint_admin son globales y no requieren padre.
+  const normalizedRole = normalizeRole(role);
+  const HIERARCHY_PARENT = {
+    [ROLES.REPRESENTANTE]: ROLES.SUPERVISOR,
+    [ROLES.SUPERVISOR]: ROLES.GERENTE_VENTAS,
+    [ROLES.GERENTE_VENTAS]: ROLES.DIRECTOR_SUCURSAL,
+  };
+  const expectedParentRole = HIERARCHY_PARENT[normalizedRole];
+  if (expectedParentRole) {
+    if (!manager_id) {
+      const err = new Error(`Falta superior jerárquico: el rol "${normalizedRole}" requiere manager_id (debe ser un usuario "${expectedParentRole}").`);
+      err.status = 400;
+      throw err;
+    }
+    const manager = await db('users').where({ id: manager_id }).first();
+    if (!manager) {
+      const err = new Error(`manager_id no existe o está inactivo.`);
+      err.status = 400;
+      throw err;
+    }
+    if (manager.is_active === false) {
+      const err = new Error(`El superior asignado (${manager.email}) está desactivado.`);
+      err.status = 400;
+      throw err;
+    }
+    const managerRole = normalizeRole(manager.role);
+    if (managerRole !== expectedParentRole && managerRole !== ROLES.ADMIN) {
+      const err = new Error(`El superior asignado debe ser "${expectedParentRole}" (actual: "${managerRole}").`);
+      err.status = 400;
+      throw err;
+    }
   }
 
   const existing = await db('users').where({ email }).first();
@@ -88,8 +125,8 @@ async function register({ email, password, full_name, role, phone = null, create
 
   const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
   const [user] = await db('users')
-    .insert({ email, password_hash, full_name, role, phone, created_by })
-    .returning(['id', 'email', 'full_name', 'role', 'is_active', 'phone', 'created_at']);
+    .insert({ email, password_hash, full_name, role, phone, created_by, manager_id })
+    .returning(['id', 'email', 'full_name', 'role', 'is_active', 'phone', 'manager_id', 'created_at']);
 
   if (Array.isArray(territory_ids) && territory_ids.length) {
     const territoriesRepository = require('../../repositories/territoriesRepository');

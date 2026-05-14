@@ -1,6 +1,25 @@
 const service = require('./marzam.service');
 const { ROLES, normalizeRole } = require('../../constants/roles');
 
+// Source DB es opcional en deployments que ya hidrataron `marzam_app` a partir
+// del sync (181 users, 32 marzam_clients). Si la conexión falla por env vars
+// missing o red caída, este módulo prefiere responder 200 con payload vacío
+// + header de warning para no romper al FE (que ya consume con `.catch(() => [])`).
+// Sin este wrapper la ruta cae con 500 y deja la pantalla principal en blanco.
+function isSourceDbUnavailable(err) {
+  if (!err) return false;
+  const msg = String(err.message || '');
+  if (/Marzam source DB is not configured/i.test(msg)) return true;
+  if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'ETIMEDOUT') return true;
+  if (/password authentication failed|no pg_hba\.conf|connect ETIMEDOUT/i.test(msg)) return true;
+  return false;
+}
+
+function respondSourceUnavailable(res, payload) {
+  res.setHeader('X-Marzam-Source', 'unavailable');
+  return res.json({ ...payload, source: 'unavailable', warning: 'Marzam source DB no configurada en este deployment' });
+}
+
 /**
  * Construye el scope de visibilidad del usuario que llama. La lógica de
  * filtrado por rol vive en marzam.service.getClients() y otras funciones
@@ -54,7 +73,13 @@ function buildScope(req) {
 
 async function listRepresentatives(req, res, next) {
   try {
-    const all = await service.getRepresentatives();
+    let all;
+    try {
+      all = await service.getRepresentatives();
+    } catch (err) {
+      if (isSourceDbUnavailable(err)) return respondSourceUnavailable(res, { total: 0, reps: [] });
+      throw err;
+    }
     const scope = buildScope(req);
 
     let filtered = all;
@@ -89,7 +114,28 @@ async function listRepresentatives(req, res, next) {
 
 async function getMyProfile(req, res, next) {
   try {
-    const all = await service.getRepresentatives();
+    let all;
+    try {
+      all = await service.getRepresentatives();
+    } catch (err) {
+      if (isSourceDbUnavailable(err)) {
+        // Director sin source DB todavía puede recibir su perfil sintético del JWT.
+        if (req.user && (normalizeRole(req.user.role) === ROLES.DIRECTOR_SUCURSAL || req.user.is_global)) {
+          return res.json({
+            employee_code: req.user.branch_code || 'EC',
+            full_name: req.user.full_name || 'Director',
+            email: req.user.email,
+            role: ROLES.DIRECTOR_SUCURSAL,
+            gerencia_code: null,
+            branch_code: req.user.branch_code || 'EC',
+            branch_name: 'Sucursal Ecatepec',
+            source: 'jwt-fallback',
+          });
+        }
+        return respondSourceUnavailable(res, {});
+      }
+      throw err;
+    }
     const scope = buildScope(req);
     if (!scope || !scope.employeeCode) {
       // Director no tiene clave en cuadro_basico — devolver perfil mínimo
@@ -120,6 +166,7 @@ async function listBranches(_req, res, next) {
     const branches = await service.getBranches();
     res.json({ total: branches.length, branches });
   } catch (e) {
+    if (isSourceDbUnavailable(e)) return respondSourceUnavailable(res, { total: 0, branches: [] });
     next(e);
   }
 }
@@ -131,6 +178,7 @@ async function listClients(req, res, next) {
     const data = await service.getClients(scope, { limit });
     res.json({ total: data.length, clients: data });
   } catch (e) {
+    if (isSourceDbUnavailable(e)) return respondSourceUnavailable(res, { total: 0, clients: [] });
     next(e);
   }
 }
@@ -174,6 +222,7 @@ async function listUniverse(req, res, next) {
     const data = await service.getUniverse({ limit, bbox, userScope });
     res.json(data);
   } catch (e) {
+    if (isSourceDbUnavailable(e)) return respondSourceUnavailable(res, { total: 0, marzam: [], prospects: [] });
     next(e);
   }
 }
@@ -192,6 +241,14 @@ async function getDiagnostics(_req, res, next) {
     const out = await service.getDiagnostics();
     res.json({ ok: true, ...out });
   } catch (e) {
+    if (isSourceDbUnavailable(e)) {
+      return res.status(200).json({
+        ok: false,
+        source: 'unavailable',
+        warning: 'Marzam source DB no configurada — endpoints marzam-readonly devuelven payload vacío',
+        source_db_host: process.env.MARZAM_SOURCE_DB_HOST || process.env.DB_HOST || null,
+      });
+    }
     next(e);
   }
 }

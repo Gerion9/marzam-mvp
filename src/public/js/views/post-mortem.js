@@ -173,7 +173,7 @@
           <div class="bg-white rounded-2xl border border-slate-100 p-3">
             <div class="flex items-center justify-between mb-2">
               <div class="text-[10px] font-bold uppercase text-slate-400">Plan vs Actual</div>
-              <a :href="'/api/visit-plans/' + planId + '/post-mortem.csv'" target="_blank"
+              <a :href="'/api/visit-plans/' + planId + '/post-mortem.csv?token=' + encodeURIComponent(localStorage.getItem('token') || '')" target="_blank"
                  class="text-[10px] font-bold uppercase px-2 py-1 rounded bg-violet-100 text-violet-700">CSV</a>
             </div>
             <canvas id="post-mortem-variance" class="w-full" style="max-height:240px"></canvas>
