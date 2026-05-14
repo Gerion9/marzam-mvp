@@ -34,6 +34,10 @@ router.post(
         'national_admin', 'regional_manager', 'area_coordinator', 'field_rep',
       ],
     },
+    // manager_id es opcional aquí; el service valida en register() que sea
+    // requerido para representante/supervisor/gerente_ventas y que apunte al
+    // rol del nivel inmediato superior. Ver MARZAM-5.
+    manager_id: { type: 'string' },
   }),
   auditLog('user.created'),
   controller.create,

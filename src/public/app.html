@@ -36,7 +36,11 @@
   <div id="map" class="absolute inset-0 z-0"></div>
 
   <!-- ─── Topbar ─────────────────────────────────────────────────── -->
-  <header id="topbar" class="absolute top-4 inset-x-4 md:left-[112px] md:right-6 z-50 flex items-center gap-3">
+  <!-- MARZAM-9: topbar al z-[62] (antes z-50) para que el dropdown del
+       user-menu quede por encima del panel mobile (z-[58]) y del sidenav
+       (z-[60]). Sin esto el menu Perfil se renderizaba detras del modal
+       de funcionalidades en mobile. -->
+  <header id="topbar" class="absolute top-4 inset-x-4 md:left-[112px] md:right-6 z-[62] flex items-center gap-3">
     <div class="flex-1 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/40 rounded-2xl flex items-center px-4 py-2.5 border border-white/60 ring-1 ring-slate-200/50 min-w-0">
       <img src="/images/logo_marzam.svg" alt="Marzam" class="h-6 w-auto mr-3 select-none">
       <div class="hidden md:flex items-center gap-2 mr-3 pr-3 border-r border-slate-200">

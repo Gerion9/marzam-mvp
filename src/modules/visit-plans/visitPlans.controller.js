@@ -94,6 +94,19 @@ async function create(req, res, next) {
     if (!granularity || !periodStart || !periodEnd) {
       return res.status(400).json({ error: 'granularity, period_start, period_end required' });
     }
+    // MARZAM-16: rechazo de fechas en el pasado. La UI ya bloquea con :min
+    // pero un cliente malicioso o un script podria saltarlo - validamos aqui
+    // como defensa en profundidad. La excepcion es para admins is_global y
+    // demo accounts que pueden necesitar simular periodos historicos.
+    if (req.user?.data_scope !== 'demo' && !req.user?.is_global) {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (String(periodStart) < todayIso) {
+        return res.status(400).json({
+          error: 'period_start_in_past',
+          _hint: `period_start (${periodStart}) no puede ser anterior a hoy (${todayIso}). Para registrar visitas historicas usa /api/visits.`,
+        });
+      }
+    }
     // Cambio 1 — when PLAN_ENFORCE_EF_SCOPE=true, generating a plan requires
     // selecting a specific Entidad Federativa (poblacion/municipio). Plans across
     // multiple EFs are routed sub-optimally and waste Google Routes API spend.

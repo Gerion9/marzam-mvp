@@ -476,7 +476,12 @@
     transform: translateX(calc(-100% - 12px)) !important;
     opacity: 0.96;
   }
-  #panel.panel-collapsed ~ #fab-start-visit { right: 32px !important; }
+  /* MARZAM-11: cuando el panel se colapsa el FAB se movia a right:32px y
+     se metia ENCIMA del #pharmacies-legend (md:bottom-4 md:right-4 w-280).
+     Subimos el FAB para que viva por encima del legend en la misma
+     columna right-4, sin taparlo. 304px = 280 (legend width approx) + 24
+     (gap). bottom-10 lo deja sobre la linea inferior del map area. */
+  #panel.panel-collapsed ~ #fab-start-visit { right: 304px !important; }
   /* El botón colapsar sigue accesible: lo movemos al borde para que
      siempre se vea aunque el panel se haya deslizado fuera. */
   #panel.panel-collapsed #btn-collapse-panel {
@@ -513,7 +518,11 @@
     display: none !important;
   }
 
-  #visit-mode-pill { top: 12px; right: 12px; left: 12px; max-width: none; }
+  /* MARZAM-12: el pill estaba en top:12px y se montaba sobre el topbar
+     tapando el input de busqueda y el boton de perfil. Lo bajamos a 88px
+     (16px topbar + ~64px topbar height + 8px gap) para que viva en su
+     propia fila debajo del topbar. */
+  #visit-mode-pill { top: 88px; right: 12px; left: 12px; max-width: none; }
 
   /* Topbar */
   #topbar { top: 16px; gap: 8px; }
